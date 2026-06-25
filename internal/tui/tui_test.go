@@ -134,3 +134,34 @@ func TestEscSendsInterrupt(t *testing.T) {
 		t.Fatal("esc should publish an interrupt on the bus")
 	}
 }
+
+// The recipient selector and the input @mention stay in sync both ways.
+func TestRecipientSelector(t *testing.T) {
+	m, _, _ := newTestModel()
+	m.touchAgent("alice")
+	m.touchAgent("bob")
+
+	// input → selector
+	m.input.SetValue("@bob hi")
+	if got := m.selectedTarget(); got != "bob" {
+		t.Fatalf("typing @bob → selectedTarget=%q", got)
+	}
+	m.input.SetValue("hello")
+	if got := m.selectedTarget(); got != "broadcast" {
+		t.Fatalf("plain text → selectedTarget=%q", got)
+	}
+
+	// selector → input (cycle: broadcast → alice → bob), preserving the body
+	m.cycleTarget(1)
+	if got := m.input.Value(); got != "@alice hello" {
+		t.Fatalf("cycle 1 → %q", got)
+	}
+	m.cycleTarget(1)
+	if got := m.input.Value(); got != "@bob hello" {
+		t.Fatalf("cycle 2 → %q", got)
+	}
+	m.setTarget("broadcast")
+	if got := m.input.Value(); got != "hello" {
+		t.Fatalf("broadcast strips mention → %q", got)
+	}
+}

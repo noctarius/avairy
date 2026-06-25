@@ -6,6 +6,7 @@ package tui
 import (
 	"fmt"
 	"runtime"
+	"sort"
 	"strings"
 
 	"charm.land/bubbles/v2/textarea"
@@ -179,6 +180,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.token = m.control.NewToken()
 			}
 			return m, nil
+		case "ctrl+t":
+			m.cycleTarget(1) // cycle the recipient (broadcast / agent)
+			return m, nil
 		case "shift+enter", "alt+enter", "ctrl+j": // newline (shift+enter needs a Kitty-protocol terminal)
 			m.input.InsertRune('\n')
 			return m, nil
@@ -200,14 +204,82 @@ func (m *Model) submit() {
 	if text == "" {
 		return
 	}
-	if rest, ok := strings.CutPrefix(text, "@"); ok {
-		id, body, _ := strings.Cut(rest, " ")
-		if id != "" && body != "" {
-			m.deps.Bus.Publish("human", bus.Agent(id), body, agent.DeliverySteer)
-			return
-		}
+	if mention, body := splitMention(text); mention != "" && body != "" {
+		m.deps.Bus.Publish("human", bus.Agent(mention), body, agent.DeliverySteer)
+		return
 	}
 	m.deps.Bus.Publish("human", bus.Broadcast(), text, agent.DeliverySteer)
+}
+
+// splitMention separates a leading "@name" recipient from the rest of the text.
+func splitMention(s string) (mention, rest string) {
+	if !strings.HasPrefix(s, "@") {
+		return "", s
+	}
+	body := s[1:]
+	if i := strings.IndexByte(body, ' '); i >= 0 {
+		return body[:i], strings.TrimLeft(body[i:], " ")
+	}
+	return body, ""
+}
+
+// --- recipient selector (the "dropdown") ---
+
+// targets is the recipient list: broadcast, then the known agents (sorted).
+func (m *Model) targets() []string {
+	ag := append([]string(nil), m.agentOrder...)
+	sort.Strings(ag)
+	return append([]string{"broadcast"}, ag...)
+}
+
+// selectedTarget derives the current recipient from the input's @mention (broadcast if none
+// or unknown) — this is what keeps the selector in sync when you type "@name".
+func (m *Model) selectedTarget() string {
+	if mention, _ := splitMention(m.input.Value()); mention != "" {
+		for _, id := range m.agentOrder {
+			if id == mention {
+				return mention
+			}
+		}
+	}
+	return "broadcast"
+}
+
+// setTarget rewrites the input's recipient prefix to name (or strips it for broadcast).
+func (m *Model) setTarget(name string) {
+	_, rest := splitMention(m.input.Value())
+	if name == "broadcast" {
+		m.input.SetValue(rest)
+		return
+	}
+	m.input.SetValue("@" + name + " " + rest)
+}
+
+// cycleTarget advances the recipient selection by dir (+1/-1).
+func (m *Model) cycleTarget(dir int) {
+	ts := m.targets()
+	cur := m.selectedTarget()
+	i := 0
+	for idx, t := range ts {
+		if t == cur {
+			i = idx
+			break
+		}
+	}
+	m.setTarget(ts[(i+dir+len(ts))%len(ts)])
+}
+
+func (m *Model) selectorLine() string {
+	sel := m.selectedTarget()
+	parts := make([]string, 0, 4)
+	for _, t := range m.targets() {
+		if t == sel {
+			parts = append(parts, activeTab.Render("‹"+t+"›"))
+		} else {
+			parts = append(parts, dimTab.Render(t))
+		}
+	}
+	return helpStyle.Render("to ") + strings.Join(parts, " ")
 }
 
 // apply folds a journal record into view state.
@@ -337,8 +409,8 @@ func (m *Model) render() string {
 	b.WriteString(sep(m.width) + "\n")
 
 	body := m.bodyLines()
-	// Reserve rows: title + tabs + fleet + 2 seps + help (+1 slack) + control + multi-line input.
-	avail := max(m.height-7-controlLines-inputHeight, 1)
+	// Reserve rows: title + tabs + fleet + 2 seps + selector + help (+1 slack) + control + input.
+	avail := max(m.height-8-controlLines-inputHeight, 1)
 	if len(body) > avail {
 		body = body[len(body)-avail:]
 	}
@@ -350,11 +422,12 @@ func (m *Model) render() string {
 	}
 
 	b.WriteString(sep(m.width) + "\n")
+	b.WriteString(m.selectorLine() + "\n")
 	b.WriteString(m.input.View() + "\n")
 	if m.quitArmed {
 		b.WriteString(warnStyle.Render("press ctrl+c again to quit"))
 	} else {
-		help := "tab: switch view · @<id>: address agent · enter: send · " + newlineKey + ": newline · esc: stop agents · ctrl+c ×2: quit"
+		help := "tab: view · ctrl+t: recipient · enter: send · " + newlineKey + ": newline · esc: stop · ctrl+c ×2: quit"
 		if m.control != nil {
 			help += " · ctrl+e: new enroll token"
 		}
