@@ -165,3 +165,16 @@ func TestRecipientSelector(t *testing.T) {
 		t.Fatalf("broadcast strips mention → %q", got)
 	}
 }
+
+// Roster agents appear in the fleet at startup, before any message.
+func TestRosterPopulatesFleet(t *testing.T) {
+	j := journal.NewMemory()
+	m := NewModel(Deps{Bus: bus.New(j), Board: board.New(j), Journal: j,
+		Roster: func() []string { return []string{"alice", "bob"} }})
+	if m.agents["alice"] == nil || m.agents["bob"] == nil {
+		t.Fatalf("roster agents should populate the fleet at startup: %v", m.agentOrder)
+	}
+	if m.agents["alice"].status != "idle" {
+		t.Fatalf("roster agent should start idle, got %q", m.agents["alice"].status)
+	}
+}

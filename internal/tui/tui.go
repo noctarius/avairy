@@ -24,7 +24,8 @@ type Deps struct {
 	Bus     *bus.Bus
 	Board   *board.Board
 	Journal journal.Log
-	Control *ControlInfo // non-nil when serving the node control API
+	Control *ControlInfo    // non-nil when serving the node control API
+	Roster  func() []string // current agent ids, so agents appear before their first message
 }
 
 // ControlInfo surfaces node-enrollment details in the TUI (the alt-screen hides stdout, so
@@ -128,7 +129,19 @@ func NewModel(deps Deps) *Model {
 	for _, rec := range deps.Journal.Records() {
 		m.apply(rec)
 	}
+	m.refreshRoster()
 	return m
+}
+
+// refreshRoster ensures every currently-registered agent has a fleet entry, so agents show
+// up as soon as they're known — not only after their first message.
+func (m *Model) refreshRoster() {
+	if m.deps.Roster == nil {
+		return
+	}
+	for _, id := range m.deps.Roster() {
+		m.touchAgent(id)
+	}
 }
 
 func (m *Model) Init() tea.Cmd {
@@ -154,6 +167,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case recordMsg:
 		m.apply(journal.Record(msg))
+		m.refreshRoster() // pick up newly-enrolled agents (enrollment journals a record)
 		return m, listen(m.sub)
 
 	case tea.KeyPressMsg:

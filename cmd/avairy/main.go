@@ -154,7 +154,15 @@ func main() {
 		runHeadless(b, jrnl, *headless)
 		return
 	}
-	if err := tui.Run(tui.Deps{Bus: b, Board: bd, Journal: jrnl, Control: ctrlInfo}); err != nil {
+	roster := func() []string {
+		metas := mcpSrv.AgentList()
+		ids := make([]string, 0, len(metas))
+		for _, mm := range metas {
+			ids = append(ids, mm.ID)
+		}
+		return ids
+	}
+	if err := tui.Run(tui.Deps{Bus: b, Board: bd, Journal: jrnl, Control: ctrlInfo, Roster: roster}); err != nil {
 		fail("tui", err)
 	}
 }
