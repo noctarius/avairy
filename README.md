@@ -61,14 +61,17 @@ Everything that happens is appended to an event-sourced journal at `.avairy/jour
 
 ## Run it — across machines
 
-On the **operator machine**, start core with the node control API:
+On the **operator machine**, start core with the node control API bound to a reachable
+interface, and advertise the host/IP remote nodes should dial:
 
 ```sh
-go run ./cmd/avairy -control-addr 127.0.0.1:7700
+avairy -control-addr 0.0.0.0:7700 -mcp-addr 0.0.0.0:7701 -advertise <operator-ip>
 ```
 
-It prints a one-time **enroll token**, the **control URL**, and the **MCP bus base** — leave
-this running. On each **remote machine/VM**, run the daemon (a single cross-platform binary):
+The TUI header then shows the **control URL**, the **MCP bus base**, and a one-time **enroll
+token** (press `ctrl+e` for a fresh token per node) — leave this running. (Omit `-advertise`
+for local-only; the bus stays on loopback and the TUI warns that remote nodes can't reach it.)
+On each **remote machine/VM**, run the daemon (a single cross-platform binary):
 
 ```sh
 avairy-node \

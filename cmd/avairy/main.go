@@ -39,6 +39,8 @@ func main() {
 	headless := flag.String("headless", "", "send this message to alice, print the journal, and exit (no TUI)")
 	model := flag.String("model", "haiku", "model for the live agent (kept cheap by default; ignored for codex unless set)")
 	controlAddr := flag.String("control-addr", "", "if set, serve the node control API here (enrollment/sync) and print an enroll token")
+	mcpAddr := flag.String("mcp-addr", "127.0.0.1:0", "MCP bus listen address (use 0.0.0.0:PORT to allow remote nodes)")
+	advertise := flag.String("advertise", "", "host/IP remote nodes use to reach this core (defaults to the listen host)")
 	flag.Parse()
 
 	// Durable, append-only journal (DESIGN.md §10) under .avairy/; falls back to memory-only.
@@ -53,14 +55,18 @@ func main() {
 
 	// Serve the MCP bus on a loopback port; agents connect here (the daemon will tunnel
 	// this for remote nodes — DESIGN.md §4).
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := net.Listen("tcp", *mcpAddr)
 	if err != nil {
 		fail("listen", err)
 	}
 	go http.Serve(ln, mcpSrv.HTTPHandler())
-	busURL := "http://" + ln.Addr().String() + mcp.EndpointPath
+	// Local agents (alice/bob on this machine) always reach the bus via loopback, regardless
+	// of the bind/advertise host used for remote nodes.
+	_, mcpPort, _ := net.SplitHostPort(ln.Addr().String())
+	busURL := "http://127.0.0.1:" + mcpPort + mcp.EndpointPath
 
 	// Optionally serve the node control API so remote avairy-node daemons can enroll and sync.
+	var ctrlInfo *tui.ControlInfo
 	if *controlAddr != "" {
 		core := control.NewCore(workspace.NewHub(), jrnl)
 		go func() {
@@ -68,8 +74,21 @@ func main() {
 				fmt.Fprintln(os.Stderr, "control server:", err)
 			}
 		}()
-		fmt.Printf("control API on %s\nMCP bus base: http://%s\nenroll token: %s\n\n",
-			*controlAddr, ln.Addr().String(), core.IssueEnrollToken())
+		ctrlURL := "http://" + advertised(*advertise, *controlAddr)
+		busBase := "http://" + advertised(*advertise, ln.Addr().String())
+		warn := ""
+		if unreachableHost(hostOf(advertised(*advertise, ln.Addr().String()))) {
+			warn = "host not reachable from other machines — pass -advertise <ip/host> and bind -control-addr/-mcp-addr to 0.0.0.0:PORT"
+		}
+		ctrlInfo = &tui.ControlInfo{ControlURL: ctrlURL, BusBase: busBase, Warn: warn, NewToken: core.IssueEnrollToken}
+		// Under the TUI's alt-screen, stdout is hidden — so the token is shown in the TUI.
+		// Only print here when there's no TUI (headless).
+		if *headless != "" {
+			fmt.Printf("control API:  %s\nMCP bus base: %s\nenroll token: %s\n", ctrlURL, busBase, core.IssueEnrollToken())
+			if warn != "" {
+				fmt.Println("warning:", warn)
+			}
+		}
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -101,7 +120,7 @@ func main() {
 		runHeadless(b, jrnl, *headless)
 		return
 	}
-	if err := tui.Run(tui.Deps{Bus: b, Board: bd, Journal: jrnl}); err != nil {
+	if err := tui.Run(tui.Deps{Bus: b, Board: bd, Journal: jrnl, Control: ctrlInfo}); err != nil {
 		fail("tui", err)
 	}
 }
@@ -217,4 +236,35 @@ func summarize(data any) string {
 func fail(what string, err error) {
 	fmt.Fprintln(os.Stderr, "avairy:", what, ":", err)
 	os.Exit(1)
+}
+
+// advertised returns the host:port remote nodes should dial: the -advertise host (if given)
+// combined with the bound port, else the bound address as-is.
+func advertised(adv, bound string) string {
+	_, port, _ := net.SplitHostPort(bound)
+	if adv == "" {
+		return bound
+	}
+	if _, _, err := net.SplitHostPort(adv); err == nil {
+		return adv // already host:port
+	}
+	return net.JoinHostPort(adv, port)
+}
+
+func hostOf(hostport string) string {
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		return h
+	}
+	return hostport
+}
+
+// unreachableHost reports whether a host can't be dialed from another machine.
+func unreachableHost(h string) bool {
+	if h == "" || h == "localhost" {
+		return true
+	}
+	if ip := net.ParseIP(h); ip != nil {
+		return ip.IsLoopback() || ip.IsUnspecified()
+	}
+	return false
 }

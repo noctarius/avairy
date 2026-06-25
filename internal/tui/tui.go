@@ -22,6 +22,16 @@ type Deps struct {
 	Bus     *bus.Bus
 	Board   *board.Board
 	Journal journal.Log
+	Control *ControlInfo // non-nil when serving the node control API
+}
+
+// ControlInfo surfaces node-enrollment details in the TUI (the alt-screen hides stdout, so
+// printing the token wouldn't be visible).
+type ControlInfo struct {
+	ControlURL string
+	BusBase    string
+	Warn       string
+	NewToken   func() string // mints a fresh single-use enrollment token
 }
 
 const (
@@ -53,6 +63,9 @@ type Model struct {
 	agentOrder []string
 	cost       float64
 
+	control *ControlInfo
+	token   string
+
 	seen map[uint64]bool
 }
 
@@ -68,6 +81,8 @@ var (
 	blockedDot = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Render("●")
 	helpStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
 	sepStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
+	ctrlStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("13"))
+	warnStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
 )
 
 // NewModel builds the model, backfilling existing journal records and subscribing to new ones.
@@ -79,13 +94,17 @@ func NewModel(deps Deps) *Model {
 
 	sub, _ := deps.Journal.Subscribe()
 	m := &Model{
-		deps:   deps,
-		sub:    sub,
-		width:  100,
-		height: 30,
-		input:  ti,
-		agents: make(map[string]*agentState),
-		seen:   make(map[uint64]bool),
+		deps:    deps,
+		sub:     sub,
+		width:   100,
+		height:  30,
+		input:   ti,
+		agents:  make(map[string]*agentState),
+		control: deps.Control,
+		seen:    make(map[uint64]bool),
+	}
+	if m.control != nil && m.control.NewToken != nil {
+		m.token = m.control.NewToken()
 	}
 	for _, rec := range deps.Journal.Records() {
 		m.apply(rec)
@@ -124,6 +143,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case tea.KeyTab:
 			m.tab = (m.tab + 1) % numTabs
+			return m, nil
+		case tea.KeyCtrlE:
+			if m.control != nil && m.control.NewToken != nil {
+				m.token = m.control.NewToken()
+			}
 			return m, nil
 		case tea.KeyEnter:
 			m.submit()
@@ -233,13 +257,25 @@ func (m *Model) View() string {
 
 	b.WriteString(titleStyle.Render("avairy") + helpStyle.Render("  single-machine collaboration"))
 	b.WriteString("\n")
+
+	controlLines := 0
+	if m.control != nil {
+		line := fmt.Sprintf("control %s · bus %s · enroll token: %s", m.control.ControlURL, m.control.BusBase, m.token)
+		b.WriteString(ctrlStyle.Render(truncate(line, m.width)) + "\n")
+		controlLines++
+		if m.control.Warn != "" {
+			b.WriteString(warnStyle.Render(truncate("⚠ "+m.control.Warn, m.width)) + "\n")
+			controlLines++
+		}
+	}
+
 	b.WriteString(m.tabBar() + "\n")
 	b.WriteString(m.fleetLine() + "\n")
 	b.WriteString(sep(m.width) + "\n")
 
 	body := m.bodyLines()
-	// Reserve rows for header(4) + sep + input(1) + help(1).
-	avail := max(m.height-8, 1)
+	// Reserve rows for header(4) + sep + input(1) + help(1), plus any control lines.
+	avail := max(m.height-8-controlLines, 1)
 	if len(body) > avail {
 		body = body[len(body)-avail:]
 	}
@@ -252,7 +288,11 @@ func (m *Model) View() string {
 
 	b.WriteString(sep(m.width) + "\n")
 	b.WriteString(m.input.View() + "\n")
-	b.WriteString(helpStyle.Render("tab: switch view · @<id> msg: address agent · enter: send · ctrl+c: quit"))
+	help := "tab: switch view · @<id> msg: address agent · enter: send · ctrl+c: quit"
+	if m.control != nil {
+		help += " · ctrl+e: new enroll token"
+	}
+	b.WriteString(helpStyle.Render(help))
 	return b.String()
 }
 
