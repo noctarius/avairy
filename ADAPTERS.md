@@ -69,4 +69,5 @@
 
 - Confirm Claude Agent SDK `interrupt()` + streaming-input signatures against the installed SDK version (decides whether Claude is `interrupt`- or `steer`-only).
 - Confirm Claude PreToolUse hook async/long-timeout behavior for human-speed approvals.
-- Pin Codex app-server v2 method/field/enum names via `codex app-server generate-ts` against the installed binary.
+- ✅ **Codex v2 protocol pinned** (0.142.1, via `codex app-server generate-json-schema`): framing = newline-delimited JSON-RPC; client requests `initialize`, `thread/start`, `turn/start`, `turn/steer`, `turn/interrupt`; notifications `item/completed`, `turn/completed`, `item/agentMessage/delta`, `error`; approvals `item/commandExecution/requestApproval` + `item/fileChange/requestApproval` + `item/permissions/requestApproval` (v2 decision `accept`/`acceptForSession`/`decline`; v1 `execCommandApproval`/`applyPatchApproval` → `approved`/`denied`). `thread/start` returns `{thread:{id}}`; `turn/start` returns `{turn:{id}}`; user input = `[{type:"text",text}]`. **initialize + thread/start handshake verified live** (free, no model turn). MCP via `-c mcp_servers.<name>.url/http_headers`. Implemented in `internal/adapter/codex`.
+- Not yet exercised live: a full Codex `turn/start` → notifications → `turn/completed` (costs credits).

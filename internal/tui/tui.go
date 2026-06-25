@@ -143,8 +143,8 @@ func (m *Model) submit() {
 	if text == "" {
 		return
 	}
-	if strings.HasPrefix(text, "@") {
-		id, body, _ := strings.Cut(strings.TrimPrefix(text, "@"), " ")
+	if rest, ok := strings.CutPrefix(text, "@"); ok {
+		id, body, _ := strings.Cut(rest, " ")
 		if id != "" && body != "" {
 			m.deps.Bus.Publish("human", bus.Agent(id), body, agent.DeliverySteer)
 			return
@@ -239,10 +239,7 @@ func (m *Model) View() string {
 
 	body := m.bodyLines()
 	// Reserve rows for header(4) + sep + input(1) + help(1).
-	avail := m.height - 8
-	if avail < 1 {
-		avail = 1
-	}
+	avail := max(m.height-8, 1)
 	if len(body) > avail {
 		body = body[len(body)-avail:]
 	}

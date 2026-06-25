@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"avairy/internal/adapter/claudecode"
+	"avairy/internal/adapter/codex"
 	"avairy/internal/adapter/mock"
 	"avairy/internal/agent"
 	"avairy/internal/board"
@@ -28,9 +29,10 @@ import (
 )
 
 func main() {
-	live := flag.Bool("live", false, "run 'alice' as a real Claude Code agent on the MCP bus")
+	live := flag.Bool("live", false, "run 'alice' as a real agent on the MCP bus")
+	family := flag.String("family", "claude", "live agent family: claude | codex")
 	headless := flag.String("headless", "", "send this message to alice, print the journal, and exit (no TUI)")
-	model := flag.String("model", "haiku", "model for the live agent (kept cheap by default)")
+	model := flag.String("model", "haiku", "model for the live agent (kept cheap by default; ignored for codex unless set)")
 	flag.Parse()
 
 	jrnl := journal.NewMemory()
@@ -52,9 +54,9 @@ func main() {
 
 	caps := map[string]string{"os": runtime.GOOS}
 
-	// alice: real Claude Code agent when -live, else a mock.
+	// alice: real agent (claude|codex) when -live, else a mock.
 	mcpSrv.RegisterAgent("alice", []string{"backend"}, caps)
-	startAlice(ctx, *live, *model, busURL, b, jrnl)
+	startAlice(ctx, *live, *family, *model, busURL, b, jrnl)
 
 	// bob: always a mock peer, so cross-agent messaging works without extra credits.
 	mcpSrv.RegisterAgent("bob", []string{"backend"}, caps)
@@ -73,7 +75,7 @@ const aliceRole = "You are 'alice', a backend engineer agent in the avairy multi
 	"Collaborate ONLY through the avairy MCP tools: post_task, claim_task, list_tasks, " +
 	"send_message, read_inbox, report_status. Be terse and do exactly what you are asked, then stop."
 
-func startAlice(ctx context.Context, live bool, model, busURL string, b *bus.Bus, jrnl journal.Log) {
+func startAlice(ctx context.Context, live bool, family, model, busURL string, b *bus.Bus, jrnl journal.Log) {
 	if !live {
 		startMock(ctx, "alice", b, jrnl)
 		return
@@ -82,13 +84,7 @@ func startAlice(ctx context.Context, live bool, model, busURL string, b *bus.Bus
 	if err != nil {
 		fail("workspace", err)
 	}
-	ad := claudecode.New()
-	// Pre-approve the avairy bus tools so headless turns don't stall on permission prompts;
-	// real gating (the native-hook EnforcementBackend) is a later milestone.
-	ad.ExtraArgs = []string{
-		"--allowedTools", "mcp__avairy__post_task,mcp__avairy__claim_task,mcp__avairy__list_tasks,mcp__avairy__send_message,mcp__avairy__read_inbox,mcp__avairy__report_status",
-	}
-	sess, err := ad.Start(ctx, agent.SessionConfig{
+	cfg := agent.SessionConfig{
 		AgentID:   "alice",
 		Role:      aliceRole,
 		Workspace: ws,
@@ -99,7 +95,25 @@ func startAlice(ctx context.Context, live bool, model, busURL string, b *bus.Bus
 			URL:     busURL,
 			Headers: map[string]string{"X-Avairy-Agent": "alice"},
 		}},
-	})
+	}
+
+	var ad agent.Adapter
+	switch family {
+	case "codex":
+		if cfg.Model == "haiku" { // the claude-flavored default isn't a codex model
+			cfg.Model = ""
+		}
+		ad = codex.New() // approvalPolicy=never auto-runs the bus tools (gating is a later milestone)
+	default: // claude
+		ca := claudecode.New()
+		// Pre-approve the avairy bus tools so headless turns don't stall on permission prompts.
+		ca.ExtraArgs = []string{
+			"--allowedTools", "mcp__avairy__post_task,mcp__avairy__claim_task,mcp__avairy__list_tasks,mcp__avairy__send_message,mcp__avairy__read_inbox,mcp__avairy__report_status",
+		}
+		ad = ca
+	}
+
+	sess, err := ad.Start(ctx, cfg)
 	if err != nil {
 		fail("start alice", err)
 	}
