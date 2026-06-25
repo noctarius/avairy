@@ -35,30 +35,42 @@ type Core struct {
 	// InboxDrainer, if set, returns and clears bus messages buffered for an agent.
 	InboxDrainer func(agentID string) []InboxMessage
 
-	mu           sync.Mutex
-	enrollTokens map[string]bool   // valid one-time enrollment tokens
-	sessions     map[string]string // sessionToken -> nodeID
-	nodes        map[string]*NodeInfo
+	mu       sync.Mutex
+	pending  string            // current operator-facing token (hand to the next node)
+	bound    map[string]string // enrollment token -> node id it's bound to (reusable for rejoin)
+	sessions map[string]string // sessionToken -> nodeID
+	nodes    map[string]*NodeInfo
 }
 
 // NewCore returns a Core backed by hub, journaling lifecycle events to jrnl.
 func NewCore(hub *workspace.Hub, jrnl journal.Log) *Core {
 	return &Core{
-		hub:          hub,
-		jrnl:         jrnl,
-		enrollTokens: make(map[string]bool),
-		sessions:     make(map[string]string),
-		nodes:        make(map[string]*NodeInfo),
+		hub:      hub,
+		jrnl:     jrnl,
+		bound:    make(map[string]string),
+		sessions: make(map[string]string),
+		nodes:    make(map[string]*NodeInfo),
 	}
 }
 
-// IssueEnrollToken mints a single-use enrollment token (shown in the TUI / seeded over SSH).
-func (c *Core) IssueEnrollToken() string {
-	tok := randToken()
+// CurrentToken returns the operator-facing enrollment token for the next node (minting one if
+// needed). It stays stable until a new node consumes it (then it auto-regenerates).
+func (c *Core) CurrentToken() string {
 	c.mu.Lock()
-	c.enrollTokens[tok] = true
-	c.mu.Unlock()
-	return tok
+	defer c.mu.Unlock()
+	if c.pending == "" {
+		c.pending = randToken()
+	}
+	return c.pending
+}
+
+// NewPendingToken rotates the operator-facing token (manual rotation; invalidates the old
+// unused one). Already-bound node tokens are unaffected.
+func (c *Core) NewPendingToken() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.pending = randToken()
+	return c.pending
 }
 
 // Nodes returns a snapshot of enrolled nodes (for the TUI fleet/health view).
@@ -89,24 +101,39 @@ func (c *Core) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &req) {
 		return
 	}
-	c.mu.Lock()
-	ok := c.enrollTokens[req.Token]
-	if ok {
-		delete(c.enrollTokens, req.Token) // single-use
-	}
-	c.mu.Unlock()
-	if !ok || req.NodeID == "" {
+	if req.NodeID == "" || req.Token == "" {
 		http.Error(w, "invalid enrollment token", http.StatusUnauthorized)
 		return
 	}
 
-	session := randToken()
 	c.mu.Lock()
-	c.sessions[session] = req.NodeID
-	c.nodes[req.NodeID] = &NodeInfo{ID: req.NodeID, AgentID: req.AgentID, OS: req.OS, Caps: req.Caps, LastSeen: time.Now()}
+	accepted, rejoin := false, false
+	switch {
+	case req.Token == c.pending:
+		// First use: bind the token to this node and regenerate the operator-facing token.
+		c.bound[req.Token] = req.NodeID
+		c.pending = randToken()
+		accepted = true
+	case c.bound[req.Token] == req.NodeID:
+		// The same node re-enrolling with its bound token — a rejoin (restart/crash recovery).
+		accepted, rejoin = true, true
+	}
+	session := randToken()
+	if accepted {
+		c.sessions[session] = req.NodeID
+		c.nodes[req.NodeID] = &NodeInfo{ID: req.NodeID, AgentID: req.AgentID, OS: req.OS, Caps: req.Caps, LastSeen: time.Now()}
+	}
 	c.mu.Unlock()
+	if !accepted {
+		http.Error(w, "invalid enrollment token (unknown, or bound to another node)", http.StatusUnauthorized)
+		return
+	}
 
-	c.jrnl.Append(journal.KindSystem, req.NodeID, map[string]any{"event": "node_enrolled", "os": req.OS, "caps": req.Caps})
+	event := "node_enrolled"
+	if rejoin {
+		event = "node_rejoined"
+	}
+	c.jrnl.Append(journal.KindSystem, req.NodeID, map[string]any{"event": event, "os": req.OS, "caps": req.Caps})
 	if c.OnEnroll != nil {
 		c.OnEnroll(req.NodeID, req.AgentID, req.Caps)
 	}

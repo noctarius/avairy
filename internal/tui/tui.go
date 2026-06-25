@@ -29,10 +29,11 @@ type Deps struct {
 // ControlInfo surfaces node-enrollment details in the TUI (the alt-screen hides stdout, so
 // printing the token wouldn't be visible).
 type ControlInfo struct {
-	ControlURL string
-	BusBase    string
-	Warn       string
-	NewToken   func() string // mints a fresh single-use enrollment token
+	ControlURL   string
+	BusBase      string
+	Warn         string
+	CurrentToken func() string // the operator-facing token for the next node (auto-regenerates on use)
+	NewToken     func() string // rotate to a fresh token (ctrl+e)
 }
 
 const (
@@ -120,8 +121,8 @@ func NewModel(deps Deps) *Model {
 		control: deps.Control,
 		seen:    make(map[uint64]bool),
 	}
-	if m.control != nil && m.control.NewToken != nil {
-		m.token = m.control.NewToken()
+	if m.control != nil && m.control.CurrentToken != nil {
+		m.token = m.control.CurrentToken()
 	}
 	for _, rec := range deps.Journal.Records() {
 		m.apply(rec)
@@ -252,10 +253,14 @@ func (m *Model) apply(rec journal.Record) {
 			m.handovers = append(m.handovers, fmt.Sprintf("%s claimed %s — %q", t.Claimant, t.ID, t.Title))
 		}
 	case journal.KindSystem:
-		// Only agent self-reports (report_status) affect the fleet. Node-lifecycle records
-		// (node_enrolled, sync_conflict, …) carry a node id as actor — not an agent — so they
-		// must not create a phantom fleet entry.
-		if d, ok := rec.Data.(map[string]any); ok && d["event"] == "report_status" {
+		d, ok := rec.Data.(map[string]any)
+		if !ok {
+			return
+		}
+		switch d["event"] {
+		case "report_status":
+			// Only agent self-reports affect the fleet (node-lifecycle records carry a node
+			// id as actor, not an agent — they must not create a phantom fleet entry).
 			if a := m.touchAgent(rec.Actor); a != nil {
 				switch s, _ := d["status"].(string); s {
 				case "blocked", "low_confidence":
@@ -265,6 +270,11 @@ func (m *Model) apply(rec journal.Record) {
 				default:
 					a.status = "working"
 				}
+			}
+		case "node_enrolled", "node_rejoined":
+			// A node consumed the enrollment token → refresh the displayed (regenerated) one.
+			if m.control != nil && m.control.CurrentToken != nil {
+				m.token = m.control.CurrentToken()
 			}
 		}
 	}

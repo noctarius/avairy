@@ -99,11 +99,11 @@ func main() {
 		if unreachableHost(hostOf(advertised(*advertise, ln.Addr().String()))) {
 			warn = "host not reachable from other machines — pass -advertise <ip/host> and bind -control-addr/-mcp-addr to 0.0.0.0:PORT"
 		}
-		ctrlInfo = &tui.ControlInfo{ControlURL: ctrlURL, BusBase: busBase, Warn: warn, NewToken: core.IssueEnrollToken}
+		ctrlInfo = &tui.ControlInfo{ControlURL: ctrlURL, BusBase: busBase, Warn: warn, CurrentToken: core.CurrentToken, NewToken: core.NewPendingToken}
 		// Under the TUI's alt-screen, stdout is hidden — so the token is shown in the TUI.
 		// Only print here when there's no TUI (headless).
 		if *headless != "" {
-			fmt.Printf("control API:  %s\nMCP bus base: %s\nenroll token: %s\n", ctrlURL, busBase, core.IssueEnrollToken())
+			fmt.Printf("control API:  %s\nMCP bus base: %s\nenroll token: %s\n", ctrlURL, busBase, core.CurrentToken())
 			if warn != "" {
 				fmt.Println("warning:", warn)
 			}

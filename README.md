@@ -70,9 +70,12 @@ interface, and advertise the host/IP remote nodes should dial:
 avairy -control-addr 0.0.0.0:7700 -mcp-addr 0.0.0.0:7701 -advertise <operator-ip>
 ```
 
-The TUI header then shows the **control URL**, the **MCP bus base**, and a one-time **enroll
-token** (press `ctrl+e` for a fresh token per node) — leave this running. (Omit `-advertise`
-for local-only; the bus stays on loopback and the TUI warns that remote nodes can't reach it.)
+The TUI header shows the **control URL**, the **MCP bus base**, and an **enroll token**. The
+token **auto-regenerates each time a node uses it**, so each new node gets its own; the token
+a node first enrolls with is **bound to that node** and stays valid for it — so a restarted
+daemon (e.g. under systemd) **rejoins with the same `-token`** with no operator action.
+(`ctrl+e` rotates the current token manually; omit `-advertise` for local-only, and the TUI
+warns when the bus host isn't reachable.)
 On each **remote machine/VM**, run the daemon (a single cross-platform binary):
 
 ```sh

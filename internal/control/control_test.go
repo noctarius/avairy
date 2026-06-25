@@ -35,7 +35,7 @@ func writeFile(t *testing.T, dir, rel, content string) {
 // through the canonical hub.
 func TestEnrollAndSyncAcrossNodes(t *testing.T) {
 	core, srv := newCoreServer(t)
-	tok := core.IssueEnrollToken()
+	tok := core.CurrentToken()
 
 	dirA, dirB := t.TempDir(), t.TempDir()
 	writeFile(t, dirA, "src/app.go", "package app\n")
@@ -49,7 +49,7 @@ func TestEnrollAndSyncAcrossNodes(t *testing.T) {
 	}
 
 	nodeB := NewNode(srv.URL, "mac-box")
-	if err := nodeB.Enroll(core.IssueEnrollToken(), "", "darwin", map[string]string{"os": "darwin"}); err != nil {
+	if err := nodeB.Enroll(core.CurrentToken(), "", "darwin", map[string]string{"os": "darwin"}); err != nil {
 		t.Fatalf("enroll B: %v", err)
 	}
 	if err := nodeB.SyncDown(dirB); err != nil {
@@ -74,14 +74,23 @@ func TestInvalidEnrollTokenRejected(t *testing.T) {
 	}
 }
 
-func TestEnrollTokenIsSingleUse(t *testing.T) {
+func TestEnrollTokenBindingAndRejoin(t *testing.T) {
 	core, srv := newCoreServer(t)
-	tok := core.IssueEnrollToken()
+	tok := core.CurrentToken()
 	if err := NewNode(srv.URL, "first").Enroll(tok, "", "linux", nil); err != nil {
 		t.Fatalf("first enroll: %v", err)
 	}
+	// The operator-facing token auto-regenerates once a node consumes it.
+	if core.CurrentToken() == tok {
+		t.Fatal("token should auto-regenerate after a node enrolls")
+	}
+	// A different node may not reuse a bound token.
 	if err := NewNode(srv.URL, "second").Enroll(tok, "", "linux", nil); err == nil {
-		t.Fatal("reused enrollment token should be rejected")
+		t.Fatal("a bound token must be rejected for a different node")
+	}
+	// The same node may rejoin with its bound token (restart / crash recovery).
+	if err := NewNode(srv.URL, "first").Enroll(tok, "", "linux", nil); err != nil {
+		t.Fatalf("same node should rejoin with its bound token: %v", err)
 	}
 }
 
@@ -93,11 +102,11 @@ func TestConflictOverWire(t *testing.T) {
 	writeFile(t, dirB, "f.go", "B")
 
 	nodeA := NewNode(srv.URL, "a")
-	nodeA.Enroll(core.IssueEnrollToken(), "", "linux", nil)
+	nodeA.Enroll(core.CurrentToken(), "", "linux", nil)
 	nodeA.SyncUp(dirA) // f.go -> v1
 
 	nodeB := NewNode(srv.URL, "b") // fresh base, never pulled v1
-	nodeB.Enroll(core.IssueEnrollToken(), "", "linux", nil)
+	nodeB.Enroll(core.CurrentToken(), "", "linux", nil)
 	conflicts, err := nodeB.SyncUp(dirB)
 	if err != nil {
 		t.Fatal(err)
@@ -148,7 +157,7 @@ func TestEnrollHookInboxAndEvents(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	n := NewNode(srv.URL, "macos")
-	if err := n.Enroll(c.IssueEnrollToken(), "claude", "darwin", map[string]string{"os": "darwin"}); err != nil {
+	if err := n.Enroll(c.CurrentToken(), "claude", "darwin", map[string]string{"os": "darwin"}); err != nil {
 		t.Fatal(err)
 	}
 	if enrolledAgent != "claude" {
