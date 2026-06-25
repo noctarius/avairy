@@ -37,12 +37,12 @@ targets=(
 )
 cmds=(avairy avairy-node)
 
-mkdir -p dist
 for t in "${targets[@]}"; do
   os="${t%/*}"; arch="${t#*/}"
   ext=""; [ "$os" = windows ] && ext=".exe"
+  dir="dist/${os}-${arch}"; mkdir -p "$dir"
   for c in "${cmds[@]}"; do
-    out="dist/${c}-${os}-${arch}${ext}"
+    out="${dir}/${c}${ext}"
     echo "building $out"
     CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" \
       go build -trimpath -ldflags="-s -w" -o "$out" "./cmd/${c}"
@@ -55,8 +55,9 @@ echo "done → dist/"
 chmod +x build-all.sh && ./build-all.sh
 ```
 
-This produces 16 binaries (2 commands × 8 targets), e.g. `dist/avairy-darwin-arm64`,
-`dist/avairy-node-windows-amd64.exe`, `dist/avairy-node-freebsd-arm64`.
+This produces 16 binaries (2 commands × 8 targets) under per-target dirs, e.g.
+`dist/darwin-arm64/avairy`, `dist/windows-amd64/avairy-node.exe`,
+`dist/freebsd-arm64/avairy-node`.
 
 > **fish shell:** the loop above is bash. Run it with `bash build-all.sh`, or set per-build
 > vars fish-style: `env CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build ...`.
@@ -70,7 +71,7 @@ go build -o dist/avairy-node ./cmd/avairy-node
 
 # one cross target, e.g. Windows on ARM64
 CGO_ENABLED=0 GOOS=windows GOARCH=arm64 \
-  go build -trimpath -ldflags="-s -w" -o dist/avairy-node-windows-arm64.exe ./cmd/avairy-node
+  go build -trimpath -ldflags="-s -w" -o dist/windows-arm64/avairy-node.exe ./cmd/avairy-node
 ```
 
 ## Flags used

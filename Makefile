@@ -19,12 +19,14 @@ export CGO_ENABLED := 0
 
 all: build
 
-## build: native binaries for the host into dist/
+## build: native binaries for the host into dist/<os>-<arch>/
 build:
-	@mkdir -p $(DIST)
-	@for c in $(CMDS); do \
-		echo "building $(DIST)/$$c"; \
-		go build $(BUILDFLAGS) -o $(DIST)/$$c ./cmd/$$c || exit 1; \
+	@os=$$(go env GOOS); arch=$$(go env GOARCH); \
+	ext=; if [ "$$os" = windows ]; then ext=.exe; fi; \
+	dir=$(DIST)/$$os-$$arch; mkdir -p $$dir; \
+	for c in $(CMDS); do \
+		echo "building $$dir/$$c$$ext"; \
+		go build $(BUILDFLAGS) -o $$dir/$$c$$ext ./cmd/$$c || exit 1; \
 	done
 
 ## test: run the test suite
@@ -46,14 +48,14 @@ tidy:
 ## check: fmt + vet + test
 check: fmt vet test
 
-## release: cross-compile every command for every target into dist/
+## release: cross-compile every command for every target into dist/<os>-<arch>/
 release:
-	@mkdir -p $(DIST)
 	@for p in $(PLATFORMS); do \
 		os=$${p%/*}; arch=$${p#*/}; \
 		ext=; if [ "$$os" = windows ]; then ext=.exe; fi; \
+		dir=$(DIST)/$$os-$$arch; mkdir -p $$dir; \
 		for c in $(CMDS); do \
-			out=$(DIST)/$$c-$$os-$$arch$$ext; \
+			out=$$dir/$$c$$ext; \
 			echo "building $$out"; \
 			GOOS=$$os GOARCH=$$arch go build $(BUILDFLAGS) -o $$out ./cmd/$$c || exit 1; \
 		done; \
