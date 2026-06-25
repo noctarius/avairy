@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -43,6 +43,9 @@ const (
 
 var tabNames = []string{"Conversation", "Handovers", "Tasks"}
 
+// inputHeight is the number of rows the multi-line command input occupies.
+const inputHeight = 3
+
 type agentState struct {
 	id     string
 	status string // working | idle | blocked
@@ -55,7 +58,7 @@ type Model struct {
 
 	width, height int
 	tab           int
-	input         textinput.Model
+	input         textarea.Model
 
 	conv       []string
 	handovers  []string
@@ -87,10 +90,14 @@ var (
 
 // NewModel builds the model, backfilling existing journal records and subscribing to new ones.
 func NewModel(deps Deps) *Model {
-	ti := textinput.New()
-	ti.Placeholder = "message… (@<id> to address an agent, otherwise broadcast)"
-	ti.Prompt = "> "
-	ti.Focus()
+	ta := textarea.New()
+	ta.Placeholder = "message… (@<id> to address an agent; alt+enter for a newline)"
+	ta.Prompt = "▎ "
+	ta.ShowLineNumbers = false
+	ta.CharLimit = 0 // no limit (paste long, multi-line prompts)
+	ta.SetHeight(inputHeight)
+	ta.SetWidth(98)
+	ta.Focus()
 
 	sub, _ := deps.Journal.Subscribe()
 	m := &Model{
@@ -98,7 +105,7 @@ func NewModel(deps Deps) *Model {
 		sub:     sub,
 		width:   100,
 		height:  30,
-		input:   ti,
+		input:   ta,
 		agents:  make(map[string]*agentState),
 		control: deps.Control,
 		seen:    make(map[uint64]bool),
@@ -113,7 +120,7 @@ func NewModel(deps Deps) *Model {
 }
 
 func (m *Model) Init() tea.Cmd {
-	return tea.Batch(textinput.Blink, listen(m.sub))
+	return tea.Batch(m.input.Focus(), listen(m.sub))
 }
 
 func listen(sub <-chan journal.Record) tea.Cmd {
@@ -130,7 +137,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		m.input.Width = msg.Width - 4
+		m.input.SetWidth(msg.Width - 2)
 		return m, nil
 
 	case recordMsg:
@@ -149,9 +156,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.token = m.control.NewToken()
 			}
 			return m, nil
+		case tea.KeyCtrlJ:
+			m.input.InsertRune('\n') // newline fallback for any terminal
+			return m, nil
 		case tea.KeyEnter:
+			if msg.Alt { // alt/option+enter → newline (Shift+Enter isn't distinguishable here)
+				m.input.InsertRune('\n')
+				return m, nil
+			}
 			m.submit()
-			m.input.SetValue("")
+			m.input.Reset()
 			return m, nil
 		}
 	}
@@ -274,8 +288,8 @@ func (m *Model) View() string {
 	b.WriteString(sep(m.width) + "\n")
 
 	body := m.bodyLines()
-	// Reserve rows for header(4) + sep + input(1) + help(1), plus any control lines.
-	avail := max(m.height-8-controlLines, 1)
+	// Reserve rows: title + tabs + fleet + 2 seps + help (+1 slack) + control + multi-line input.
+	avail := max(m.height-7-controlLines-inputHeight, 1)
 	if len(body) > avail {
 		body = body[len(body)-avail:]
 	}
@@ -288,7 +302,7 @@ func (m *Model) View() string {
 
 	b.WriteString(sep(m.width) + "\n")
 	b.WriteString(m.input.View() + "\n")
-	help := "tab: switch view · @<id> msg: address agent · enter: send · ctrl+c: quit"
+	help := "tab: switch view · @<id>: address agent · enter: send · alt+enter: newline · ctrl+c: quit"
 	if m.control != nil {
 		help += " · ctrl+e: new enroll token"
 	}
