@@ -6,21 +6,70 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/moby/patternmatcher"
+	"github.com/moby/patternmatcher/ignorefile"
+	gitignore "github.com/sabhiram/go-gitignore"
 )
 
-// Ignore filters paths out of sync (gitignore-style, DESIGN.md §9): never sync .git, build
-// output, dependency dirs, or binaries.
+// Ignore filters paths out of sync (DESIGN.md §9): a built-in baseline (VCS, caches, build
+// trees, binaries) plus the project's own .gitignore / .dockerignore / .avairyignore parsed
+// with their real syntax.
 type Ignore struct {
-	Dirs     map[string]bool
-	Suffixes []string
+	Dirs     map[string]bool // exact path-segment names
+	Prefixes []string        // path-segment prefixes (e.g. "build-")
+	Suffixes []string        // file suffixes (e.g. ".o")
+
+	git    *gitignore.GitIgnore           // .gitignore + .avairyignore (gitignore syntax)
+	docker *patternmatcher.PatternMatcher // .dockerignore (dockerignore syntax)
 }
 
-// DefaultIgnore is the baseline exclude set.
+// DefaultIgnore is the baseline exclude set — VCS, editor/agent state, build trees, caches,
+// dependency dirs, and common binaries.
 func DefaultIgnore() Ignore {
-	return Ignore{
-		Dirs:     map[string]bool{".git": true, "node_modules": true, "build": true, "dist": true, "target": true, ".avairy": true},
-		Suffixes: []string{".o", ".exe", ".dll", ".so", ".dylib", ".test", ".class", ".pyc"},
+	dirs := []string{
+		".git", ".svn", ".hg", ".avairy", ".claude", ".idea", ".vscode",
+		"node_modules", "vendor", "target", "dist", "out", "bin", "obj",
+		"__pycache__", ".venv", "venv", ".pytest_cache", ".mypy_cache",
+		".cache", ".zig-cache", "zig-cache", "zig_global_cache",
+		".cmake", ".next", ".nuxt", ".gradle", ".terraform",
 	}
+	m := make(map[string]bool, len(dirs))
+	for _, d := range dirs {
+		m[d] = true
+	}
+	return Ignore{
+		Dirs:     m,
+		Prefixes: []string{"build", "cmake-build"}, // build, build-wasm3, cmake-build-debug, …
+		Suffixes: []string{".o", ".obj", ".a", ".lib", ".exe", ".dll", ".so", ".dylib", ".wasm", ".bin", ".test", ".class", ".pyc", ".DS_Store"},
+	}
+}
+
+// IgnoreFor returns DefaultIgnore augmented with the dir's ignore files, parsed with their
+// real syntax: .gitignore and .avairyignore (gitignore) and .dockerignore (dockerignore).
+func IgnoreFor(dir string) Ignore {
+	ig := DefaultIgnore()
+	var lines []string
+	lines = append(lines, readLines(filepath.Join(dir, ".gitignore"))...)
+	lines = append(lines, readLines(filepath.Join(dir, ".avairyignore"))...)
+	if len(lines) > 0 {
+		ig.git = gitignore.CompileIgnoreLines(lines...)
+	}
+	if f, err := os.Open(filepath.Join(dir, ".dockerignore")); err == nil {
+		if pats, rerr := ignorefile.ReadAll(f); rerr == nil && len(pats) > 0 {
+			ig.docker, _ = patternmatcher.New(pats)
+		}
+		f.Close()
+	}
+	return ig
+}
+
+func readLines(path string) []string {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	return strings.Split(string(b), "\n")
 }
 
 // Match reports whether a slash-separated relative path should be excluded.
@@ -29,9 +78,22 @@ func (ig Ignore) Match(rel string) bool {
 		if ig.Dirs[seg] {
 			return true
 		}
+		for _, p := range ig.Prefixes {
+			if strings.HasPrefix(seg, p) {
+				return true
+			}
+		}
 	}
 	for _, suf := range ig.Suffixes {
 		if strings.HasSuffix(rel, suf) {
+			return true
+		}
+	}
+	if ig.git != nil && ig.git.MatchesPath(rel) {
+		return true
+	}
+	if ig.docker != nil {
+		if m, _ := ig.docker.MatchesOrParentMatches(rel); m {
 			return true
 		}
 	}

@@ -63,6 +63,27 @@ func TestIgnoreMatch(t *testing.T) {
 	}
 }
 
+// IgnoreFor layers the project's .gitignore / .dockerignore / .avairyignore (parsed with
+// their real syntax) on top of the built-in baseline.
+func TestIgnoreForReadsProjectFiles(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, ".gitignore", "*.log\n/secret/\n!keep.log\n", 0o644)
+	write(t, dir, ".dockerignore", "tmp\n**/*.tmpcache\n", 0o644)
+	write(t, dir, ".avairyignore", "scratch/\n", 0o644)
+
+	ig := IgnoreFor(dir)
+	for _, p := range []string{"app.log", "secret/key", "tmp/x", "a/b/c.tmpcache", "scratch/notes.md", "obj.o"} {
+		if !ig.Match(p) {
+			t.Errorf("%q should be ignored", p)
+		}
+	}
+	for _, p := range []string{"keep.log", "src/main.go", "README.md"} {
+		if ig.Match(p) {
+			t.Errorf("%q should not be ignored", p)
+		}
+	}
+}
+
 // Round-trip a real directory through the hub: alice's tree syncs up, bob's tree syncs down,
 // with .git excluded, LF-normalized, and the executable bit preserved.
 func TestDirectoryRoundTrip(t *testing.T) {

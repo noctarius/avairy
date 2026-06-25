@@ -82,7 +82,7 @@ func main() {
 		// so remote nodes receive a working copy on their first SyncDown.
 		if *workspaceDir != "" {
 			seed := workspace.NewNodeView("core")
-			if _, err := seed.SyncUp(hub, *workspaceDir, workspace.DefaultIgnore()); err != nil {
+			if _, err := seed.SyncUp(hub, *workspaceDir, workspace.IgnoreFor(*workspaceDir)); err != nil {
 				fmt.Fprintln(os.Stderr, "avairy: seed workspace:", err)
 			}
 			go func() {
@@ -93,7 +93,7 @@ func main() {
 					case <-ctx.Done():
 						return
 					case <-t.C:
-						_, _ = seed.SyncUp(hub, *workspaceDir, workspace.DefaultIgnore())
+						_, _ = seed.SyncUp(hub, *workspaceDir, workspace.IgnoreFor(*workspaceDir))
 						_ = seed.SyncDown(hub, *workspaceDir)
 					}
 				}

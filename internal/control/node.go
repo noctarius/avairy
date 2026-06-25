@@ -70,7 +70,7 @@ func (n *Node) Heartbeat() error {
 func (n *Node) SyncUp(dir string) ([]SyncResult, error) {
 	// Only read/push files that actually changed since last sync (stat-based) — avoids
 	// re-reading and re-uploading the whole tree every tick.
-	changed, stampOf, seen, err := workspace.ScanChanges(dir, n.ignore, n.stamps)
+	changed, stampOf, seen, err := workspace.ScanChanges(dir, workspace.IgnoreFor(dir), n.stamps)
 	if err != nil {
 		return nil, err
 	}

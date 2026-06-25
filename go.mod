@@ -7,6 +7,8 @@ require (
 	charm.land/bubbletea/v2 v2.0.7
 	charm.land/lipgloss/v2 v2.0.4
 	github.com/mark3labs/mcp-go v0.55.1
+	github.com/moby/patternmatcher v0.6.1
+	github.com/sabhiram/go-gitignore v0.0.0-20210923224102-525f6e181f06
 )
 
 require (
