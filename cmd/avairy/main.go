@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
 	"time"
 
@@ -24,6 +25,7 @@ import (
 	"avairy/internal/bus"
 	"avairy/internal/control"
 	"avairy/internal/facilitator"
+	"avairy/internal/gating"
 	"avairy/internal/journal"
 	"avairy/internal/mcp"
 	"avairy/internal/runner"
@@ -39,7 +41,12 @@ func main() {
 	controlAddr := flag.String("control-addr", "", "if set, serve the node control API here (enrollment/sync) and print an enroll token")
 	flag.Parse()
 
-	jrnl := journal.NewMemory()
+	// Durable, append-only journal (DESIGN.md §10) under .avairy/; falls back to memory-only.
+	var jrnl journal.Log = journal.NewMemory()
+	if jf, err := journal.OpenFile(filepath.Join(".avairy", "journal.jsonl")); err == nil {
+		jrnl = jf
+		defer jf.Close()
+	}
 	b := bus.New(jrnl)
 	bd := board.New(jrnl)
 	mcpSrv := mcp.NewServer(b, bd, jrnl)
@@ -131,7 +138,11 @@ func startAlice(ctx context.Context, live bool, family, model, busURL string, b 
 		if cfg.Model == "haiku" { // the claude-flavored default isn't a codex model
 			cfg.Model = ""
 		}
-		ad = codex.New() // approvalPolicy=never auto-runs the bus tools (gating is a later milestone)
+		cx := codex.New()
+		// Real gating: route app-server approvals through the §7 policy (fail-closed; no
+		// interactive approver wired here, so destructive shell/file actions are denied).
+		cx.Approve = codex.ApproverFromDecider(gating.Policy{}.Decide)
+		ad = cx
 	default: // claude
 		ca := claudecode.New()
 		// Pre-approve the avairy bus tools so headless turns don't stall on permission prompts.
