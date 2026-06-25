@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"avairy/internal/agent"
 	"avairy/internal/board"
 	"avairy/internal/bus"
@@ -96,5 +98,24 @@ func TestSystemRecordsFleet(t *testing.T) {
 		Data: map[string]any{"event": "report_status", "status": "blocked"}})
 	if a := m.agents["claude"]; a == nil || a.status != "blocked" {
 		t.Fatalf("report_status should mark claude blocked, got %+v", a)
+	}
+}
+
+// Esc never quits; quitting takes two ctrl+c in succession (any other key disarms).
+func TestQuitRequiresDoubleCtrlC(t *testing.T) {
+	m, _, _ := newTestModel()
+
+	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc}); cmd != nil || m.quitArmed {
+		t.Fatal("esc must be a harmless no-op")
+	}
+	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC}); cmd != nil || !m.quitArmed {
+		t.Fatalf("first ctrl+c should arm without quitting (cmd=%v)", cmd)
+	}
+	if m.Update(tea.KeyMsg{Type: tea.KeyTab}); m.quitArmed {
+		t.Fatal("a different key should disarm the pending quit")
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC}); cmd == nil {
+		t.Fatal("two ctrl+c in succession should return a quit command")
 	}
 }

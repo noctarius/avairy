@@ -75,8 +75,9 @@ type Model struct {
 	agentOrder []string
 	cost       float64
 
-	control *ControlInfo
-	token   string
+	control   *ControlInfo
+	token     string
+	quitArmed bool // first ctrl+c arms; second (in succession) quits
 
 	seen map[uint64]bool
 }
@@ -154,9 +155,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, listen(m.sub)
 
 	case tea.KeyMsg:
+		// Ctrl+C twice in succession quits; the first press just arms (hint shown in the
+		// footer). Any other key disarms. Esc no longer quits.
+		if msg.Type == tea.KeyCtrlC {
+			if m.quitArmed {
+				return m, tea.Quit
+			}
+			m.quitArmed = true
+			return m, nil
+		}
+		m.quitArmed = false
 		switch msg.Type {
-		case tea.KeyCtrlC, tea.KeyEsc:
-			return m, tea.Quit
+		case tea.KeyEsc:
+			return m, nil // ignored — does not quit
 		case tea.KeyTab:
 			m.tab = (m.tab + 1) % numTabs
 			return m, nil
@@ -323,11 +334,15 @@ func (m *Model) View() string {
 
 	b.WriteString(sep(m.width) + "\n")
 	b.WriteString(m.input.View() + "\n")
-	help := "tab: switch view · @<id>: address agent · enter: send · " + newlineKey + ": newline · ctrl+c: quit"
-	if m.control != nil {
-		help += " · ctrl+e: new enroll token"
+	if m.quitArmed {
+		b.WriteString(warnStyle.Render("press ctrl+c again to quit"))
+	} else {
+		help := "tab: switch view · @<id>: address agent · enter: send · " + newlineKey + ": newline · ctrl+c ×2: quit"
+		if m.control != nil {
+			help += " · ctrl+e: new enroll token"
+		}
+		b.WriteString(helpStyle.Render(help))
 	}
-	b.WriteString(helpStyle.Render(help))
 	return b.String()
 }
 
