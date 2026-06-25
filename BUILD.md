@@ -1,5 +1,8 @@
 # Building avairy
 
+> **TL;DR:** `make build` (host) or `make release` (all targets → `dist/`). This doc explains
+> the commands the [Makefile](Makefile) runs, for reference or CI without `make`.
+
 avairy is **pure Go (no CGO)**, so it cross-compiles to every target from any machine with a
 Go 1.26+ toolchain — no C compiler, no per-OS setup. There are two executables:
 
