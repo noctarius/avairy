@@ -21,6 +21,7 @@ import (
 
 	"avairy/internal/adapter/claudecode"
 	"avairy/internal/adapter/codex"
+	"avairy/internal/adapter/copilot"
 	"avairy/internal/agent"
 	"avairy/internal/control"
 	"avairy/internal/gating"
@@ -36,7 +37,7 @@ func main() {
 	ws := flag.String("workspace", "", "workspace directory to sync (optional)")
 	proxy := flag.String("proxy", "127.0.0.1:7800", "local MCP proxy listen address")
 	interval := flag.Duration("interval", 2*time.Second, "sync/heartbeat interval")
-	family := flag.String("family", "", "spawn & drive the agent here: claude | codex (empty = proxy only, run the agent yourself)")
+	family := flag.String("family", "", "spawn & drive the agent here: claude | codex | copilot (empty = proxy only, run the agent yourself)")
 	model := flag.String("model", "", "model for the spawned agent (family default if empty)")
 	role := flag.String("role", "", "system prompt / role for the spawned agent")
 	flag.Parse()
@@ -198,7 +199,9 @@ func buildAdapter(family string) (agent.Adapter, error) {
 		cx := codex.New()
 		cx.Approve = codex.ApproverFromDecider(gating.Policy{}.Decide)
 		return cx, nil
+	case "copilot":
+		return copilot.New(), nil
 	default:
-		return nil, fmt.Errorf("unknown family %q (want claude|codex)", family)
+		return nil, fmt.Errorf("unknown family %q (want claude|codex|copilot)", family)
 	}
 }

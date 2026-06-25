@@ -90,7 +90,7 @@ canonical workspace on core, heartbeats, and serves a local MCP endpoint at
 `http://127.0.0.1:7800/mcp` — the agent only ever sees localhost. (The channel is plain HTTP
 today; TLS is the production flip.)
 
-With **`-family claude`** (or `codex`) the daemon **spawns and drives the agent for you**:
+With **`-family claude`** (or `codex`, `copilot`) the daemon **spawns and drives the agent for you**:
 core registers it on the bus at enrollment, inbound messages are pulled from core and fed to
 the agent, and its activity is shipped back to the core journal/TUI. **Omit `-family`** to run
 proxy-only and launch the agent yourself against `http://127.0.0.1:7800/mcp`. Use `-model` /

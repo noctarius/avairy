@@ -19,6 +19,7 @@ import (
 
 	"avairy/internal/adapter/claudecode"
 	"avairy/internal/adapter/codex"
+	"avairy/internal/adapter/copilot"
 	"avairy/internal/adapter/mock"
 	"avairy/internal/agent"
 	"avairy/internal/board"
@@ -176,6 +177,8 @@ func startAlice(ctx context.Context, live bool, family, model, busURL string, b 
 		// interactive approver wired here, so destructive shell/file actions are denied).
 		cx.Approve = codex.ApproverFromDecider(gating.Policy{}.Decide)
 		ad = cx
+	case "copilot":
+		ad = copilot.New() // ACP; gating via session/request_permission (needs `copilot login`)
 	default: // claude
 		ca := claudecode.New()
 		// Pre-approve the avairy bus tools so headless turns don't stall on permission prompts.

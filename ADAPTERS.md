@@ -71,3 +71,33 @@
 - Confirm Claude PreToolUse hook async/long-timeout behavior for human-speed approvals.
 - ✅ **Codex v2 protocol pinned** (0.142.1, via `codex app-server generate-json-schema`): framing = newline-delimited JSON-RPC; client requests `initialize`, `thread/start`, `turn/start`, `turn/steer`, `turn/interrupt`; notifications `item/completed`, `turn/completed`, `item/agentMessage/delta`, `error`; approvals `item/commandExecution/requestApproval` + `item/fileChange/requestApproval` + `item/permissions/requestApproval` (v2 decision `accept`/`acceptForSession`/`decline`; v1 `execCommandApproval`/`applyPatchApproval` → `approved`/`denied`). `thread/start` returns `{thread:{id}}`; `turn/start` returns `{turn:{id}}`; user input = `[{type:"text",text}]`. **initialize + thread/start handshake verified live** (free, no model turn). MCP via `-c mcp_servers.<name>.url/http_headers`. Implemented in `internal/adapter/codex`.
 - ✅ **Full Codex turn verified live**: a real Codex agent received a bus message and called `post_task` over MCP, creating a task on the board (needed `mcp_servers.<id>.default_tools_approval_mode="approve"` — otherwise `approvalPolicy:never` force-denies MCP tool calls with "user rejected MCP tool call").
+## Copilot — via ACP (generic engine)
+
+GitHub Copilot CLI (`copilot` 1.0.x) speaks **ACP (Agent Client Protocol)** — Zed's open
+JSON-RPC-2.0-over-NDJSON protocol — so it's driven by a *generic* engine
+(`internal/adapter/acp`) that any ACP agent can reuse via a small `Profile`; `copilot.New()`
+is the concrete family. **Verified live end-to-end** (initialize → session/new → session/prompt
+→ session/update text → turn_done; one real `copilot --acp --stdio` turn returned "OK").
+
+- **Invocation:** `copilot --acp --stdio` (also `--port` for TCP). Framing is JSON-RPC 2.0 / NDJSON.
+- **Handshake:** `initialize{protocolVersion:1, clientCapabilities}` → `{protocolVersion,
+  agentCapabilities{loadSession, mcpCapabilities{http:true,sse:true}, promptCapabilities}, authMethods}`.
+  **Requires `copilot login`** — unauthenticated `session/new` stalls.
+- **Drive:** `session/new{cwd, mcpServers}` → `{sessionId}`; `session/prompt{sessionId,
+  prompt:[{type:"text",text}]}` → `{stopReason}` (the turn-done signal; `end_turn|cancelled|
+  max_tokens|max_turn_requests|refusal`). One prompt/turn at a time.
+- **Streaming:** `session/update` notifications: `agent_message_chunk` (text, accumulated &
+  flushed), `agent_thought_chunk` (reasoning), `tool_call` (→ tool_use), `tool_call_update`
+  (status → tool_result), `plan`, `available_commands_update`.
+- **Gating (real):** agent→client `session/request_permission{toolCall{kind}, options[{optionId,
+  kind: allow_once|allow_always|reject_once|reject_always}]}` → we map the §7 `gating.Decider`
+  to an option id (Allow→allow_once, AllowForSession→allow_always, Deny→reject_once). So
+  Copilot is `Enforcement=hooked`, not advisory.
+- **Bus:** `mcpServers` in `session/new` accepts HTTP servers with header lists — the avairy
+  bus joins as `{type:"http", name:"avairy", url, headers:[{name:"X-Avairy-Agent",value:id}]}`.
+- **Interrupt:** `session/cancel` (notification) → in-flight prompt returns `stopReason:cancelled`.
+- **Caveats:** persona/model aren't `session/new` fields (use `--agent`/instructions / the
+  models offered in the `session/new` response); the plain `copilot -p` mode is text-only with
+  no runtime-routed gating — **ACP is the integration surface**, not `-p`.
+- **Bonus:** because the engine is generic, other ACP agents (Gemini, `claude-agent-acp`) are a
+  new `Profile` away — but Claude Code & Codex stay on their richer native adapters.
