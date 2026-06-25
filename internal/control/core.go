@@ -34,6 +34,9 @@ type Core struct {
 	OnEnroll func(nodeID string, caps map[string]string)
 	// InboxDrainer, if set, returns and clears bus messages buffered for an agent.
 	InboxDrainer func(agentID string) []InboxMessage
+	// Approvals routes a node agent's gated actions to the operator (DESIGN.md §7). NewCore
+	// installs a default broker; share one across local agents + the TUI by replacing it.
+	Approvals *Approvals
 
 	mu       sync.Mutex
 	pending  string            // current operator-facing token (hand to the next node)
@@ -45,11 +48,12 @@ type Core struct {
 // NewCore returns a Core backed by hub, journaling lifecycle events to jrnl.
 func NewCore(hub *workspace.Hub, jrnl journal.Log) *Core {
 	return &Core{
-		hub:      hub,
-		jrnl:     jrnl,
-		bound:    make(map[string]string),
-		sessions: make(map[string]string),
-		nodes:    make(map[string]*NodeInfo),
+		hub:       hub,
+		jrnl:      jrnl,
+		Approvals: NewApprovals(0),
+		bound:     make(map[string]string),
+		sessions:  make(map[string]string),
+		nodes:     make(map[string]*NodeInfo),
 	}
 }
 
@@ -93,7 +97,25 @@ func (c *Core) Handler() http.Handler {
 	mux.Handle(PathPull, c.auth(c.handlePull))
 	mux.Handle(PathInbox, c.auth(c.handleInbox))
 	mux.Handle(PathEvents, c.auth(c.handleEvents))
+	mux.Handle(PathApprove, c.auth(c.handleApprove))
 	return mux
+}
+
+// handleApprove blocks until the operator rules on a node agent's gated action (or it times
+// out / the node disconnects → deny). The request surfaces in the operator TUI via the broker.
+func (c *Core) handleApprove(nodeID string, w http.ResponseWriter, r *http.Request) {
+	var req ApprovalRequest
+	if !readJSON(w, r, &req) {
+		return
+	}
+	c.touch(nodeID)
+	if req.AgentID == "" {
+		req.AgentID = nodeID
+	}
+	decision := c.Approvals.Ask(r.Context(), Approval{
+		AgentID: req.AgentID, Kind: req.Kind, Summary: req.Summary, Reason: req.Reason,
+	})
+	writeJSON(w, ApprovalResponse{Decision: decision})
 }
 
 func (c *Core) handleEnroll(w http.ResponseWriter, r *http.Request) {

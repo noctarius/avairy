@@ -16,8 +16,9 @@ import (
 // JSON to stdout. The node configures Claude to invoke this via --settings on spawn.
 //
 // It fails CLOSED: any transport error (gate down, timeout, non-200) yields a deny, because a
-// security gate that cannot be reached must never silently allow. The 55s client timeout sits
-// just under the hook's 60s timeout so we return a deny rather than letting the turn time out.
+// security gate that cannot be reached must never silently allow. The 290s client timeout sits
+// just under the hook's 300s timeout (gated actions may wait on a human) so we return a deny
+// rather than letting the turn time out.
 func runHook(argv []string) {
 	fs := flag.NewFlagSet("hook", flag.ExitOnError)
 	gate := fs.String("gate", "", "node gate endpoint URL")
@@ -28,7 +29,7 @@ func runHook(argv []string) {
 		denyClosed("no gate endpoint configured")
 		return
 	}
-	client := &http.Client{Timeout: 55 * time.Second}
+	client := &http.Client{Timeout: 290 * time.Second}
 	resp, err := client.Post(*gate, "application/json", bytes.NewReader(body))
 	if err != nil {
 		denyClosed(fmt.Sprintf("gate unreachable: %v", err))

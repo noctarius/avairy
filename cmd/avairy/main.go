@@ -59,6 +59,18 @@ func main() {
 	bd := board.New(jrnl)
 	mcpSrv := mcp.NewServer(b, bd, jrnl)
 
+	// Human-in-the-loop gating broker (DESIGN.md §7): gated actions from any agent (local or
+	// via a node) block here until the operator allows/denies them in the TUI. Journaling the
+	// lifecycle both audits it and wakes the TUI to refresh its approvals view. The wait is
+	// bounded (just under the node hook's 300s timeout) and fails closed.
+	approvals := control.NewApprovals(280 * time.Second)
+	approvals.OnRequest = func(a control.Approval) {
+		jrnl.Append(journal.KindSystem, a.AgentID, map[string]any{"event": "approval_requested", "id": a.ID, "kind": a.Kind, "summary": a.Summary})
+	}
+	approvals.OnResolve = func(a control.Approval, decision string) {
+		jrnl.Append(journal.KindSystem, a.AgentID, map[string]any{"event": "approval_resolved", "id": a.ID, "kind": a.Kind, "summary": a.Summary, "decision": decision})
+	}
+
 	// Serve the MCP bus on a loopback port; agents connect here (the daemon will tunnel
 	// this for remote nodes — DESIGN.md §4).
 	ln, err := net.Listen("tcp", *mcpAddr)
@@ -100,6 +112,7 @@ func main() {
 			}()
 		}
 		core := control.NewCore(hub, jrnl)
+		core.Approvals = approvals // one broker feeds both node agents and the operator TUI
 		// When a node enrolls, register its agent on the bus (identity, caps, inbox); deliver
 		// that agent's inbound bus messages back over the control channel.
 		core.OnEnroll = func(nodeID string, caps map[string]string) {
@@ -160,7 +173,7 @@ func main() {
 
 	if runLiveAlice {
 		mcpSrv.RegisterAgent("alice", []string{"backend"}, caps)
-		startLiveAlice(ctx, *family, *model, busURL, b, jrnl)
+		startLiveAlice(ctx, *family, *model, busURL, b, jrnl, approvals)
 	}
 	if runMockAlice {
 		mcpSrv.RegisterAgent("alice", []string{"backend"}, caps)
@@ -183,7 +196,19 @@ func main() {
 		}
 		return ids
 	}
-	if err := tui.Run(tui.Deps{Bus: b, Board: bd, Journal: jrnl, Control: ctrlInfo, Roster: roster}); err != nil {
+	deps := tui.Deps{
+		Bus: b, Board: bd, Journal: jrnl, Control: ctrlInfo, Roster: roster,
+		PendingApprovals: func() []tui.ApprovalItem {
+			ps := approvals.Pending()
+			out := make([]tui.ApprovalItem, 0, len(ps))
+			for _, p := range ps {
+				out = append(out, tui.ApprovalItem{ID: p.ID, AgentID: p.AgentID, Kind: p.Kind, Summary: p.Summary, Reason: p.Reason})
+			}
+			return out
+		},
+		ResolveApproval: func(id, decision string) { approvals.Resolve(id, decision) },
+	}
+	if err := tui.Run(deps); err != nil {
 		fail("tui", err)
 	}
 }
@@ -192,7 +217,7 @@ const aliceRole = "You are 'alice', a backend engineer agent in the avairy multi
 	"Collaborate ONLY through the avairy MCP tools: post_task, claim_task, list_tasks, " +
 	"send_message, read_inbox, report_status. Be terse and do exactly what you are asked, then stop."
 
-func startLiveAlice(ctx context.Context, family, model, busURL string, b *bus.Bus, jrnl journal.Log) {
+func startLiveAlice(ctx context.Context, family, model, busURL string, b *bus.Bus, jrnl journal.Log, approvals *control.Approvals) {
 	ws, err := os.MkdirTemp("", "avairy-alice-")
 	if err != nil {
 		fail("workspace", err)
@@ -217,9 +242,9 @@ func startLiveAlice(ctx context.Context, family, model, busURL string, b *bus.Bu
 			cfg.Model = ""
 		}
 		cx := codex.New()
-		// Real gating: route app-server approvals through the §7 policy (fail-closed; no
-		// interactive approver wired here, so destructive shell/file actions are denied).
-		cx.Approve = codex.ApproverFromDecider(gating.Policy{}.Decide)
+		// Real gating with a human in the loop: app-server approvals route through the §7
+		// policy; gated actions block on the operator's allow/deny in the TUI approvals view.
+		cx.Approve = codex.ApproverFromDecider(localGateDecider(approvals, "alice"))
 		ad = cx
 	case "copilot":
 		ad = copilot.New() // ACP; gating via session/request_permission (needs `copilot login`)
@@ -239,6 +264,22 @@ func startLiveAlice(ctx context.Context, family, model, busURL string, b *bus.Bu
 		fail("start alice", err)
 	}
 	go runner.New(runner.Agent{ID: "alice", Roles: []string{"backend"}}, sess, b, jrnl).Run(ctx)
+}
+
+// localGateDecider gates a local agent's actions via the §7 policy, routing gated ones to the
+// operator (TUI approvals) through the shared broker — the in-process twin of the node's
+// gateDecider. Free actions pass; gated actions block until allowed/denied (timeout → deny).
+func localGateDecider(approvals *control.Approvals, agentID string) gating.Decider {
+	policy := gating.Policy{Approve: func(ctx context.Context, req gating.Request) (gating.Decision, error) {
+		dec := approvals.Ask(ctx, control.Approval{
+			AgentID: agentID, Kind: string(req.Kind), Summary: req.Summary, Reason: req.Reason,
+		})
+		if dec == control.DecisionAllow {
+			return gating.Allow, nil
+		}
+		return gating.Deny, nil
+	}}
+	return policy.Decide
 }
 
 func startMock(ctx context.Context, id string, b *bus.Bus, jrnl journal.Log) {

@@ -2,6 +2,7 @@ package control
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -149,6 +150,18 @@ func (n *Node) PullInbox(agentID string) ([]InboxMessage, error) {
 	return resp.Messages, nil
 }
 
+// RequestApproval routes a gated action to the operator at core and blocks for the verdict.
+// Core holds the request open until the human rules (or it times out), so this call can take
+// a while — the caller's ctx (e.g. the hook's timeout) bounds the wait. Returns the decision
+// string (DecisionAllow | DecisionDeny).
+func (n *Node) RequestApproval(ctx context.Context, req ApprovalRequest) (string, error) {
+	var resp ApprovalResponse
+	if err := n.postCtx(ctx, PathApprove, n.sess(), req, &resp); err != nil {
+		return "", err
+	}
+	return resp.Decision, nil
+}
+
 // PostEvents ships an agent's stream events to the core journal (so they show in the TUI).
 func (n *Node) PostEvents(events []AgentEventReport) error {
 	if len(events) == 0 {
@@ -182,11 +195,15 @@ func (n *Node) sess() string {
 }
 
 func (n *Node) post(path, session string, body, out any) error {
+	return n.postCtx(context.Background(), path, session, body, out)
+}
+
+func (n *Node) postCtx(ctx context.Context, path, session string, body, out any) error {
 	b, err := json.Marshal(body)
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequest(http.MethodPost, n.CoreURL+path, bytes.NewReader(b))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, n.CoreURL+path, bytes.NewReader(b))
 	if err != nil {
 		return err
 	}

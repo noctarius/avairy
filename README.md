@@ -42,7 +42,8 @@ local agents** — you bring them via `avairy-node` or `-live`.)
 
 - Type `@alice <message>` to address an agent; a bare line broadcasts to everyone.
 - **Enter** sends; **Shift+Enter** (Kitty-protocol terminals) / **Option·Alt+Enter** / **Ctrl+J** insert a newline.
-- `tab` cycles **Conversation / Handovers / Tasks**; **Esc** stops running agents; **Ctrl+C twice** quits.
+- `tab` cycles **Conversation / Handovers / Tasks / Approvals**; **Esc** stops running agents; **Ctrl+C twice** quits.
+- On the **Approvals** tab, `↑/↓` (or `j/k`) selects a pending gated action and **`y`** allows / **`n`** denies it; the tab shows a `(N)` badge while any are waiting.
 - The fleet line shows each agent's status and running cost.
 
 **A real Claude agent on the bus:**
@@ -115,7 +116,9 @@ proxy-only and launch the agent yourself against `http://127.0.0.1:7800/mcp`. Us
 - **Facilitator** — watches for stuck agents and nudges (e.g. "the Linux agent is better
   positioned to reproduce this") — it reminds, never commands.
 - **Gating** — risky actions (destructive commands, git pushes, installs) are gated; safe
-  actions run freely.
+  actions run freely. Gated actions block and surface in the operator's **Approvals** tab for
+  allow/deny (Claude via its PreToolUse hook, Codex via app-server approvals); unanswered
+  requests fail closed.
 - **TUI** — fleet/progress, conversation, a handover timeline, the task board, and your
   command line.
 
@@ -124,6 +127,7 @@ proxy-only and launch the agent yourself against `http://127.0.0.1:7800/mcp`. Us
 Working end-to-end: **four agent families** verified live on the bus — Claude Code and Codex
 on native adapters, **Copilot and Grok via a generic ACP engine** (a new ACP agent is just a
 small profile) — plus single-machine and distributed paths, file sync, facilitator, and
-gating. Known follow-ups: Claude PreToolUse
-hook glue (the server is built; wiring a running `claude` to it isn't), conflict auto-merge
-routing, typed state-resume from the journal, fs-watch (currently poll), and channel TLS.
+**human-in-the-loop gating** (Claude PreToolUse hook + Codex app-server approvals → operator
+Approvals tab). Known follow-ups: routing local-Claude gating through the hook too, conflict
+auto-merge routing, typed state-resume from the journal, fs-watch (currently poll), and
+channel TLS.

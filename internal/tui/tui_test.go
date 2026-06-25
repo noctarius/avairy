@@ -35,6 +35,57 @@ func TestApplyAndView(t *testing.T) {
 	}
 }
 
+// The Approvals tab renders pending gated actions, and y/n on a selected row resolves it.
+func TestApprovalsViewAndResolve(t *testing.T) {
+	pending := []ApprovalItem{
+		{ID: "ap1", AgentID: "linbot", Kind: "command", Summary: "git push origin main", Reason: "ship it"},
+		{ID: "ap2", AgentID: "macbot", Kind: "install", Summary: "brew install jq"},
+	}
+	var resolved [2]string // id, decision
+	j := journal.NewMemory()
+	b := bus.New(j)
+	bd := board.New(j)
+	m := NewModel(Deps{
+		Bus: b, Board: bd, Journal: j,
+		PendingApprovals: func() []ApprovalItem { return pending },
+		ResolveApproval: func(id, decision string) {
+			resolved = [2]string{id, decision}
+			// drop the resolved item so the list shrinks like the real broker
+			out := pending[:0]
+			for _, p := range pending {
+				if p.ID != id {
+					out = append(out, p)
+				}
+			}
+			pending = out
+		},
+	})
+	// The pending count badges in the tab bar from any tab (inactive tab → unstyled text).
+	if v := m.render(); !strings.Contains(v, "Approvals (2)") {
+		t.Fatalf("tab bar missing pending badge:\n%s", v)
+	}
+
+	m.tab = tabApprovals
+	v := m.render()
+	for _, want := range []string{"git push origin main", "brew install jq", "linbot"} {
+		if !strings.Contains(v, want) {
+			t.Fatalf("approvals view missing %q:\n%s", want, v)
+		}
+	}
+
+	// Move to the second row and deny it.
+	m.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
+	m.Update(tea.KeyPressMsg{Code: 'n', Text: "n"})
+	if resolved != [2]string{"ap2", "deny"} {
+		t.Fatalf("expected ap2 denied, got %v", resolved)
+	}
+	// Allow the remaining one with 'y'.
+	m.Update(tea.KeyPressMsg{Code: 'y', Text: "y"})
+	if resolved != [2]string{"ap1", "allow"} {
+		t.Fatalf("expected ap1 allowed, got %v", resolved)
+	}
+}
+
 // Dedup: applying the same Seq twice doesn't double-render.
 func TestApplyDedup(t *testing.T) {
 	m, _, _ := newTestModel()

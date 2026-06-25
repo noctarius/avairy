@@ -80,7 +80,7 @@ func main() {
 			os.Exit(1)
 		}
 		mux := http.NewServeMux()
-		mux.Handle("/gate", gating.HookHandler(gateDecider()))
+		mux.Handle("/gate", gating.HookHandler(gateDecider(n, *id)))
 		mux.Handle("/", h) // MCP proxy (serves /mcp)
 		go func() {
 			fmt.Printf("MCP proxy for agent %q at http://%s/mcp → %s (gate at /gate)\n", *id, *proxy, *coreMCP)
@@ -149,7 +149,7 @@ func spawnAgent(ctx context.Context, n *control.Node, family, agentID, role, mod
 	proxyURL := "http://127.0.0.1:" + pport + "/mcp"
 	gateURL := "http://127.0.0.1:" + pport + "/gate"
 
-	ad, err := buildAdapter(family, gateURL)
+	ad, err := buildAdapter(family, gateURL, gateDecider(n, agentID))
 	if err != nil {
 		return err
 	}
@@ -206,7 +206,7 @@ func spawnAgent(ctx context.Context, n *control.Node, family, agentID, role, mod
 	return nil
 }
 
-func buildAdapter(family, gateURL string) (agent.Adapter, error) {
+func buildAdapter(family, gateURL string, dec gating.Decider) (agent.Adapter, error) {
 	switch family {
 	case "claude":
 		ca := claudecode.New()
@@ -222,7 +222,7 @@ func buildAdapter(family, gateURL string) (agent.Adapter, error) {
 		return ca, nil
 	case "codex":
 		cx := codex.New()
-		cx.Approve = codex.ApproverFromDecider(gateDecider())
+		cx.Approve = codex.ApproverFromDecider(dec)
 		return cx, nil
 	case "copilot":
 		return copilot.New(), nil
@@ -233,12 +233,24 @@ func buildAdapter(family, gateURL string) (agent.Adapter, error) {
 	}
 }
 
-// gateDecider is the node's local enforcement decision: gating.Policy with no approver, so
-// gated actions (destructive commands, git mutations, installs — §7) fail closed and free
-// actions pass. Denials are logged so the operator can see the gate working. Routing gated
-// actions to the human at core (TUI approvals) is the next increment; it slots in here.
-func gateDecider() gating.Decider {
-	policy := gating.Policy{}
+// gateDecider is the node's §7 enforcement decision. Free actions pass; gated actions
+// (destructive commands, git mutations, installs) are routed to the human operator at core,
+// which blocks until the operator allows/denies (or it times out → deny). If core is
+// unreachable it fails closed. The verdict is logged so node-side activity is visible.
+func gateDecider(n *control.Node, agentID string) gating.Decider {
+	policy := gating.Policy{Approve: func(ctx context.Context, req gating.Request) (gating.Decision, error) {
+		dec, err := n.RequestApproval(ctx, control.ApprovalRequest{
+			AgentID: agentID, Kind: string(req.Kind), Summary: req.Summary, Reason: req.Reason,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "GATE ask-core failed, denying [%s] %s: %v\n", req.Kind, req.Summary, err)
+			return gating.Deny, nil
+		}
+		if dec == control.DecisionAllow {
+			return gating.Allow, nil
+		}
+		return gating.Deny, nil
+	}}
 	return func(ctx context.Context, req gating.Request) (gating.Decision, error) {
 		d, err := policy.Decide(ctx, req)
 		if err != nil || d == gating.Deny {
@@ -263,7 +275,9 @@ func claudeGateSettings(gateURL string) (string, error) {
 				map[string]any{
 					"matcher": "*",
 					"hooks": []any{
-						map[string]any{"type": "command", "command": command, "timeout": 60},
+						// 300s so a human has time to rule on a gated action in the TUI (broker
+						// waits 280s; the hook shim client 290s — all just under this ceiling).
+						map[string]any{"type": "command", "command": command, "timeout": 300},
 					},
 				},
 			},

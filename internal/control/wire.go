@@ -12,7 +12,22 @@ const (
 	PathPull      = "/sync/pull"
 	PathInbox     = "/inbox/pull"
 	PathEvents    = "/events"
+	PathApprove   = "/approve"
 )
+
+// ApprovalRequest asks core to route a gated action to the human operator (DESIGN.md §7). The
+// node blocks on the response; core holds the request open until the operator rules on it.
+type ApprovalRequest struct {
+	AgentID string `json:"agentId"`
+	Kind    string `json:"kind"`
+	Summary string `json:"summary"`
+	Reason  string `json:"reason,omitempty"`
+}
+
+// ApprovalResponse carries the operator's verdict (DecisionAllow | DecisionDeny).
+type ApprovalResponse struct {
+	Decision string `json:"decision"`
+}
 
 // EnrollRequest is sent by a node to join, authenticated by a one-time enrollment token
 // (SSH bootstrap seeds it, or the operator pastes it for manual/Windows provisioning). A node

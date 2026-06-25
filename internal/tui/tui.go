@@ -26,7 +26,27 @@ type Deps struct {
 	Journal journal.Log
 	Control *ControlInfo    // non-nil when serving the node control API
 	Roster  func() []string // current agent ids, so agents appear before their first message
+
+	// PendingApprovals/ResolveApproval drive the human-in-the-loop gating view (DESIGN.md §7):
+	// agents block on a gated action, the operator allows/denies it here. Nil disables the view.
+	PendingApprovals func() []ApprovalItem
+	ResolveApproval  func(id, decision string)
 }
+
+// ApprovalItem is one pending gated action awaiting the operator's verdict.
+type ApprovalItem struct {
+	ID      string
+	AgentID string
+	Kind    string
+	Summary string
+	Reason  string
+}
+
+// Decision strings passed to Deps.ResolveApproval.
+const (
+	decisionAllow = "allow"
+	decisionDeny  = "deny"
+)
 
 // ControlInfo surfaces node-enrollment details in the TUI (the alt-screen hides stdout, so
 // printing the token wouldn't be visible).
@@ -42,10 +62,11 @@ const (
 	tabConversation = iota
 	tabHandovers
 	tabTasks
+	tabApprovals
 	numTabs
 )
 
-var tabNames = []string{"Conversation", "Handovers", "Tasks"}
+var tabNames = []string{"Conversation", "Handovers", "Tasks", "Approvals"}
 
 // inputHeight is the number of rows the multi-line command input occupies.
 const inputHeight = 3
@@ -78,9 +99,10 @@ type Model struct {
 	agentOrder []string
 	cost       float64
 
-	control   *ControlInfo
-	token     string
-	quitArmed bool // first ctrl+c arms; second (in succession) quits
+	control     *ControlInfo
+	token       string
+	approvalSel int  // selected row in the Approvals view
+	quitArmed   bool // first ctrl+c arms; second (in succession) quits
 
 	seen map[uint64]bool
 }
@@ -182,6 +204,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.quitArmed = false
+		// On the Approvals tab, navigation/verdict keys are consumed here (not typed into the
+		// message input). Global keys (tab, esc, ctrl+*) fall through to the switch below.
+		if m.tab == tabApprovals && m.handleApprovalKey(s) {
+			return m, nil
+		}
 		switch s {
 		case "esc":
 			m.deps.Bus.Interrupt("human", bus.Broadcast()) // stop whatever agents are running
@@ -294,6 +321,50 @@ func (m *Model) selectorLine() string {
 		}
 	}
 	return helpStyle.Render("to ") + strings.Join(parts, " ")
+}
+
+// --- approvals (human-in-the-loop gating) ---
+
+func (m *Model) pendingApprovals() []ApprovalItem {
+	if m.deps.PendingApprovals == nil {
+		return nil
+	}
+	return m.deps.PendingApprovals()
+}
+
+// handleApprovalKey processes a keystroke on the Approvals tab; it reports whether it consumed
+// the key (so it isn't also typed into the message input).
+func (m *Model) handleApprovalKey(s string) bool {
+	pend := m.pendingApprovals()
+	switch s {
+	case "up", "k":
+		if m.approvalSel > 0 {
+			m.approvalSel--
+		}
+		return true
+	case "down", "j":
+		if m.approvalSel < len(pend)-1 {
+			m.approvalSel++
+		}
+		return true
+	case "y", "enter":
+		m.resolveSelected(pend, decisionAllow)
+		return true
+	case "n", "d":
+		m.resolveSelected(pend, decisionDeny)
+		return true
+	}
+	return false
+}
+
+func (m *Model) resolveSelected(pend []ApprovalItem, decision string) {
+	if m.approvalSel < 0 || m.approvalSel >= len(pend) || m.deps.ResolveApproval == nil {
+		return
+	}
+	m.deps.ResolveApproval(pend[m.approvalSel].ID, decision)
+	if m.approvalSel > 0 {
+		m.approvalSel-- // keep selection in range as the list shrinks
+	}
 }
 
 // apply folds a journal record into view state.
@@ -447,6 +518,9 @@ func (m *Model) render() string {
 		b.WriteString(warnStyle.Render("press ctrl+c again to quit"))
 	} else {
 		help := "tab: view · ctrl+t: recipient · enter: send · " + newlineKey + ": newline · esc: stop · ctrl+c ×2: quit"
+		if m.tab == tabApprovals {
+			help = "tab: view · ↑/↓ (j/k): select · y: allow · n: deny · esc: stop · ctrl+c ×2: quit"
+		}
 		if m.control != nil {
 			help += " · ctrl+e: new enroll token"
 		}
@@ -458,6 +532,11 @@ func (m *Model) render() string {
 func (m *Model) tabBar() string {
 	parts := make([]string, numTabs)
 	for i, name := range tabNames {
+		if i == tabApprovals {
+			if n := len(m.pendingApprovals()); n > 0 {
+				name = fmt.Sprintf("%s (%d)", name, n)
+			}
+		}
 		if i == m.tab {
 			parts[i] = activeTab.Render(name)
 		} else {
@@ -493,6 +572,27 @@ func (m *Model) bodyLines() []string {
 			return []string{helpStyle.Render("(no handovers yet)")}
 		}
 		return m.handovers
+	case tabApprovals:
+		pend := m.pendingApprovals()
+		if len(pend) == 0 {
+			return []string{helpStyle.Render("(no pending approvals — gated actions appear here for allow/deny)")}
+		}
+		if m.approvalSel >= len(pend) {
+			m.approvalSel = len(pend) - 1
+		}
+		out := make([]string, 0, len(pend))
+		for i, ap := range pend {
+			marker := "  "
+			if i == m.approvalSel {
+				marker = activeTab.Render("▸ ")
+			}
+			line := fmt.Sprintf("%s%s wants [%s]: %s", marker, ap.AgentID, ap.Kind, ap.Summary)
+			if ap.Reason != "" {
+				line += helpStyle.Render("  — " + ap.Reason)
+			}
+			out = append(out, line)
+		}
+		return out
 	case tabTasks:
 		tasks := m.deps.Board.List()
 		if len(tasks) == 0 {
