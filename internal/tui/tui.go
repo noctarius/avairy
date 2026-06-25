@@ -422,16 +422,21 @@ func (m *Model) render() string {
 	b.WriteString(m.fleetLine() + "\n")
 	b.WriteString(sep(m.width) + "\n")
 
-	body := m.bodyLines()
+	// Flatten entries into visual lines — an agent message can be multi-line, and the row
+	// budget must count actual rows (else a multi-line message overflows and gets clipped).
+	var lines []string
+	for _, e := range m.bodyLines() {
+		lines = append(lines, strings.Split(e, "\n")...)
+	}
 	// Reserve rows: title + tabs + fleet + 2 seps + selector + help (+1 slack) + control + input.
 	avail := max(m.height-8-controlLines-inputHeight, 1)
-	if len(body) > avail {
-		body = body[len(body)-avail:]
+	if len(lines) > avail {
+		lines = lines[len(lines)-avail:]
 	}
-	for _, l := range body {
+	for _, l := range lines {
 		b.WriteString(truncate(l, m.width) + "\n")
 	}
-	for i := len(body); i < avail; i++ {
+	for i := len(lines); i < avail; i++ {
 		b.WriteString("\n")
 	}
 

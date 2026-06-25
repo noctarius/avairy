@@ -178,3 +178,17 @@ func TestRosterPopulatesFleet(t *testing.T) {
 		t.Fatalf("roster agent should start idle, got %q", m.agents["alice"].status)
 	}
 }
+
+// A multi-line agent message renders all its lines (not clipped to the first).
+func TestMultilineAgentMessage(t *testing.T) {
+	m, _, _ := newTestModel()
+	m.height = 40 // plenty of room
+	m.apply(journal.Record{Seq: 1, Kind: journal.KindAgentEvent, Actor: "claude",
+		Data: agent.Event{Type: agent.EventText, Text: "Once approved I'll:\n- step one\n- step two"}})
+	v := m.render()
+	for _, want := range []string{"Once approved I'll:", "step one", "step two"} {
+		if !strings.Contains(v, want) {
+			t.Fatalf("render missing %q:\n%s", want, v)
+		}
+	}
+}
