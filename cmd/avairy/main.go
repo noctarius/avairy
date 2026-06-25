@@ -1,7 +1,9 @@
-// Command avairy runs the single-machine collaboration loop.
+// Command avairy runs the collaboration loop. By default it starts no local agents — bring
+// them via avairy-node, or:
 //
-//	go run ./cmd/avairy                 # interactive TUI, two mock agents (zero credits)
+//	go run ./cmd/avairy -demo           # TUI with mock agents alice+bob (zero credits)
 //	go run ./cmd/avairy -live           # alice is a real Claude Code agent on the MCP bus
+//	go run ./cmd/avairy -live -family grok
 //	go run ./cmd/avairy -live -headless "create a task titled ping"
 //	                                    # one real turn, print the journal, exit (for verification)
 package main
@@ -36,8 +38,9 @@ import (
 )
 
 func main() {
+	demo := flag.Bool("demo", false, "spawn mock agents (alice, bob) for trying the loop / tests — off by default")
 	live := flag.Bool("live", false, "run 'alice' as a real agent on the MCP bus")
-	family := flag.String("family", "claude", "live agent family: claude | codex")
+	family := flag.String("family", "claude", "live agent family: claude | codex | copilot | grok")
 	headless := flag.String("headless", "", "send this message to alice, print the journal, and exit (no TUI)")
 	model := flag.String("model", "haiku", "model for the live agent (kept cheap by default; ignored for codex unless set)")
 	controlAddr := flag.String("control-addr", "", "if set, serve the node control API here (enrollment/sync) and print an enroll token")
@@ -124,13 +127,28 @@ func main() {
 
 	caps := map[string]string{"os": runtime.GOOS}
 
-	// alice: real agent (claude|codex) when -live, else a mock.
-	mcpSrv.RegisterAgent("alice", []string{"backend"}, caps)
-	startAlice(ctx, *live, *family, *model, busURL, b, jrnl)
+	// Local agents are opt-in: none by default (bring agents via avairy-node). -live runs one
+	// real 'alice'; -demo spawns mock alice+bob for the playground/tests; -headless needs an
+	// 'alice' to talk to, so default it to a mock when neither -live nor -demo is set.
+	runLiveAlice := *live
+	runMockAlice := *demo && !*live
+	runMockBob := *demo
+	if *headless != "" && !runLiveAlice && !runMockAlice {
+		runMockAlice = true
+	}
 
-	// bob: always a mock peer, so cross-agent messaging works without extra credits.
-	mcpSrv.RegisterAgent("bob", []string{"backend"}, caps)
-	startMock(ctx, "bob", b, jrnl)
+	if runLiveAlice {
+		mcpSrv.RegisterAgent("alice", []string{"backend"}, caps)
+		startLiveAlice(ctx, *family, *model, busURL, b, jrnl)
+	}
+	if runMockAlice {
+		mcpSrv.RegisterAgent("alice", []string{"backend"}, caps)
+		startMock(ctx, "alice", b, jrnl)
+	}
+	if runMockBob {
+		mcpSrv.RegisterAgent("bob", []string{"backend"}, caps)
+		startMock(ctx, "bob", b, jrnl)
+	}
 
 	if *headless != "" {
 		runHeadless(b, jrnl, *headless)
@@ -145,11 +163,7 @@ const aliceRole = "You are 'alice', a backend engineer agent in the avairy multi
 	"Collaborate ONLY through the avairy MCP tools: post_task, claim_task, list_tasks, " +
 	"send_message, read_inbox, report_status. Be terse and do exactly what you are asked, then stop."
 
-func startAlice(ctx context.Context, live bool, family, model, busURL string, b *bus.Bus, jrnl journal.Log) {
-	if !live {
-		startMock(ctx, "alice", b, jrnl)
-		return
-	}
+func startLiveAlice(ctx context.Context, family, model, busURL string, b *bus.Bus, jrnl journal.Log) {
 	ws, err := os.MkdirTemp("", "avairy-alice-")
 	if err != nil {
 		fail("workspace", err)

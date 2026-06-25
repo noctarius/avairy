@@ -34,10 +34,11 @@ Produces two commands: `avairy` (core + TUI) and `avairy-node` (the node daemon)
 **Mock agents (zero credits)** — the fastest way to see the loop:
 
 ```sh
-go run ./cmd/avairy
+go run ./cmd/avairy -demo
 ```
 
-A TUI opens with two mock agents, `alice` and `bob`.
+A TUI opens with two mock agents, `alice` and `bob`. (Without `-demo`, avairy starts **no
+local agents** — you bring them via `avairy-node` or `-live`.)
 
 - Type `@alice <message>` to address an agent; a bare line broadcasts to everyone.
 - `tab` cycles **Conversation / Handovers / Tasks**.
