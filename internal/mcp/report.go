@@ -8,14 +8,6 @@ import (
 	"avairy/internal/journal"
 )
 
-// blockedReport is the journal payload for a self-declared stuck signal; the coordinator's
-// stuck-detection (DESIGN.md §5) consumes these to decide whether to wake the facilitator.
-type blockedReport struct {
-	Agent  string `json:"agent"`
-	Status string `json:"status"`
-	Detail string `json:"detail"`
-}
-
 func (s *Server) registerReportStatus() {
 	s.mcp.AddTool(mcpgo.NewTool("report_status",
 		mcpgo.WithDescription("Report your status so the facilitator can help if you're stuck."),
@@ -31,10 +23,12 @@ func (s *Server) handleReportStatus(ctx context.Context, req mcpgo.CallToolReque
 	if err != nil {
 		return mcpgo.NewToolResultError("report_status: 'status' is required"), nil
 	}
-	s.jrnl.Append(journal.KindSystem, from, blockedReport{
-		Agent:  from,
-		Status: status,
-		Detail: req.GetString("detail", ""),
+	// Decodable payload so the coordinator's stuck-detection (DESIGN.md §5) can consume it.
+	s.jrnl.Append(journal.KindSystem, from, map[string]any{
+		"event":  "report_status",
+		"agent":  from,
+		"status": status,
+		"detail": req.GetString("detail", ""),
 	})
 	return mcpgo.NewToolResultText("noted"), nil
 }

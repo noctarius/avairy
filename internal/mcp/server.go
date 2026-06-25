@@ -134,3 +134,21 @@ func (s *Server) agent(id string) *registered {
 	defer s.mu.Unlock()
 	return s.agents[id]
 }
+
+// AgentMeta is a registered agent's identity + capabilities (for facilitator matchmaking).
+type AgentMeta struct {
+	ID    string
+	Roles []string
+	Caps  map[string]string
+}
+
+// AgentList returns metadata for all registered agents (the roster).
+func (s *Server) AgentList() []AgentMeta {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]AgentMeta, 0, len(s.agents))
+	for id, reg := range s.agents {
+		out = append(out, AgentMeta{ID: id, Roles: reg.roles, Caps: reg.caps})
+	}
+	return out
+}

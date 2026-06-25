@@ -23,6 +23,7 @@ import (
 	"avairy/internal/board"
 	"avairy/internal/bus"
 	"avairy/internal/control"
+	"avairy/internal/facilitator"
 	"avairy/internal/journal"
 	"avairy/internal/mcp"
 	"avairy/internal/runner"
@@ -66,6 +67,18 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// Facilitator: watch the journal for stuck signals and nudge (DESIGN.md §5).
+	fac := facilitator.New(b, facilitator.RosterFunc(func() []facilitator.Agent {
+		metas := mcpSrv.AgentList()
+		out := make([]facilitator.Agent, 0, len(metas))
+		for _, m := range metas {
+			out = append(out, facilitator.Agent{ID: m.ID, Caps: m.Caps})
+		}
+		return out
+	}), facilitator.RuleNudger{})
+	facSub, _ := jrnl.Subscribe()
+	go fac.Run(ctx, facSub)
 
 	caps := map[string]string{"os": runtime.GOOS}
 
