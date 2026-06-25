@@ -9,6 +9,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"net"
@@ -29,6 +30,13 @@ import (
 )
 
 func main() {
+	// `avairy-node hook -gate <url>` is the PreToolUse hook shim Claude invokes per tool call;
+	// it must run before flag parsing (its args are its own).
+	if len(os.Args) > 1 && os.Args[1] == "hook" {
+		runHook(os.Args[2:])
+		return
+	}
+
 	core := flag.String("core", "", "core control API base URL (required)")
 	coreMCP := flag.String("core-mcp", "", "core MCP bus base URL for the local proxy")
 	token := flag.String("token", "", "one-time enrollment token (required)")
@@ -63,16 +71,20 @@ func main() {
 	}
 	fmt.Printf("enrolled node %q (os=%s) with core %s\n", *id, *osName, *core)
 
-	// Local MCP proxy → core bus, stamping this node's identity (== agent id).
+	// Local HTTP server for agents on this machine: the MCP proxy → core bus (stamping this
+	// node's identity == agent id) plus the /gate endpoint the Claude PreToolUse hook calls.
 	if *coreMCP != "" {
 		h, err := n.MCPProxy(*coreMCP, *id)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "avairy-node: proxy:", err)
 			os.Exit(1)
 		}
+		mux := http.NewServeMux()
+		mux.Handle("/gate", gating.HookHandler(gateDecider()))
+		mux.Handle("/", h) // MCP proxy (serves /mcp)
 		go func() {
-			fmt.Printf("MCP proxy for agent %q at http://%s/mcp → %s\n", *id, *proxy, *coreMCP)
-			if err := http.ListenAndServe(*proxy, h); err != nil {
+			fmt.Printf("MCP proxy for agent %q at http://%s/mcp → %s (gate at /gate)\n", *id, *proxy, *coreMCP)
+			if err := http.ListenAndServe(*proxy, mux); err != nil {
 				fmt.Fprintln(os.Stderr, "avairy-node: proxy server:", err)
 			}
 		}()
@@ -135,8 +147,9 @@ func spawnAgent(ctx context.Context, n *control.Node, family, agentID, role, mod
 		return err
 	}
 	proxyURL := "http://127.0.0.1:" + pport + "/mcp"
+	gateURL := "http://127.0.0.1:" + pport + "/gate"
 
-	ad, err := buildAdapter(family)
+	ad, err := buildAdapter(family, gateURL)
 	if err != nil {
 		return err
 	}
@@ -193,21 +206,23 @@ func spawnAgent(ctx context.Context, n *control.Node, family, agentID, role, mod
 	return nil
 }
 
-func buildAdapter(family string) (agent.Adapter, error) {
+func buildAdapter(family, gateURL string) (agent.Adapter, error) {
 	switch family {
 	case "claude":
 		ca := claudecode.New()
-		// The agent runs headless (-p, stream-json), so there is no interactive
-		// prompt to answer a permission request: restricting to mcp__avairy__* would
-		// leave every Edit/Write/Bash pending forever. Run autonomous for now; risky
-		// actions are meant to be gated by the PreToolUse hook (Enforcement:
-		// EnforcementHooked), which is the next thing to wire in. Until then the agent
-		// is ungated so it can actually do work.
-		ca.ExtraArgs = []string{"--permission-mode", "bypassPermissions"}
+		// The agent runs headless (-p, stream-json) with no interactive prompt, so the
+		// PreToolUse hook must decide every tool call: it returns allow for free actions
+		// (no prompt) and deny for gated ones (DESIGN.md §7). With the hook governing all
+		// tools we don't bypass permissions — the hook *is* the permission system.
+		settings, err := claudeGateSettings(gateURL)
+		if err != nil {
+			return nil, err
+		}
+		ca.ExtraArgs = []string{"--settings", settings}
 		return ca, nil
 	case "codex":
 		cx := codex.New()
-		cx.Approve = codex.ApproverFromDecider(gating.Policy{}.Decide)
+		cx.Approve = codex.ApproverFromDecider(gateDecider())
 		return cx, nil
 	case "copilot":
 		return copilot.New(), nil
@@ -216,4 +231,44 @@ func buildAdapter(family string) (agent.Adapter, error) {
 	default:
 		return nil, fmt.Errorf("unknown family %q (want claude|codex|copilot|grok)", family)
 	}
+}
+
+// gateDecider is the node's local enforcement decision: gating.Policy with no approver, so
+// gated actions (destructive commands, git mutations, installs — §7) fail closed and free
+// actions pass. Denials are logged so the operator can see the gate working. Routing gated
+// actions to the human at core (TUI approvals) is the next increment; it slots in here.
+func gateDecider() gating.Decider {
+	policy := gating.Policy{}
+	return func(ctx context.Context, req gating.Request) (gating.Decision, error) {
+		d, err := policy.Decide(ctx, req)
+		if err != nil || d == gating.Deny {
+			fmt.Fprintf(os.Stderr, "GATE deny [%s] %s\n", req.Kind, req.Summary)
+		}
+		return d, err
+	}
+}
+
+// claudeGateSettings builds the --settings JSON that registers our PreToolUse hook for every
+// tool call. The hook command is this same binary's `hook` subcommand, pointed at the node's
+// local /gate endpoint.
+func claudeGateSettings(gateURL string) (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("locate self for hook: %w", err)
+	}
+	command := fmt.Sprintf("%q hook -gate %q", exe, gateURL)
+	settings := map[string]any{
+		"hooks": map[string]any{
+			"PreToolUse": []any{
+				map[string]any{
+					"matcher": "*",
+					"hooks": []any{
+						map[string]any{"type": "command", "command": command, "timeout": 60},
+					},
+				},
+			},
+		},
+	}
+	b, err := json.Marshal(settings)
+	return string(b), err
 }

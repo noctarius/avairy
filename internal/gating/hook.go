@@ -24,17 +24,19 @@ func HookHandler(decide Decider) http.HandlerFunc {
 			return
 		}
 		d, err := decide(r.Context(), hookToRequest(in))
-		decision := "deny"
-		if err == nil && (d == Allow || d == AllowForSession) {
+		decision, reason := "deny", "blocked by avairy gating policy (DESIGN.md §7)"
+		switch {
+		case err != nil:
+			reason = "gating error: " + err.Error()
+		case d == Allow || d == AllowForSession:
 			decision = "allow"
 		}
+		out := map[string]any{"hookEventName": "PreToolUse", "permissionDecision": decision}
+		if decision == "deny" {
+			out["permissionDecisionReason"] = reason
+		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"hookSpecificOutput": map[string]any{
-				"hookEventName":      "PreToolUse",
-				"permissionDecision": decision,
-			},
-		})
+		_ = json.NewEncoder(w).Encode(map[string]any{"hookSpecificOutput": out})
 	}
 }
 
