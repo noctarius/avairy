@@ -34,12 +34,13 @@ func Broadcast() Addr      { return Addr{ToBroadcast, ""} }
 
 // Message is one routed message.
 type Message struct {
-	ID       string
-	From     string // agent id, "human", or "facilitator"
-	To       Addr
-	Body     string
-	Delivery agent.Delivery
-	Time     time.Time
+	ID        string
+	From      string // agent id, "human", or "facilitator"
+	To        Addr
+	Body      string
+	Delivery  agent.Delivery
+	Interrupt bool // a control signal: cancel the recipient's current turn (not a text message)
+	Time      time.Time
 }
 
 // Bus routes messages and records them to the journal.
@@ -87,18 +88,21 @@ func (b *Bus) Subscribe(agentID string, roles ...string) (<-chan Message, func()
 	return s.ch, cancel
 }
 
-// Publish stamps, journals, and routes a message, returning the stamped message.
+// Publish stamps, journals, and routes a text message, returning the stamped message.
 func (b *Bus) Publish(from string, to Addr, body string, d agent.Delivery) Message {
+	return b.publish(Message{From: from, To: to, Body: body, Delivery: d})
+}
+
+// Interrupt sends a control signal telling the recipient(s) to cancel their current turn.
+func (b *Bus) Interrupt(from string, to Addr) Message {
+	return b.publish(Message{From: from, To: to, Body: "⎋ stop", Delivery: agent.DeliveryInterrupt, Interrupt: true})
+}
+
+func (b *Bus) publish(msg Message) Message {
 	b.mu.Lock()
 	b.seq++
-	msg := Message{
-		ID:       "m" + strconv.FormatUint(b.seq, 10),
-		From:     from,
-		To:       to,
-		Body:     body,
-		Delivery: d,
-		Time:     time.Now(),
-	}
+	msg.ID = "m" + strconv.FormatUint(b.seq, 10)
+	msg.Time = time.Now()
 	targets := make([]*subscriber, 0, len(b.subs))
 	for _, s := range b.subs {
 		if b.matches(s, msg) {
@@ -107,7 +111,7 @@ func (b *Bus) Publish(from string, to Addr, body string, d agent.Delivery) Messa
 	}
 	b.mu.Unlock()
 
-	b.jrnl.Append(journal.KindMessage, from, msg)
+	b.jrnl.Append(journal.KindMessage, msg.From, msg)
 
 	for _, s := range targets {
 		select {

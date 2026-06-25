@@ -182,6 +182,10 @@ func spawnAgent(ctx context.Context, n *control.Node, family, agentID, role, mod
 					continue
 				}
 				for _, m := range msgs {
+					if m.Interrupt {
+						_ = sess.Interrupt(ctx)
+						continue
+					}
 					_ = sess.Send(ctx, m.Body, agent.DeliverySteer)
 				}
 			}

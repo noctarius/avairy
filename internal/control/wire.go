@@ -26,10 +26,11 @@ type EnrollRequest struct {
 
 // InboxMessage is a bus message addressed to a node's agent, delivered over the channel.
 type InboxMessage struct {
-	ID       string `json:"id"`
-	From     string `json:"from"`
-	Body     string `json:"body"`
-	Delivery string `json:"delivery"`
+	ID        string `json:"id"`
+	From      string `json:"from"`
+	Body      string `json:"body"`
+	Delivery  string `json:"delivery"`
+	Interrupt bool   `json:"interrupt,omitempty"` // cancel the agent's current turn
 }
 
 // InboxPullRequest asks core for messages buffered for agentId.

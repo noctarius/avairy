@@ -60,6 +60,10 @@ func (r *Runner) Run(ctx context.Context) {
 			if !ok {
 				return
 			}
+			if msg.Interrupt {
+				_ = r.sess.Interrupt(ctx) // cancel the agent's current turn (no-op if idle)
+				continue
+			}
 			// Deliver to the agent; if interrupt isn't supported, Send errors and we
 			// fall back to steer (queue at the next turn boundary).
 			if err := r.sess.Send(ctx, msg.Body, msg.Delivery); err != nil && msg.Delivery == agent.DeliveryInterrupt {

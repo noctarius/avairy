@@ -167,7 +167,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.quitArmed = false
 		switch msg.Type {
 		case tea.KeyEsc:
-			return m, nil // ignored — does not quit
+			m.deps.Bus.Interrupt("human", bus.Broadcast()) // stop whatever agents are running
+			return m, nil
 		case tea.KeyTab:
 			m.tab = (m.tab + 1) % numTabs
 			return m, nil
@@ -337,7 +338,7 @@ func (m *Model) View() string {
 	if m.quitArmed {
 		b.WriteString(warnStyle.Render("press ctrl+c again to quit"))
 	} else {
-		help := "tab: switch view · @<id>: address agent · enter: send · " + newlineKey + ": newline · ctrl+c ×2: quit"
+		help := "tab: switch view · @<id>: address agent · enter: send · " + newlineKey + ": newline · esc: stop agents · ctrl+c ×2: quit"
 		if m.control != nil {
 			help += " · ctrl+e: new enroll token"
 		}

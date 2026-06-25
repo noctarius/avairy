@@ -106,7 +106,7 @@ func TestQuitRequiresDoubleCtrlC(t *testing.T) {
 	m, _, _ := newTestModel()
 
 	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc}); cmd != nil || m.quitArmed {
-		t.Fatal("esc must be a harmless no-op")
+		t.Fatal("esc does not quit")
 	}
 	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC}); cmd != nil || !m.quitArmed {
 		t.Fatalf("first ctrl+c should arm without quitting (cmd=%v)", cmd)
@@ -117,5 +117,20 @@ func TestQuitRequiresDoubleCtrlC(t *testing.T) {
 	m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC}); cmd == nil {
 		t.Fatal("two ctrl+c in succession should return a quit command")
+	}
+}
+
+// Esc publishes an interrupt control signal on the bus (stop running agents).
+func TestEscSendsInterrupt(t *testing.T) {
+	m, _, j := newTestModel()
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	found := false
+	for _, rec := range j.Records() {
+		if msg, ok := rec.Data.(bus.Message); ok && msg.Interrupt {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("esc should publish an interrupt on the bus")
 	}
 }
