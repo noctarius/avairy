@@ -390,6 +390,10 @@ func mcpConfigArgs(cfg agent.SessionConfig) []string {
 			continue
 		}
 		args = append(args, "-c", fmt.Sprintf("mcp_servers.%s.url=%q", srv.Name, srv.URL))
+		// Auto-approve this server's tools (AppToolApproval::Approve). Without this, MCP tool
+		// calls hit the approval path, which approvalPolicy=never force-denies ("user rejected
+		// MCP tool call"). Real gating is the EnforcementBackend milestone.
+		args = append(args, "-c", fmt.Sprintf("mcp_servers.%s.default_tools_approval_mode=%q", srv.Name, "approve"))
 		for k, v := range srv.Headers {
 			args = append(args, "-c", fmt.Sprintf("mcp_servers.%s.http_headers.%s=%q", srv.Name, k, v))
 		}
