@@ -24,8 +24,14 @@
 ## Claude Code — details
 
 - **Invocation:** `claude -p "<prompt>" --output-format stream-json --verbose`. JSON output mode also exposes `session_id`, `usage`, `cost_data`.
-- **Stream events:** NDJSON; `type: "stream_event"` with `event.type` ∈ `text_delta` (`event.delta.text`), `tool_use` (`event.name`, `event.input`, `event.id`), `tool_result`, `message_stop` (`stop_reason`). Also top-level `type: "system"` (subtype `system/init` lists plugins; `api_retry`).
-  - **Done:** `message_stop` with `stop_reason: end_turn`. `stop_reason: tool_use` ⇒ a tool ran and the turn continues.
+- **Stream events (VERIFIED against 2.1.176 via live smoke test):** NDJSON, one object per line:
+  - `{"type":"system","subtype":"init", session_id, model, tools, mcp_servers, permissionMode, memory_paths, ...}` — session start; capture `session_id`.
+  - `{"type":"rate_limit_event","rate_limit_info":{status, rateLimitType, overageStatus, ...}}`.
+  - `{"type":"assistant","message":{role, content:[{type:"text",text}|{type:"tool_use",id,name,input}], stop_reason, usage}}` — **full message** (content blocks), not deltas.
+  - `{"type":"user","message":{content:[{type:"tool_result",tool_use_id,content}]}}` — tool results.
+  - `{"type":"result","subtype":"success"|"error", is_error, result, stop_reason, total_cost_usd, usage, modelUsage, permission_denials, terminal_reason}` — **TURN DONE** signal + cost.
+  - **Correction:** the docs/SDK describe `stream_event`/`message_stop` deltas — those only appear with `--include-partial-messages`. Default mode emits full `assistant` messages + a final `result`. Use **`type:"result"`** (not `message_stop`) as the done signal.
+  - **Cost note:** loading the operator's global CLAUDE.md/memory/skills inflated a trivial turn to ~$0.20 (17.7k cache-creation tokens, Opus). Worker agents must launch lean (minimal context, explicit `--append-system-prompt` role, cheaper models).
 - **Interrupt / mid-turn:** CLI stream-json is **output-only** in practice — no reliable live input channel; interrupt = SIGTERM then `--resume <id>` with the new prompt. **Claude Agent SDK** exposes a true `interrupt()` and is the path for mid-reasoning injection. Killing a turn hard-kills any in-flight Bash/tool (no graceful drain).
 - **Gating — PreToolUse hook (the mechanism we use):**
   - Configured in `.claude/settings.json` under `hooks.PreToolUse` (matcher by tool, `type: "command"`, `timeout`).
