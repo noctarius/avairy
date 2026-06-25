@@ -127,57 +127,125 @@ func ApplyFile(dir string, f FileState) error {
 	return os.Rename(tmpName, full)
 }
 
-// NodeView tracks a node's per-path known hub version and syncs a real directory to/from
-// the hub. The fs-watch loop that calls SyncUp on change lands with the node daemon (§4).
+// FileStamp cheaply identifies a file revision (size + mtime) so unchanged files can be
+// skipped with a stat instead of a full read — the difference between idle and pegging a CPU.
+type FileStamp struct {
+	Size    int64
+	ModNano int64
+}
+
+// Stamps maps a path to its last-synced stamp.
+type Stamps map[string]FileStamp
+
+// ScanChanges walks dir and returns Changes only for files new or modified since prev (whose
+// stamp it also reports), plus the set of paths seen. Unchanged files are stat-only, not read.
+// prev is not mutated — the caller updates its stamps once a push is accepted.
+func ScanChanges(dir string, ig Ignore, prev Stamps) (changed []Change, stampOf map[string]FileStamp, seen map[string]bool, err error) {
+	seen = make(map[string]bool)
+	stampOf = make(map[string]FileStamp)
+	if _, e := os.Stat(dir); os.IsNotExist(e) {
+		return nil, stampOf, seen, nil
+	}
+	err = filepath.WalkDir(dir, func(p string, d fs.DirEntry, werr error) error {
+		if werr != nil {
+			return werr
+		}
+		rel, rerr := filepath.Rel(dir, p)
+		if rerr != nil {
+			return rerr
+		}
+		rel = filepath.ToSlash(rel)
+		if rel == "." {
+			return nil
+		}
+		if ig.Match(rel) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.IsDir() || !d.Type().IsRegular() {
+			return nil
+		}
+		info, ierr := d.Info()
+		if ierr != nil {
+			return ierr
+		}
+		seen[rel] = true
+		st := FileStamp{Size: info.Size(), ModNano: info.ModTime().UnixNano()}
+		if prev[rel] == st {
+			return nil // unchanged since last sync — skip the read
+		}
+		content, rerr := os.ReadFile(p)
+		if rerr != nil {
+			return rerr
+		}
+		stampOf[rel] = st
+		changed = append(changed, Change{Path: rel, Content: content, Mode: info.Mode().Perm()})
+		return nil
+	})
+	return changed, stampOf, seen, err
+}
+
+// NodeView tracks a node's per-path hub version and content stamp, and syncs a directory
+// to/from the hub. Unchanged files are skipped via their stamp (no re-read, no re-push).
 type NodeView struct {
-	ID   string
-	base map[string]uint64
+	ID     string
+	base   map[string]uint64
+	stamps Stamps
 }
 
 // NewNodeView returns a node view for the given node/agent id.
 func NewNodeView(id string) *NodeView {
-	return &NodeView{ID: id, base: make(map[string]uint64)}
+	return &NodeView{ID: id, base: make(map[string]uint64), stamps: make(Stamps)}
 }
 
-// SyncUp scans dir and pushes every change (and detected deletion) to the hub, returning any
-// conflicts. The node's base advances for each accepted change; conflicted paths are left
-// for reconciliation.
+// SyncUp pushes changed files (and detected deletions) to the hub, returning any conflicts.
 func (nv *NodeView) SyncUp(h *Hub, dir string, ig Ignore) ([]Conflict, error) {
-	changes, err := Scan(dir, ig)
+	changed, stampOf, seen, err := ScanChanges(dir, ig, nv.stamps)
 	if err != nil {
 		return nil, err
 	}
-	seen := make(map[string]bool, len(changes))
 	var conflicts []Conflict
-	push := func(c Change) {
+	for _, c := range changed {
 		c.Base = nv.base[c.Path]
 		res := h.Push(nv.ID, c)
 		switch {
 		case res.Applied:
 			nv.base[c.Path] = res.Version
+			nv.stamps[c.Path] = stampOf[c.Path]
 		case res.Conflict != nil:
 			conflicts = append(conflicts, *res.Conflict)
 		}
 	}
-	for _, c := range changes {
-		seen[c.Path] = true
-		push(c)
-	}
 	for path := range nv.base {
-		if !seen[path] {
-			push(Change{Path: path, Deleted: true})
+		if seen[path] {
+			continue
+		}
+		res := h.Push(nv.ID, Change{Path: path, Deleted: true, Base: nv.base[path]})
+		if res.Applied {
+			nv.base[path] = res.Version
+			delete(nv.stamps, path)
+		} else if res.Conflict != nil {
+			conflicts = append(conflicts, *res.Conflict)
 		}
 	}
 	return conflicts, nil
 }
 
-// SyncDown pulls updates the node hasn't seen and applies them to dir, advancing base.
+// SyncDown pulls updates the node hasn't seen and applies them to dir, advancing base and
+// recording the written file's stamp (so the next SyncUp won't re-read it).
 func (nv *NodeView) SyncDown(h *Hub, dir string) error {
 	for _, f := range h.Pull(nv.base) {
 		if err := ApplyFile(dir, f); err != nil {
 			return err
 		}
 		nv.base[f.Path] = f.Version
+		if f.Deleted {
+			delete(nv.stamps, f.Path)
+		} else if info, e := os.Stat(filepath.Join(dir, filepath.FromSlash(f.Path))); e == nil {
+			nv.stamps[f.Path] = FileStamp{Size: info.Size(), ModNano: info.ModTime().UnixNano()}
+		}
 	}
 	return nil
 }

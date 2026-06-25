@@ -11,6 +11,7 @@
 package workspace
 
 import (
+	"bytes"
 	"io/fs"
 	"sync"
 )
@@ -79,6 +80,11 @@ func (h *Hub) Push(node string, c Change) PushResult {
 	if c.Base != cur.Version {
 		// Hub moved since the node's base → concurrent edit.
 		return PushResult{Conflict: &Conflict{Path: c.Path, Base: c.Base, Hub: cur.clone(), Incoming: c}}
+	}
+	// Idempotent: an unchanged re-push must NOT bump the version (else versions inflate every
+	// sync tick and every node perpetually re-pulls the whole tree).
+	if (c.Deleted && cur.Deleted) || (!c.Deleted && !cur.Deleted && bytes.Equal(cur.Content, c.Content)) {
+		return PushResult{Applied: true, Version: cur.Version}
 	}
 	return PushResult{Applied: true, Version: h.store(node, c, cur.Version+1)}
 }

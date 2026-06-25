@@ -115,3 +115,53 @@ func read(t *testing.T, dir, rel string) string {
 	}
 	return string(b)
 }
+
+// An unchanged re-push must not bump the version (no perpetual re-sync).
+func TestPushIdempotent(t *testing.T) {
+	h := NewHub()
+	r1 := h.Push("a", Change{Path: "f", Content: []byte("x"), Base: 0})
+	r2 := h.Push("a", Change{Path: "f", Content: []byte("x"), Base: r1.Version}) // identical
+	if r2.Version != r1.Version {
+		t.Fatalf("unchanged re-push bumped version %d→%d", r1.Version, r2.Version)
+	}
+	r3 := h.Push("a", Change{Path: "f", Content: []byte("y"), Base: r1.Version}) // changed
+	if r3.Version != r1.Version+1 {
+		t.Fatalf("changed push should bump, got %d", r3.Version)
+	}
+}
+
+// ScanChanges reads a file once, then skips it (stat-only) while unchanged.
+func TestScanChangesSkipsUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "a.go", "x", 0o644)
+	stamps := make(Stamps)
+	changed, stampOf, _, _ := ScanChanges(dir, DefaultIgnore(), stamps)
+	if len(changed) != 1 {
+		t.Fatalf("first scan should see the file, got %d", len(changed))
+	}
+	for p, s := range stampOf {
+		stamps[p] = s // simulate accepted push
+	}
+	if changed, _, _, _ = ScanChanges(dir, DefaultIgnore(), stamps); len(changed) != 0 {
+		t.Fatalf("unchanged file should be skipped, got %d", len(changed))
+	}
+}
+
+// Repeated SyncUp on an unchanged tree doesn't churn hub versions.
+func TestSyncUpStableWhenIdle(t *testing.T) {
+	h := NewHub()
+	dir := t.TempDir()
+	write(t, dir, "a.go", "package a\n", 0o644)
+	nv := NewNodeView("n")
+	if _, err := nv.SyncUp(h, dir, DefaultIgnore()); err != nil {
+		t.Fatal(err)
+	}
+	v1, _ := h.Get("a.go")
+	for i := 0; i < 3; i++ {
+		nv.SyncUp(h, dir, DefaultIgnore())
+	}
+	v2, _ := h.Get("a.go")
+	if v1.Version != v2.Version {
+		t.Fatalf("idle SyncUp churned version %d→%d", v1.Version, v2.Version)
+	}
+}

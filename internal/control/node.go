@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -26,6 +28,7 @@ type Node struct {
 	mu      sync.Mutex
 	session string
 	base    map[string]uint64
+	stamps  workspace.Stamps // last-synced file stamps, to skip unchanged files
 	ignore  workspace.Ignore
 }
 
@@ -36,6 +39,7 @@ func NewNode(coreURL, id string) *Node {
 		HTTP:    http.DefaultClient,
 		ID:      id,
 		base:    make(map[string]uint64),
+		stamps:  make(workspace.Stamps),
 		ignore:  workspace.DefaultIgnore(),
 	}
 }
@@ -64,27 +68,23 @@ func (n *Node) Heartbeat() error {
 // SyncUp scans dir and pushes changes (and deletions) to the hub, advancing local base for
 // accepted paths and returning any conflicts for reconciliation.
 func (n *Node) SyncUp(dir string) ([]SyncResult, error) {
-	changes, err := workspace.Scan(dir, n.ignore)
+	// Only read/push files that actually changed since last sync (stat-based) — avoids
+	// re-reading and re-uploading the whole tree every tick.
+	changed, stampOf, seen, err := workspace.ScanChanges(dir, n.ignore, n.stamps)
 	if err != nil {
 		return nil, err
 	}
-	n.mu.Lock()
-	base := make(map[string]uint64, len(n.base))
-	for k, v := range n.base {
-		base[k] = v
+	wire := make([]SyncChange, 0, len(changed))
+	for _, c := range changed {
+		wire = append(wire, SyncChange{Path: c.Path, Content: c.Content, Mode: uint32(c.Mode), Base: n.base[c.Path]})
 	}
-	n.mu.Unlock()
-
-	seen := make(map[string]bool, len(changes))
-	wire := make([]SyncChange, 0, len(changes))
-	for _, c := range changes {
-		seen[c.Path] = true
-		wire = append(wire, SyncChange{Path: c.Path, Content: c.Content, Mode: uint32(c.Mode), Base: base[c.Path]})
-	}
-	for path, b := range base {
+	for path, b := range n.base {
 		if !seen[path] {
 			wire = append(wire, SyncChange{Path: path, Deleted: true, Base: b})
 		}
+	}
+	if len(wire) == 0 {
+		return nil, nil // nothing changed → no round-trip
 	}
 
 	var resp PushResponse
@@ -92,16 +92,19 @@ func (n *Node) SyncUp(dir string) ([]SyncResult, error) {
 		return nil, err
 	}
 	var conflicts []SyncResult
-	n.mu.Lock()
 	for _, r := range resp.Results {
 		switch {
 		case r.Applied:
 			n.base[r.Path] = r.Version
+			if st, ok := stampOf[r.Path]; ok {
+				n.stamps[r.Path] = st
+			} else {
+				delete(n.stamps, r.Path) // a deletion
+			}
 		case r.Conflict:
 			conflicts = append(conflicts, r)
 		}
 	}
-	n.mu.Unlock()
 	return conflicts, nil
 }
 
@@ -127,6 +130,12 @@ func (n *Node) SyncDown(dir string) error {
 			return err
 		}
 		n.base[f.Path] = f.Version
+		// Record the written file's stamp so the next SyncUp won't re-read/re-push it.
+		if f.Deleted {
+			delete(n.stamps, f.Path)
+		} else if info, e := os.Stat(filepath.Join(dir, filepath.FromSlash(f.Path))); e == nil {
+			n.stamps[f.Path] = workspace.FileStamp{Size: info.Size(), ModNano: info.ModTime().UnixNano()}
+		}
 	}
 	return nil
 }
