@@ -1,0 +1,27 @@
+# Binaries
+/avairy
+/avairy-node
+/bin/
+/dist/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test / coverage
+*.test
+*.out
+coverage.*
+
+# Go workspace
+go.work
+go.work.sum
+
+# OS / editor cruft
+.DS_Store
+*~
+.idea/
+
+# avairy runtime/local state
+/.avairy/
+*.local.yaml

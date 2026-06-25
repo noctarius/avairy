@@ -170,7 +170,7 @@ facilitator, a specific worker, or broadcast — at any time. Two delivery modes
 
 | Mode          | Behavior                                                       | Support                                                                  |
 |---------------|----------------------------------------------------------------|--------------------------------------------------------------------------|
-| **interrupt** | cancel current generation, inject, resume — true mid-reasoning | adapters with `supports_interrupt` (Claude Code stream-json, Codex exec) |
+| **interrupt** | cancel current generation, inject, resume — true mid-reasoning | adapters with `supports_interrupt` (Claude **Agent SDK**, Codex **app-server** — *not* the bare `claude -p` / `codex exec` modes; see ADAPTERS.md) |
 | **steer**     | queue, deliver at next turn/tool boundary                      | any agent                                                                |
 
 The bus carries `delivery: interrupt | steer`; the TUI **shows which will happen before
