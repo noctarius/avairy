@@ -67,10 +67,11 @@ type Capabilities struct {
 // agent is handed a localhost endpoint; the node daemon tunnels it to the core bus.
 type MCPServer struct {
 	Name    string
-	Type    string   // "stdio" | "http"
-	URL     string   // for http
-	Command string   // for stdio
-	Args    []string // for stdio
+	Type    string            // "stdio" | "http"
+	URL     string            // for http
+	Headers map[string]string // for http (e.g. X-Avairy-Agent for bus identity)
+	Command string            // for stdio
+	Args    []string          // for stdio
 }
 
 // SessionConfig configures a new agent session.

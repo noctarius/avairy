@@ -192,14 +192,15 @@ func mcpConfigJSON(servers []agent.MCPServer) string {
 		Args    []string `json:"args,omitempty"`
 	}
 	type httpCfg struct {
-		Type string `json:"type"`
-		URL  string `json:"url"`
+		Type    string            `json:"type"`
+		URL     string            `json:"url"`
+		Headers map[string]string `json:"headers,omitempty"`
 	}
 	out := map[string]map[string]any{"mcpServers": {}}
 	for _, srv := range servers {
 		switch srv.Type {
 		case "http":
-			out["mcpServers"][srv.Name] = httpCfg{Type: "http", URL: srv.URL}
+			out["mcpServers"][srv.Name] = httpCfg{Type: "http", URL: srv.URL, Headers: srv.Headers}
 		default:
 			out["mcpServers"][srv.Name] = stdioCfg{Type: "stdio", Command: srv.Command, Args: srv.Args}
 		}

@@ -82,9 +82,13 @@ func (s *Server) registerTools() {
 // MCP returns the underlying mcp-go server (for tests / extra transports).
 func (s *Server) MCP() *mcpserver.MCPServer { return s.mcp }
 
+// EndpointPath is where the StreamableHTTP MCP endpoint is served.
+const EndpointPath = "/mcp"
+
 // HTTPHandler returns the StreamableHTTP transport, resolving caller identity per request.
 func (s *Server) HTTPHandler() http.Handler {
 	return mcpserver.NewStreamableHTTPServer(s.mcp,
+		mcpserver.WithEndpointPath(EndpointPath),
 		mcpserver.WithHTTPContextFunc(func(ctx context.Context, r *http.Request) context.Context {
 			return context.WithValue(ctx, agentKey, s.resolve(r))
 		}),
