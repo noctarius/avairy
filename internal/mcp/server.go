@@ -110,6 +110,24 @@ func (s *Server) RegisterAgent(id string, roles []string, caps map[string]string
 	s.mu.Unlock()
 }
 
+// DrainInbox non-blockingly returns and clears the bus messages buffered for an agent. Used
+// by the control channel to deliver inbound messages to a remote agent's daemon.
+func (s *Server) DrainInbox(agentID string) []bus.Message {
+	reg := s.agent(agentID)
+	if reg == nil {
+		return nil
+	}
+	var out []bus.Message
+	for {
+		select {
+		case m := <-reg.ch:
+			out = append(out, m)
+		default:
+			return out
+		}
+	}
+}
+
 // drainInbox non-blockingly pulls all currently-buffered messages for reg.
 func drainInbox(reg *registered) []inboxMessage {
 	var out []inboxMessage

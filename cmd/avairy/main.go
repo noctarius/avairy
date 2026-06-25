@@ -69,6 +69,20 @@ func main() {
 	var ctrlInfo *tui.ControlInfo
 	if *controlAddr != "" {
 		core := control.NewCore(workspace.NewHub(), jrnl)
+		// When a node enrolls, register its agent on the bus (identity, caps, inbox); deliver
+		// that agent's inbound bus messages back over the control channel.
+		core.OnEnroll = func(nodeID, agentID string, caps map[string]string) {
+			if agentID != "" {
+				mcpSrv.RegisterAgent(agentID, []string{"backend"}, caps)
+			}
+		}
+		core.InboxDrainer = func(agentID string) []control.InboxMessage {
+			var out []control.InboxMessage
+			for _, m := range mcpSrv.DrainInbox(agentID) {
+				out = append(out, control.InboxMessage{ID: m.ID, From: m.From, Body: m.Body, Delivery: string(m.Delivery)})
+			}
+			return out
+		}
 		go func() {
 			if err := http.ListenAndServe(*controlAddr, core.Handler()); err != nil {
 				fmt.Fprintln(os.Stderr, "control server:", err)

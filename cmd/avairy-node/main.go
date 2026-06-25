@@ -11,6 +11,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -18,7 +19,11 @@ import (
 	"syscall"
 	"time"
 
+	"avairy/internal/adapter/claudecode"
+	"avairy/internal/adapter/codex"
+	"avairy/internal/agent"
 	"avairy/internal/control"
+	"avairy/internal/gating"
 )
 
 func main() {
@@ -31,6 +36,9 @@ func main() {
 	ws := flag.String("workspace", "", "workspace directory to sync (optional)")
 	proxy := flag.String("proxy", "127.0.0.1:7800", "local MCP proxy listen address")
 	interval := flag.Duration("interval", 2*time.Second, "sync/heartbeat interval")
+	family := flag.String("family", "", "spawn & drive the agent here: claude | codex (empty = proxy only, run the agent yourself)")
+	model := flag.String("model", "", "model for the spawned agent (family default if empty)")
+	role := flag.String("role", "", "system prompt / role for the spawned agent")
 	flag.Parse()
 
 	if *core == "" || *token == "" || *id == "" {
@@ -48,7 +56,7 @@ func main() {
 	}
 
 	n := control.NewNode(*core, *id)
-	if err := n.Enroll(*token, *osName, map[string]string{"os": *osName}); err != nil {
+	if err := n.Enroll(*token, *agentID, *osName, map[string]string{"os": *osName}); err != nil {
 		fmt.Fprintln(os.Stderr, "avairy-node: enroll:", err)
 		os.Exit(1)
 	}
@@ -71,6 +79,18 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Optionally spawn & drive the agent on this node, wired to the local MCP proxy.
+	if *family != "" {
+		if *coreMCP == "" || *agentID == "" {
+			fmt.Fprintln(os.Stderr, "avairy-node: -family requires -core-mcp and -agent")
+			os.Exit(2)
+		}
+		if err := spawnAgent(ctx, n, *family, *agentID, *role, *model, *ws, *proxy); err != nil {
+			fmt.Fprintln(os.Stderr, "avairy-node: spawn agent:", err)
+			os.Exit(1)
+		}
+	}
 
 	ticker := time.NewTicker(*interval)
 	defer ticker.Stop()
@@ -97,5 +117,88 @@ func main() {
 				fmt.Fprintln(os.Stderr, "syncDown:", err)
 			}
 		}
+	}
+}
+
+const defaultRole = "You are an avairy agent. Collaborate ONLY through the avairy MCP tools " +
+	"(send_message, read_inbox, post_task, claim_task, list_tasks, report_status). Be terse."
+
+// spawnAgent starts an agent on this node wired to the local MCP proxy, ships its events to
+// the core journal, and injects inbound bus messages (pulled from core) into its session.
+func spawnAgent(ctx context.Context, n *control.Node, family, agentID, role, model, ws, proxy string) error {
+	if role == "" {
+		role = defaultRole
+	}
+	_, pport, err := net.SplitHostPort(proxy)
+	if err != nil {
+		return err
+	}
+	proxyURL := "http://127.0.0.1:" + pport + "/mcp"
+
+	ad, err := buildAdapter(family)
+	if err != nil {
+		return err
+	}
+	sess, err := ad.Start(ctx, agent.SessionConfig{
+		AgentID:   agentID,
+		Role:      role,
+		Workspace: ws,
+		Model:     model,
+		MCP:       []agent.MCPServer{{Name: "avairy", Type: "http", URL: proxyURL}},
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Printf("spawned %s agent %q → bus via %s\n", family, agentID, proxyURL)
+
+	// Ship the agent's events to the core journal (so they appear in the operator TUI).
+	go func() {
+		for ev := range sess.Events() {
+			r := control.AgentEventReport{AgentID: agentID, Type: string(ev.Type), Text: ev.Text}
+			if ev.Tool != nil {
+				r.Tool = ev.Tool.Name
+			}
+			if ev.Usage != nil {
+				r.CostUSD = ev.Usage.CostUSD
+			}
+			_ = n.PostEvents([]control.AgentEventReport{r})
+		}
+	}()
+
+	// Pull inbound bus messages from core and inject them into the agent (the node-side runner).
+	go func() {
+		t := time.NewTicker(time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				_ = sess.Close()
+				return
+			case <-t.C:
+				msgs, err := n.PullInbox(agentID)
+				if err != nil {
+					continue
+				}
+				for _, m := range msgs {
+					_ = sess.Send(ctx, m.Body, agent.DeliverySteer)
+				}
+			}
+		}
+	}()
+	return nil
+}
+
+func buildAdapter(family string) (agent.Adapter, error) {
+	switch family {
+	case "claude":
+		ca := claudecode.New()
+		ca.ExtraArgs = []string{"--allowedTools", "mcp__avairy__post_task,mcp__avairy__claim_task,mcp__avairy__list_tasks,mcp__avairy__send_message,mcp__avairy__read_inbox,mcp__avairy__report_status"}
+		return ca, nil
+	case "codex":
+		cx := codex.New()
+		cx.Approve = codex.ApproverFromDecider(gating.Policy{}.Decide)
+		return cx, nil
+	default:
+		return nil, fmt.Errorf("unknown family %q (want claude|codex)", family)
 	}
 }

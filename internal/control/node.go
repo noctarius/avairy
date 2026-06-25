@@ -40,10 +40,11 @@ func NewNode(coreURL, id string) *Node {
 	}
 }
 
-// Enroll joins the core using a one-time token and stores the session token.
-func (n *Node) Enroll(token, os string, caps map[string]string) error {
+// Enroll joins the core using a one-time token and stores the session token. agentID is the
+// agent this node hosts (registered on the bus by core); pass "" for a proxy-only node.
+func (n *Node) Enroll(token, agentID, os string, caps map[string]string) error {
 	var resp EnrollResponse
-	if err := n.post(PathEnroll, "", EnrollRequest{Token: token, NodeID: n.ID, OS: os, Caps: caps}, &resp); err != nil {
+	if err := n.post(PathEnroll, "", EnrollRequest{Token: token, NodeID: n.ID, AgentID: agentID, OS: os, Caps: caps}, &resp); err != nil {
 		return err
 	}
 	if resp.SessionToken == "" {
@@ -128,6 +129,23 @@ func (n *Node) SyncDown(dir string) error {
 		n.base[f.Path] = f.Version
 	}
 	return nil
+}
+
+// PullInbox fetches and clears bus messages buffered at core for agentID.
+func (n *Node) PullInbox(agentID string) ([]InboxMessage, error) {
+	var resp InboxPullResponse
+	if err := n.post(PathInbox, n.sess(), InboxPullRequest{AgentID: agentID}, &resp); err != nil {
+		return nil, err
+	}
+	return resp.Messages, nil
+}
+
+// PostEvents ships an agent's stream events to the core journal (so they show in the TUI).
+func (n *Node) PostEvents(events []AgentEventReport) error {
+	if len(events) == 0 {
+		return nil
+	}
+	return n.post(PathEvents, n.sess(), EventsRequest{Events: events}, nil)
 }
 
 // MCPProxy returns a handler that reverse-proxies the local MCP endpoint to the core bus,

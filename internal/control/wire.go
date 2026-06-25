@@ -10,15 +10,51 @@ const (
 	PathHeartbeat = "/heartbeat"
 	PathPush      = "/sync/push"
 	PathPull      = "/sync/pull"
+	PathInbox     = "/inbox/pull"
+	PathEvents    = "/events"
 )
 
 // EnrollRequest is sent by a node to join, authenticated by a one-time enrollment token
 // (SSH bootstrap seeds it, or the operator pastes it for manual/Windows provisioning).
 type EnrollRequest struct {
-	Token  string            `json:"token"`
-	NodeID string            `json:"nodeId"`
-	OS     string            `json:"os"`
-	Caps   map[string]string `json:"caps"`
+	Token   string            `json:"token"`
+	NodeID  string            `json:"nodeId"`
+	AgentID string            `json:"agentId"` // the agent this node hosts (registered on the bus)
+	OS      string            `json:"os"`
+	Caps    map[string]string `json:"caps"`
+}
+
+// InboxMessage is a bus message addressed to a node's agent, delivered over the channel.
+type InboxMessage struct {
+	ID       string `json:"id"`
+	From     string `json:"from"`
+	Body     string `json:"body"`
+	Delivery string `json:"delivery"`
+}
+
+// InboxPullRequest asks core for messages buffered for agentId.
+type InboxPullRequest struct {
+	AgentID string `json:"agentId"`
+}
+
+// InboxPullResponse returns the drained messages.
+type InboxPullResponse struct {
+	Messages []InboxMessage `json:"messages"`
+}
+
+// AgentEventReport is a normalized agent stream event shipped to the core journal so a
+// remote agent's activity shows in the operator TUI.
+type AgentEventReport struct {
+	AgentID string  `json:"agentId"`
+	Type    string  `json:"type"`
+	Text    string  `json:"text,omitempty"`
+	Tool    string  `json:"tool,omitempty"`
+	CostUSD float64 `json:"costUsd,omitempty"`
+}
+
+// EventsRequest carries a batch of agent events.
+type EventsRequest struct {
+	Events []AgentEventReport `json:"events"`
 }
 
 // EnrollResponse returns a per-node session token used for all subsequent calls.

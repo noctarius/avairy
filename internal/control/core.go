@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"avairy/internal/agent"
 	"avairy/internal/journal"
 	"avairy/internal/workspace"
 )
@@ -17,6 +18,7 @@ import (
 // NodeInfo is the core's record of an enrolled node.
 type NodeInfo struct {
 	ID       string
+	AgentID  string
 	OS       string
 	Caps     map[string]string
 	LastSeen time.Time
@@ -27,6 +29,11 @@ type NodeInfo struct {
 type Core struct {
 	hub  *workspace.Hub
 	jrnl journal.Log
+
+	// OnEnroll, if set, runs when a node enrolls — used to register its agent on the bus.
+	OnEnroll func(nodeID, agentID string, caps map[string]string)
+	// InboxDrainer, if set, returns and clears bus messages buffered for an agent.
+	InboxDrainer func(agentID string) []InboxMessage
 
 	mu           sync.Mutex
 	enrollTokens map[string]bool   // valid one-time enrollment tokens
@@ -72,6 +79,8 @@ func (c *Core) Handler() http.Handler {
 	mux.Handle(PathHeartbeat, c.auth(c.handleHeartbeat))
 	mux.Handle(PathPush, c.auth(c.handlePush))
 	mux.Handle(PathPull, c.auth(c.handlePull))
+	mux.Handle(PathInbox, c.auth(c.handleInbox))
+	mux.Handle(PathEvents, c.auth(c.handleEvents))
 	return mux
 }
 
@@ -94,11 +103,46 @@ func (c *Core) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	session := randToken()
 	c.mu.Lock()
 	c.sessions[session] = req.NodeID
-	c.nodes[req.NodeID] = &NodeInfo{ID: req.NodeID, OS: req.OS, Caps: req.Caps, LastSeen: time.Now()}
+	c.nodes[req.NodeID] = &NodeInfo{ID: req.NodeID, AgentID: req.AgentID, OS: req.OS, Caps: req.Caps, LastSeen: time.Now()}
 	c.mu.Unlock()
 
 	c.jrnl.Append(journal.KindSystem, req.NodeID, map[string]any{"event": "node_enrolled", "os": req.OS, "caps": req.Caps})
+	if c.OnEnroll != nil {
+		c.OnEnroll(req.NodeID, req.AgentID, req.Caps)
+	}
 	writeJSON(w, EnrollResponse{SessionToken: session})
+}
+
+func (c *Core) handleInbox(nodeID string, w http.ResponseWriter, r *http.Request) {
+	var req InboxPullRequest
+	if !readJSON(w, r, &req) {
+		return
+	}
+	c.touch(nodeID)
+	var msgs []InboxMessage
+	if c.InboxDrainer != nil {
+		msgs = c.InboxDrainer(req.AgentID)
+	}
+	writeJSON(w, InboxPullResponse{Messages: msgs})
+}
+
+func (c *Core) handleEvents(nodeID string, w http.ResponseWriter, r *http.Request) {
+	var req EventsRequest
+	if !readJSON(w, r, &req) {
+		return
+	}
+	c.touch(nodeID)
+	for _, e := range req.Events {
+		ev := agent.Event{Type: agent.EventType(e.Type), Text: e.Text}
+		if e.Tool != "" {
+			ev.Tool = &agent.ToolCall{Name: e.Tool}
+		}
+		if e.CostUSD != 0 {
+			ev.Usage = &agent.Usage{CostUSD: e.CostUSD}
+		}
+		c.jrnl.Append(journal.KindAgentEvent, e.AgentID, ev)
+	}
+	writeJSON(w, map[string]bool{"ok": true})
 }
 
 func (c *Core) handleHeartbeat(nodeID string, w http.ResponseWriter, r *http.Request) {

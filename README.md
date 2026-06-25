@@ -75,19 +75,26 @@ On each **remote machine/VM**, run the daemon (a single cross-platform binary):
 
 ```sh
 avairy-node \
-  -core    http://<operator>:7700 \      # control URL
-  -core-mcp http://<operator>:<busport> \ # MCP bus base
+  -core    http://<operator>:7700 \       # control URL
+  -core-mcp http://<operator>:<busport> \  # MCP bus base
   -token   <enroll-token> \
   -id      linux-box \
   -agent   alice \
   -workspace ./repo \
-  -proxy   127.0.0.1:7800
+  -proxy   127.0.0.1:7800 \
+  -family  claude                          # optional: spawn & drive the agent here
 ```
 
 The daemon enrolls (node→core, NAT-friendly), continuously syncs `./repo` to/from the
 canonical workspace on core, heartbeats, and serves a local MCP endpoint at
-`http://127.0.0.1:7800/mcp` that agents on this machine point at — the agent only ever sees
-localhost. (The channel is plain HTTP today; TLS is the production flip.)
+`http://127.0.0.1:7800/mcp` — the agent only ever sees localhost. (The channel is plain HTTP
+today; TLS is the production flip.)
+
+With **`-family claude`** (or `codex`) the daemon **spawns and drives the agent for you**:
+core registers it on the bus at enrollment, inbound messages are pulled from core and fed to
+the agent, and its activity is shipped back to the core journal/TUI. **Omit `-family`** to run
+proxy-only and launch the agent yourself against `http://127.0.0.1:7800/mcp`. Use `-model` /
+`-role` to tune the spawned agent.
 
 ## What's inside
 

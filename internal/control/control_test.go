@@ -41,7 +41,7 @@ func TestEnrollAndSyncAcrossNodes(t *testing.T) {
 	writeFile(t, dirA, "src/app.go", "package app\n")
 
 	nodeA := NewNode(srv.URL, "linux-box")
-	if err := nodeA.Enroll(tok, "linux", map[string]string{"os": "linux"}); err != nil {
+	if err := nodeA.Enroll(tok, "", "linux", map[string]string{"os": "linux"}); err != nil {
 		t.Fatalf("enroll A: %v", err)
 	}
 	if conflicts, err := nodeA.SyncUp(dirA); err != nil || len(conflicts) != 0 {
@@ -49,7 +49,7 @@ func TestEnrollAndSyncAcrossNodes(t *testing.T) {
 	}
 
 	nodeB := NewNode(srv.URL, "mac-box")
-	if err := nodeB.Enroll(core.IssueEnrollToken(), "darwin", map[string]string{"os": "darwin"}); err != nil {
+	if err := nodeB.Enroll(core.IssueEnrollToken(), "", "darwin", map[string]string{"os": "darwin"}); err != nil {
 		t.Fatalf("enroll B: %v", err)
 	}
 	if err := nodeB.SyncDown(dirB); err != nil {
@@ -69,7 +69,7 @@ func TestEnrollAndSyncAcrossNodes(t *testing.T) {
 func TestInvalidEnrollTokenRejected(t *testing.T) {
 	_, srv := newCoreServer(t)
 	n := NewNode(srv.URL, "rogue")
-	if err := n.Enroll("not-a-real-token", "linux", nil); err == nil {
+	if err := n.Enroll("not-a-real-token", "", "linux", nil); err == nil {
 		t.Fatal("expected enrollment to fail with a bad token")
 	}
 }
@@ -77,10 +77,10 @@ func TestInvalidEnrollTokenRejected(t *testing.T) {
 func TestEnrollTokenIsSingleUse(t *testing.T) {
 	core, srv := newCoreServer(t)
 	tok := core.IssueEnrollToken()
-	if err := NewNode(srv.URL, "first").Enroll(tok, "linux", nil); err != nil {
+	if err := NewNode(srv.URL, "first").Enroll(tok, "", "linux", nil); err != nil {
 		t.Fatalf("first enroll: %v", err)
 	}
-	if err := NewNode(srv.URL, "second").Enroll(tok, "linux", nil); err == nil {
+	if err := NewNode(srv.URL, "second").Enroll(tok, "", "linux", nil); err == nil {
 		t.Fatal("reused enrollment token should be rejected")
 	}
 }
@@ -93,11 +93,11 @@ func TestConflictOverWire(t *testing.T) {
 	writeFile(t, dirB, "f.go", "B")
 
 	nodeA := NewNode(srv.URL, "a")
-	nodeA.Enroll(core.IssueEnrollToken(), "linux", nil)
+	nodeA.Enroll(core.IssueEnrollToken(), "", "linux", nil)
 	nodeA.SyncUp(dirA) // f.go -> v1
 
 	nodeB := NewNode(srv.URL, "b") // fresh base, never pulled v1
-	nodeB.Enroll(core.IssueEnrollToken(), "linux", nil)
+	nodeB.Enroll(core.IssueEnrollToken(), "", "linux", nil)
 	conflicts, err := nodeB.SyncUp(dirB)
 	if err != nil {
 		t.Fatal(err)
@@ -128,5 +128,48 @@ func TestMCPProxyInjectsIdentity(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	if string(body) != "alice" {
 		t.Fatalf("proxy did not inject identity, backend saw %q", body)
+	}
+}
+
+// Enrolling with an agent id fires OnEnroll; inbound messages and event reports flow over
+// the channel.
+func TestEnrollHookInboxAndEvents(t *testing.T) {
+	j := journal.NewMemory()
+	c := NewCore(workspace.NewHub(), j)
+	var enrolledAgent string
+	c.OnEnroll = func(nodeID, agentID string, caps map[string]string) { enrolledAgent = agentID }
+	c.InboxDrainer = func(agentID string) []InboxMessage {
+		if agentID == "claude" {
+			return []InboxMessage{{ID: "m1", From: "human", Body: "reproduce it", Delivery: "steer"}}
+		}
+		return nil
+	}
+	srv := httptest.NewServer(c.Handler())
+	t.Cleanup(srv.Close)
+
+	n := NewNode(srv.URL, "macos")
+	if err := n.Enroll(c.IssueEnrollToken(), "claude", "darwin", map[string]string{"os": "darwin"}); err != nil {
+		t.Fatal(err)
+	}
+	if enrolledAgent != "claude" {
+		t.Fatalf("OnEnroll agent = %q", enrolledAgent)
+	}
+
+	msgs, err := n.PullInbox("claude")
+	if err != nil || len(msgs) != 1 || msgs[0].Body != "reproduce it" {
+		t.Fatalf("inbox pull: err=%v msgs=%+v", err, msgs)
+	}
+
+	if err := n.PostEvents([]AgentEventReport{{AgentID: "claude", Type: "text", Text: "on it"}}); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, rec := range j.Records() {
+		if rec.Kind == journal.KindAgentEvent && rec.Actor == "claude" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("agent event was not journaled at core")
 	}
 }
