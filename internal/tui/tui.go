@@ -240,8 +240,20 @@ func (m *Model) apply(rec journal.Record) {
 			m.handovers = append(m.handovers, fmt.Sprintf("%s claimed %s — %q", t.Claimant, t.ID, t.Title))
 		}
 	case journal.KindSystem:
-		if a := m.touchAgent(rec.Actor); a != nil {
-			a.status = "blocked"
+		// Only agent self-reports (report_status) affect the fleet. Node-lifecycle records
+		// (node_enrolled, sync_conflict, …) carry a node id as actor — not an agent — so they
+		// must not create a phantom fleet entry.
+		if d, ok := rec.Data.(map[string]any); ok && d["event"] == "report_status" {
+			if a := m.touchAgent(rec.Actor); a != nil {
+				switch s, _ := d["status"].(string); s {
+				case "blocked", "low_confidence":
+					a.status = "blocked"
+				case "done":
+					a.status = "idle"
+				default:
+					a.status = "working"
+				}
+			}
 		}
 	}
 }

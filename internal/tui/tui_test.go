@@ -82,3 +82,19 @@ func TestSubmitBroadcast(t *testing.T) {
 		t.Fatal("expected a broadcast human message on the bus")
 	}
 }
+
+// Node-lifecycle system records must not appear as agents in the fleet; only agent
+// report_status does.
+func TestSystemRecordsFleet(t *testing.T) {
+	m, _, _ := newTestModel()
+	m.apply(journal.Record{Seq: 1, Kind: journal.KindSystem, Actor: "claude-macos",
+		Data: map[string]any{"event": "node_enrolled", "os": "darwin"}})
+	if len(m.agentOrder) != 0 {
+		t.Fatalf("node_enrolled must not create a fleet agent, got %v", m.agentOrder)
+	}
+	m.apply(journal.Record{Seq: 2, Kind: journal.KindSystem, Actor: "claude",
+		Data: map[string]any{"event": "report_status", "status": "blocked"}})
+	if a := m.agents["claude"]; a == nil || a.status != "blocked" {
+		t.Fatalf("report_status should mark claude blocked, got %+v", a)
+	}
+}
