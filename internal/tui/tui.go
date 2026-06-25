@@ -5,6 +5,7 @@ package tui
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textarea"
@@ -45,6 +46,14 @@ var tabNames = []string{"Conversation", "Handovers", "Tasks"}
 
 // inputHeight is the number of rows the multi-line command input occupies.
 const inputHeight = 3
+
+// newlineKey is the modifier+Enter combo labeled for the host OS (Option on macOS, Alt elsewhere).
+var newlineKey = func() string {
+	if runtime.GOOS == "darwin" {
+		return "option+enter"
+	}
+	return "alt+enter"
+}()
 
 type agentState struct {
 	id     string
@@ -91,7 +100,7 @@ var (
 // NewModel builds the model, backfilling existing journal records and subscribing to new ones.
 func NewModel(deps Deps) *Model {
 	ta := textarea.New()
-	ta.Placeholder = "message… (@<id> to address an agent; alt+enter for a newline)"
+	ta.Placeholder = "message… (@<id> to address an agent; " + newlineKey + " for a newline)"
 	ta.Prompt = "▎ "
 	ta.ShowLineNumbers = false
 	ta.CharLimit = 0 // no limit (paste long, multi-line prompts)
@@ -302,7 +311,7 @@ func (m *Model) View() string {
 
 	b.WriteString(sep(m.width) + "\n")
 	b.WriteString(m.input.View() + "\n")
-	help := "tab: switch view · @<id>: address agent · enter: send · alt+enter: newline · ctrl+c: quit"
+	help := "tab: switch view · @<id>: address agent · enter: send · " + newlineKey + ": newline · ctrl+c: quit"
 	if m.control != nil {
 		help += " · ctrl+e: new enroll token"
 	}
