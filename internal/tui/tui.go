@@ -8,9 +8,9 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/textarea"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/textarea"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"avairy/internal/agent"
 	"avairy/internal/board"
@@ -155,10 +155,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.apply(journal.Record(msg))
 		return m, listen(m.sub)
 
-	case tea.KeyMsg:
-		// Ctrl+C twice in succession quits; the first press just arms (hint shown in the
-		// footer). Any other key disarms. Esc no longer quits.
-		if msg.Type == tea.KeyCtrlC {
+	case tea.KeyPressMsg:
+		// Ctrl+C twice in succession quits; the first press just arms (hint in the footer).
+		// Any other key disarms. Esc stops running agents; it no longer quits.
+		s := msg.String()
+		if s == "ctrl+c" {
 			if m.quitArmed {
 				return m, tea.Quit
 			}
@@ -166,26 +167,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.quitArmed = false
-		switch msg.Type {
-		case tea.KeyEsc:
+		switch s {
+		case "esc":
 			m.deps.Bus.Interrupt("human", bus.Broadcast()) // stop whatever agents are running
 			return m, nil
-		case tea.KeyTab:
+		case "tab":
 			m.tab = (m.tab + 1) % numTabs
 			return m, nil
-		case tea.KeyCtrlE:
+		case "ctrl+e":
 			if m.control != nil && m.control.NewToken != nil {
 				m.token = m.control.NewToken()
 			}
 			return m, nil
-		case tea.KeyCtrlJ:
-			m.input.InsertRune('\n') // newline fallback for any terminal
+		case "shift+enter", "alt+enter", "ctrl+j": // newline (shift+enter needs a Kitty-protocol terminal)
+			m.input.InsertRune('\n')
 			return m, nil
-		case tea.KeyEnter:
-			if msg.Alt { // alt/option+enter → newline (Shift+Enter isn't distinguishable here)
-				m.input.InsertRune('\n')
-				return m, nil
-			}
+		case "enter":
 			m.submit()
 			m.input.Reset()
 			return m, nil
@@ -309,7 +306,16 @@ func addrStr(a bus.Addr) string {
 	}
 }
 
-func (m *Model) View() string {
+func (m *Model) View() tea.View {
+	v := tea.NewView(m.render())
+	v.AltScreen = true
+	// Request enhanced keyboard reporting (Kitty protocol) so shift+enter is distinguishable
+	// where the terminal supports it.
+	v.KeyboardEnhancements = tea.KeyboardEnhancements{ReportAlternateKeys: true}
+	return v
+}
+
+func (m *Model) render() string {
 	var b strings.Builder
 
 	b.WriteString(titleStyle.Render("avairy") + helpStyle.Render("  single-machine collaboration"))
@@ -432,8 +438,9 @@ func truncate(s string, w int) string {
 }
 
 // Run starts the TUI against the live core services. It blocks until the user quits.
+// (Alt-screen is requested per-View in v2; see View().)
 func Run(deps Deps) error {
-	p := tea.NewProgram(NewModel(deps), tea.WithAltScreen())
+	p := tea.NewProgram(NewModel(deps))
 	_, err := p.Run()
 	return err
 }

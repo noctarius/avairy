@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"avairy/internal/agent"
 	"avairy/internal/board"
@@ -27,7 +27,7 @@ func TestApplyAndView(t *testing.T) {
 	m.apply(journal.Record{Seq: 2, Kind: journal.KindAgentEvent, Actor: "alice",
 		Data: agent.Event{Type: agent.EventText, Text: "on it"}})
 
-	v := m.View()
+	v := m.render()
 	for _, want := range []string{"repro it", "on it", "alice"} {
 		if !strings.Contains(v, want) {
 			t.Fatalf("view missing %q:\n%s", want, v)
@@ -105,17 +105,17 @@ func TestSystemRecordsFleet(t *testing.T) {
 func TestQuitRequiresDoubleCtrlC(t *testing.T) {
 	m, _, _ := newTestModel()
 
-	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc}); cmd != nil || m.quitArmed {
+	if _, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape}); cmd != nil || m.quitArmed {
 		t.Fatal("esc does not quit")
 	}
-	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC}); cmd != nil || !m.quitArmed {
+	if _, cmd := m.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}); cmd != nil || !m.quitArmed {
 		t.Fatalf("first ctrl+c should arm without quitting (cmd=%v)", cmd)
 	}
-	if m.Update(tea.KeyMsg{Type: tea.KeyTab}); m.quitArmed {
+	if m.Update(tea.KeyPressMsg{Code: tea.KeyTab}); m.quitArmed {
 		t.Fatal("a different key should disarm the pending quit")
 	}
-	m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
-	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC}); cmd == nil {
+	m.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	if _, cmd := m.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}); cmd == nil {
 		t.Fatal("two ctrl+c in succession should return a quit command")
 	}
 }
@@ -123,7 +123,7 @@ func TestQuitRequiresDoubleCtrlC(t *testing.T) {
 // Esc publishes an interrupt control signal on the bus (stop running agents).
 func TestEscSendsInterrupt(t *testing.T) {
 	m, _, j := newTestModel()
-	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	found := false
 	for _, rec := range j.Records() {
 		if msg, ok := rec.Data.(bus.Message); ok && msg.Interrupt {

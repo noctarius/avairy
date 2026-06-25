@@ -41,8 +41,9 @@ A TUI opens with two mock agents, `alice` and `bob`. (Without `-demo`, avairy st
 local agents** — you bring them via `avairy-node` or `-live`.)
 
 - Type `@alice <message>` to address an agent; a bare line broadcasts to everyone.
-- `tab` cycles **Conversation / Handovers / Tasks**.
-- The fleet line shows each agent's status and running cost; `ctrl+c` quits.
+- **Enter** sends; **Shift+Enter** (Kitty-protocol terminals) / **Option·Alt+Enter** / **Ctrl+J** insert a newline.
+- `tab` cycles **Conversation / Handovers / Tasks**; **Esc** stops running agents; **Ctrl+C twice** quits.
+- The fleet line shows each agent's status and running cost.
 
 **A real Claude agent on the bus:**
 
