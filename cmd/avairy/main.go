@@ -22,10 +22,12 @@ import (
 	"avairy/internal/agent"
 	"avairy/internal/board"
 	"avairy/internal/bus"
+	"avairy/internal/control"
 	"avairy/internal/journal"
 	"avairy/internal/mcp"
 	"avairy/internal/runner"
 	"avairy/internal/tui"
+	"avairy/internal/workspace"
 )
 
 func main() {
@@ -33,6 +35,7 @@ func main() {
 	family := flag.String("family", "claude", "live agent family: claude | codex")
 	headless := flag.String("headless", "", "send this message to alice, print the journal, and exit (no TUI)")
 	model := flag.String("model", "haiku", "model for the live agent (kept cheap by default; ignored for codex unless set)")
+	controlAddr := flag.String("control-addr", "", "if set, serve the node control API here (enrollment/sync) and print an enroll token")
 	flag.Parse()
 
 	jrnl := journal.NewMemory()
@@ -48,6 +51,18 @@ func main() {
 	}
 	go http.Serve(ln, mcpSrv.HTTPHandler())
 	busURL := "http://" + ln.Addr().String() + mcp.EndpointPath
+
+	// Optionally serve the node control API so remote avairy-node daemons can enroll and sync.
+	if *controlAddr != "" {
+		core := control.NewCore(workspace.NewHub(), jrnl)
+		go func() {
+			if err := http.ListenAndServe(*controlAddr, core.Handler()); err != nil {
+				fmt.Fprintln(os.Stderr, "control server:", err)
+			}
+		}()
+		fmt.Printf("control API on %s\nMCP bus base: http://%s\nenroll token: %s\n\n",
+			*controlAddr, ln.Addr().String(), core.IssueEnrollToken())
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

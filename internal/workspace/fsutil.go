@@ -84,9 +84,9 @@ func Scan(dir string, ig Ignore) ([]Change, error) {
 	return out, err
 }
 
-// applyFile writes (or deletes) one hub file into dir, atomically (temp + rename), creating
+// ApplyFile writes (or deletes) one hub file into dir, atomically (temp + rename), creating
 // parent directories and preserving the mode bit.
-func applyFile(dir string, f FileState) error {
+func ApplyFile(dir string, f FileState) error {
 	full := filepath.Join(dir, filepath.FromSlash(f.Path))
 	if f.Deleted {
 		if err := os.Remove(full); err != nil && !os.IsNotExist(err) {
@@ -170,7 +170,7 @@ func (nv *NodeView) SyncUp(h *Hub, dir string, ig Ignore) ([]Conflict, error) {
 // SyncDown pulls updates the node hasn't seen and applies them to dir, advancing base.
 func (nv *NodeView) SyncDown(h *Hub, dir string) error {
 	for _, f := range h.Pull(nv.base) {
-		if err := applyFile(dir, f); err != nil {
+		if err := ApplyFile(dir, f); err != nil {
 			return err
 		}
 		nv.base[f.Path] = f.Version
