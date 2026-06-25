@@ -46,6 +46,7 @@ func main() {
 	controlAddr := flag.String("control-addr", "", "if set, serve the node control API here (enrollment/sync) and print an enroll token")
 	mcpAddr := flag.String("mcp-addr", "127.0.0.1:0", "MCP bus listen address (use 0.0.0.0:PORT to allow remote nodes)")
 	advertise := flag.String("advertise", "", "host/IP remote nodes use to reach this core (defaults to the listen host)")
+	workspaceDir := flag.String("workspace", "", "operator project dir to seed/sync into the canonical hub (with -control-addr)")
 	flag.Parse()
 
 	// Durable, append-only journal (DESIGN.md §10) under .avairy/; falls back to memory-only.
@@ -70,10 +71,35 @@ func main() {
 	_, mcpPort, _ := net.SplitHostPort(ln.Addr().String())
 	busURL := "http://127.0.0.1:" + mcpPort + mcp.EndpointPath
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	// Optionally serve the node control API so remote avairy-node daemons can enroll and sync.
 	var ctrlInfo *tui.ControlInfo
 	if *controlAddr != "" {
-		core := control.NewCore(workspace.NewHub(), jrnl)
+		hub := workspace.NewHub()
+		// Seed the canonical hub from the operator's project dir and keep it synced both ways,
+		// so remote nodes receive a working copy on their first SyncDown.
+		if *workspaceDir != "" {
+			seed := workspace.NewNodeView("core")
+			if _, err := seed.SyncUp(hub, *workspaceDir, workspace.DefaultIgnore()); err != nil {
+				fmt.Fprintln(os.Stderr, "avairy: seed workspace:", err)
+			}
+			go func() {
+				t := time.NewTicker(2 * time.Second)
+				defer t.Stop()
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case <-t.C:
+						_, _ = seed.SyncUp(hub, *workspaceDir, workspace.DefaultIgnore())
+						_ = seed.SyncDown(hub, *workspaceDir)
+					}
+				}
+			}()
+		}
+		core := control.NewCore(hub, jrnl)
 		// When a node enrolls, register its agent on the bus (identity, caps, inbox); deliver
 		// that agent's inbound bus messages back over the control channel.
 		core.OnEnroll = func(nodeID string, caps map[string]string) {
@@ -107,9 +133,6 @@ func main() {
 			}
 		}
 	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	// Facilitator: watch the journal for stuck signals and nudge (DESIGN.md §5).
 	fac := facilitator.New(b, facilitator.RosterFunc(func() []facilitator.Agent {

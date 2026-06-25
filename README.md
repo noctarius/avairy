@@ -68,8 +68,13 @@ On the **operator machine**, start core with the node control API bound to a rea
 interface, and advertise the host/IP remote nodes should dial:
 
 ```sh
-avairy -control-addr 0.0.0.0:7700 -mcp-addr 0.0.0.0:7701 -advertise <operator-ip>
+avairy -control-addr 0.0.0.0:7700 -mcp-addr 0.0.0.0:7701 -advertise <operator-ip> -workspace ./myproject
 ```
+
+`-workspace ./myproject` seeds the **canonical workspace** from your project and keeps it
+synced both ways — so each remote node receives a working copy on its first sync, and node
+edits flow back to your directory. (Without it the hub starts empty and nodes get nothing
+until some node pushes content.)
 
 The TUI header shows the **control URL**, the **MCP bus base**, and an **enroll token**. The
 token **auto-regenerates each time a node uses it**, so each new node gets its own; the token
