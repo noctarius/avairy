@@ -101,3 +101,11 @@ is the concrete family. **Verified live end-to-end** (initialize → session/new
   no runtime-routed gating — **ACP is the integration surface**, not `-p`.
 - **Bonus:** because the engine is generic, other ACP agents (Gemini, `claude-agent-acp`) are a
   new `Profile` away — but Claude Code & Codex stay on their richer native adapters.
+
+## Grok — via ACP (same engine)
+
+xAI's Grok CLI (`grok` 0.2.x) also speaks ACP — proving the engine generalizes. It's just a
+profile: `grok agent stdio` (JSON-RPC/NDJSON; methods `session/prompt`, `session/update`).
+**Verified live end-to-end** (one real turn returned "OK" + turn_done through the adapter).
+Needs xAI auth. `grok.New()` composes the same `internal/adapter/acp` engine as Copilot —
+zero new protocol code, ~15 lines. Adding the next ACP agent (Gemini, etc.) is the same.

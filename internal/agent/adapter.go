@@ -17,6 +17,7 @@ const (
 	FamilyClaudeCode Family = "claude-code"
 	FamilyCodex      Family = "codex"
 	FamilyCopilot    Family = "copilot"
+	FamilyGrok       Family = "grok"
 )
 
 // EnforcementLevel declares how strongly a node/adapter can gate an agent's actions

@@ -20,6 +20,7 @@ import (
 	"avairy/internal/adapter/claudecode"
 	"avairy/internal/adapter/codex"
 	"avairy/internal/adapter/copilot"
+	"avairy/internal/adapter/grok"
 	"avairy/internal/adapter/mock"
 	"avairy/internal/agent"
 	"avairy/internal/board"
@@ -179,6 +180,8 @@ func startAlice(ctx context.Context, live bool, family, model, busURL string, b 
 		ad = cx
 	case "copilot":
 		ad = copilot.New() // ACP; gating via session/request_permission (needs `copilot login`)
+	case "grok":
+		ad = grok.New() // ACP; needs xAI auth
 	default: // claude
 		ca := claudecode.New()
 		// Pre-approve the avairy bus tools so headless turns don't stall on permission prompts.

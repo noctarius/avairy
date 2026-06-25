@@ -1,7 +1,7 @@
 # avairy
 
 Orchestration for AI coding agents. Run multiple agents — same family or across families
-(**Claude Code**, **Codex**), local or on **remote machines/VMs** — collaborating over one
+(**Claude Code**, **Codex**, **Copilot**, **Grok**), local or on **remote machines/VMs** — collaborating over one
 shared bus on the same project: messaging each other, working a capability-gated task board,
 sharing a synced workspace, with a human able to steer at any moment.
 
@@ -16,8 +16,9 @@ agent family is driven.
 ## Requirements
 
 - Go 1.26+
-- For live agents: the `claude` and/or `codex` CLIs installed and logged in (avairy uses each
-  CLI's own auth — it never handles your credentials).
+- For live agents: the relevant CLI installed and logged in — `claude`, `codex`, `copilot`
+  (`copilot login`), and/or `grok` (xAI auth). avairy uses each CLI's own auth; it never
+  handles your credentials.
 
 ## Build & test
 
@@ -90,7 +91,7 @@ canonical workspace on core, heartbeats, and serves a local MCP endpoint at
 `http://127.0.0.1:7800/mcp` — the agent only ever sees localhost. (The channel is plain HTTP
 today; TLS is the production flip.)
 
-With **`-family claude`** (or `codex`, `copilot`) the daemon **spawns and drives the agent for you**:
+With **`-family claude`** (or `codex`, `copilot`, `grok`) the daemon **spawns and drives the agent for you**:
 core registers it on the bus at enrollment, inbound messages are pulled from core and fed to
 the agent, and its activity is shipped back to the core journal/TUI. **Omit `-family`** to run
 proxy-only and launch the agent yourself against `http://127.0.0.1:7800/mcp`. Use `-model` /
@@ -111,7 +112,9 @@ proxy-only and launch the agent yourself against `http://127.0.0.1:7800/mcp`. Us
 
 ## Status
 
-Working end-to-end: both agent families verified live on the bus, single-machine and
-distributed paths, file sync, facilitator, and gating. Known follow-ups: Claude PreToolUse
+Working end-to-end: **four agent families** verified live on the bus — Claude Code and Codex
+on native adapters, **Copilot and Grok via a generic ACP engine** (a new ACP agent is just a
+small profile) — plus single-machine and distributed paths, file sync, facilitator, and
+gating. Known follow-ups: Claude PreToolUse
 hook glue (the server is built; wiring a running `claude` to it isn't), conflict auto-merge
 routing, typed state-resume from the journal, fs-watch (currently poll), and channel TLS.
