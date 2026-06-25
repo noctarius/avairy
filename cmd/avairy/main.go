@@ -76,10 +76,8 @@ func main() {
 		core := control.NewCore(workspace.NewHub(), jrnl)
 		// When a node enrolls, register its agent on the bus (identity, caps, inbox); deliver
 		// that agent's inbound bus messages back over the control channel.
-		core.OnEnroll = func(nodeID, agentID string, caps map[string]string) {
-			if agentID != "" {
-				mcpSrv.RegisterAgent(agentID, []string{"backend"}, caps)
-			}
+		core.OnEnroll = func(nodeID string, caps map[string]string) {
+			mcpSrv.RegisterAgent(nodeID, []string{"backend"}, caps) // node id == agent's bus identity
 		}
 		core.InboxDrainer = func(agentID string) []control.InboxMessage {
 			var out []control.InboxMessage

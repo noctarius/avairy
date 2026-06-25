@@ -41,7 +41,7 @@ func TestEnrollAndSyncAcrossNodes(t *testing.T) {
 	writeFile(t, dirA, "src/app.go", "package app\n")
 
 	nodeA := NewNode(srv.URL, "linux-box")
-	if err := nodeA.Enroll(tok, "", "linux", map[string]string{"os": "linux"}); err != nil {
+	if err := nodeA.Enroll(tok, "linux", map[string]string{"os": "linux"}); err != nil {
 		t.Fatalf("enroll A: %v", err)
 	}
 	if conflicts, err := nodeA.SyncUp(dirA); err != nil || len(conflicts) != 0 {
@@ -49,7 +49,7 @@ func TestEnrollAndSyncAcrossNodes(t *testing.T) {
 	}
 
 	nodeB := NewNode(srv.URL, "mac-box")
-	if err := nodeB.Enroll(core.CurrentToken(), "", "darwin", map[string]string{"os": "darwin"}); err != nil {
+	if err := nodeB.Enroll(core.CurrentToken(), "darwin", map[string]string{"os": "darwin"}); err != nil {
 		t.Fatalf("enroll B: %v", err)
 	}
 	if err := nodeB.SyncDown(dirB); err != nil {
@@ -69,7 +69,7 @@ func TestEnrollAndSyncAcrossNodes(t *testing.T) {
 func TestInvalidEnrollTokenRejected(t *testing.T) {
 	_, srv := newCoreServer(t)
 	n := NewNode(srv.URL, "rogue")
-	if err := n.Enroll("not-a-real-token", "", "linux", nil); err == nil {
+	if err := n.Enroll("not-a-real-token", "linux", nil); err == nil {
 		t.Fatal("expected enrollment to fail with a bad token")
 	}
 }
@@ -77,7 +77,7 @@ func TestInvalidEnrollTokenRejected(t *testing.T) {
 func TestEnrollTokenBindingAndRejoin(t *testing.T) {
 	core, srv := newCoreServer(t)
 	tok := core.CurrentToken()
-	if err := NewNode(srv.URL, "first").Enroll(tok, "", "linux", nil); err != nil {
+	if err := NewNode(srv.URL, "first").Enroll(tok, "linux", nil); err != nil {
 		t.Fatalf("first enroll: %v", err)
 	}
 	// The operator-facing token auto-regenerates once a node consumes it.
@@ -85,11 +85,11 @@ func TestEnrollTokenBindingAndRejoin(t *testing.T) {
 		t.Fatal("token should auto-regenerate after a node enrolls")
 	}
 	// A different node may not reuse a bound token.
-	if err := NewNode(srv.URL, "second").Enroll(tok, "", "linux", nil); err == nil {
+	if err := NewNode(srv.URL, "second").Enroll(tok, "linux", nil); err == nil {
 		t.Fatal("a bound token must be rejected for a different node")
 	}
 	// The same node may rejoin with its bound token (restart / crash recovery).
-	if err := NewNode(srv.URL, "first").Enroll(tok, "", "linux", nil); err != nil {
+	if err := NewNode(srv.URL, "first").Enroll(tok, "linux", nil); err != nil {
 		t.Fatalf("same node should rejoin with its bound token: %v", err)
 	}
 }
@@ -102,11 +102,11 @@ func TestConflictOverWire(t *testing.T) {
 	writeFile(t, dirB, "f.go", "B")
 
 	nodeA := NewNode(srv.URL, "a")
-	nodeA.Enroll(core.CurrentToken(), "", "linux", nil)
+	nodeA.Enroll(core.CurrentToken(), "linux", nil)
 	nodeA.SyncUp(dirA) // f.go -> v1
 
 	nodeB := NewNode(srv.URL, "b") // fresh base, never pulled v1
-	nodeB.Enroll(core.CurrentToken(), "", "linux", nil)
+	nodeB.Enroll(core.CurrentToken(), "linux", nil)
 	conflicts, err := nodeB.SyncUp(dirB)
 	if err != nil {
 		t.Fatal(err)
@@ -140,15 +140,14 @@ func TestMCPProxyInjectsIdentity(t *testing.T) {
 	}
 }
 
-// Enrolling with an agent id fires OnEnroll; inbound messages and event reports flow over
-// the channel.
+// Enrolling fires OnEnroll; inbound messages and event reports flow over the channel.
 func TestEnrollHookInboxAndEvents(t *testing.T) {
 	j := journal.NewMemory()
 	c := NewCore(workspace.NewHub(), j)
 	var enrolledAgent string
-	c.OnEnroll = func(nodeID, agentID string, caps map[string]string) { enrolledAgent = agentID }
+	c.OnEnroll = func(nodeID string, caps map[string]string) { enrolledAgent = nodeID }
 	c.InboxDrainer = func(agentID string) []InboxMessage {
-		if agentID == "claude" {
+		if agentID == "macos" {
 			return []InboxMessage{{ID: "m1", From: "human", Body: "reproduce it", Delivery: "steer"}}
 		}
 		return nil
@@ -157,24 +156,24 @@ func TestEnrollHookInboxAndEvents(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	n := NewNode(srv.URL, "macos")
-	if err := n.Enroll(c.CurrentToken(), "claude", "darwin", map[string]string{"os": "darwin"}); err != nil {
+	if err := n.Enroll(c.CurrentToken(), "darwin", map[string]string{"os": "darwin"}); err != nil {
 		t.Fatal(err)
 	}
-	if enrolledAgent != "claude" {
+	if enrolledAgent != "macos" {
 		t.Fatalf("OnEnroll agent = %q", enrolledAgent)
 	}
 
-	msgs, err := n.PullInbox("claude")
+	msgs, err := n.PullInbox("macos")
 	if err != nil || len(msgs) != 1 || msgs[0].Body != "reproduce it" {
 		t.Fatalf("inbox pull: err=%v msgs=%+v", err, msgs)
 	}
 
-	if err := n.PostEvents([]AgentEventReport{{AgentID: "claude", Type: "text", Text: "on it"}}); err != nil {
+	if err := n.PostEvents([]AgentEventReport{{AgentID: "macos", Type: "text", Text: "on it"}}); err != nil {
 		t.Fatal(err)
 	}
 	found := false
 	for _, rec := range j.Records() {
-		if rec.Kind == journal.KindAgentEvent && rec.Actor == "claude" {
+		if rec.Kind == journal.KindAgentEvent && rec.Actor == "macos" {
 			found = true
 		}
 	}

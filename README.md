@@ -85,7 +85,6 @@ avairy-node \
   -core-mcp http://<operator>:<busport> \  # MCP bus base
   -token   <enroll-token> \
   -id      linux-box \
-  -agent   alice \
   -workspace ./repo \
   -proxy   127.0.0.1:7800 \
   -family  claude                          # optional: spawn & drive the agent here

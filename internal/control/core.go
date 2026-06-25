@@ -15,10 +15,9 @@ import (
 	"avairy/internal/workspace"
 )
 
-// NodeInfo is the core's record of an enrolled node.
+// NodeInfo is the core's record of an enrolled node (its ID is also the agent's bus identity).
 type NodeInfo struct {
 	ID       string
-	AgentID  string
 	OS       string
 	Caps     map[string]string
 	LastSeen time.Time
@@ -30,8 +29,9 @@ type Core struct {
 	hub  *workspace.Hub
 	jrnl journal.Log
 
-	// OnEnroll, if set, runs when a node enrolls — used to register its agent on the bus.
-	OnEnroll func(nodeID, agentID string, caps map[string]string)
+	// OnEnroll, if set, runs when a node enrolls — used to register it on the bus (the node id
+	// is the agent's bus identity).
+	OnEnroll func(nodeID string, caps map[string]string)
 	// InboxDrainer, if set, returns and clears bus messages buffered for an agent.
 	InboxDrainer func(agentID string) []InboxMessage
 
@@ -121,7 +121,7 @@ func (c *Core) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	session := randToken()
 	if accepted {
 		c.sessions[session] = req.NodeID
-		c.nodes[req.NodeID] = &NodeInfo{ID: req.NodeID, AgentID: req.AgentID, OS: req.OS, Caps: req.Caps, LastSeen: time.Now()}
+		c.nodes[req.NodeID] = &NodeInfo{ID: req.NodeID, OS: req.OS, Caps: req.Caps, LastSeen: time.Now()}
 	}
 	c.mu.Unlock()
 	if !accepted {
@@ -135,7 +135,7 @@ func (c *Core) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	}
 	c.jrnl.Append(journal.KindSystem, req.NodeID, map[string]any{"event": event, "os": req.OS, "caps": req.Caps})
 	if c.OnEnroll != nil {
-		c.OnEnroll(req.NodeID, req.AgentID, req.Caps)
+		c.OnEnroll(req.NodeID, req.Caps)
 	}
 	writeJSON(w, EnrollResponse{SessionToken: session})
 }

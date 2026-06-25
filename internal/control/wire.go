@@ -15,13 +15,14 @@ const (
 )
 
 // EnrollRequest is sent by a node to join, authenticated by a one-time enrollment token
-// (SSH bootstrap seeds it, or the operator pastes it for manual/Windows provisioning).
+// (SSH bootstrap seeds it, or the operator pastes it for manual/Windows provisioning). A node
+// is 1:1 with the agent it hosts, so NodeID is also the agent's bus identity (run multiple
+// node processes for multiple agents).
 type EnrollRequest struct {
-	Token   string            `json:"token"`
-	NodeID  string            `json:"nodeId"`
-	AgentID string            `json:"agentId"` // the agent this node hosts (registered on the bus)
-	OS      string            `json:"os"`
-	Caps    map[string]string `json:"caps"`
+	Token  string            `json:"token"`
+	NodeID string            `json:"nodeId"`
+	OS     string            `json:"os"`
+	Caps   map[string]string `json:"caps"`
 }
 
 // InboxMessage is a bus message addressed to a node's agent, delivered over the channel.

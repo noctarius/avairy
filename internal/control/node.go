@@ -40,11 +40,11 @@ func NewNode(coreURL, id string) *Node {
 	}
 }
 
-// Enroll joins the core using a one-time token and stores the session token. agentID is the
-// agent this node hosts (registered on the bus by core); pass "" for a proxy-only node.
-func (n *Node) Enroll(token, agentID, os string, caps map[string]string) error {
+// Enroll joins the core using a one-time token and stores the session token. The node id
+// (n.ID) is also the agent's bus identity.
+func (n *Node) Enroll(token, os string, caps map[string]string) error {
 	var resp EnrollResponse
-	if err := n.post(PathEnroll, "", EnrollRequest{Token: token, NodeID: n.ID, AgentID: agentID, OS: os, Caps: caps}, &resp); err != nil {
+	if err := n.post(PathEnroll, "", EnrollRequest{Token: token, NodeID: n.ID, OS: os, Caps: caps}, &resp); err != nil {
 		return err
 	}
 	if resp.SessionToken == "" {
