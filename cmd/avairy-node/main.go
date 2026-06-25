@@ -197,7 +197,13 @@ func buildAdapter(family string) (agent.Adapter, error) {
 	switch family {
 	case "claude":
 		ca := claudecode.New()
-		ca.ExtraArgs = []string{"--allowedTools", "mcp__avairy__post_task,mcp__avairy__claim_task,mcp__avairy__list_tasks,mcp__avairy__send_message,mcp__avairy__read_inbox,mcp__avairy__report_status"}
+		// The agent runs headless (-p, stream-json), so there is no interactive
+		// prompt to answer a permission request: restricting to mcp__avairy__* would
+		// leave every Edit/Write/Bash pending forever. Run autonomous for now; risky
+		// actions are meant to be gated by the PreToolUse hook (Enforcement:
+		// EnforcementHooked), which is the next thing to wire in. Until then the agent
+		// is ungated so it can actually do work.
+		ca.ExtraArgs = []string{"--permission-mode", "bypassPermissions"}
 		return ca, nil
 	case "codex":
 		cx := codex.New()
