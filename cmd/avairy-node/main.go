@@ -38,6 +38,15 @@ func main() {
 		os.Exit(2)
 	}
 
+	// The local workspace is this node's synced copy; create it if absent (it gets populated
+	// by SyncDown from the canonical hub).
+	if *ws != "" {
+		if err := os.MkdirAll(*ws, 0o755); err != nil {
+			fmt.Fprintln(os.Stderr, "avairy-node: workspace:", err)
+			os.Exit(1)
+		}
+	}
+
 	n := control.NewNode(*core, *id)
 	if err := n.Enroll(*token, *osName, map[string]string{"os": *osName}); err != nil {
 		fmt.Fprintln(os.Stderr, "avairy-node: enroll:", err)

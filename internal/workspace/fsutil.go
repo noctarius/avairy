@@ -46,8 +46,12 @@ func normalizeForTransit(b []byte) []byte {
 	return bytes.ReplaceAll(b, []byte("\r\n"), []byte("\n"))
 }
 
-// Scan walks dir and returns a Change per regular, non-ignored file (Base unset).
+// Scan walks dir and returns a Change per regular, non-ignored file (Base unset). A
+// non-existent dir scans as empty (the workspace may not be created yet).
 func Scan(dir string, ig Ignore) ([]Change, error) {
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return nil, nil
+	}
 	var out []Change
 	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
