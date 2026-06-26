@@ -68,6 +68,48 @@ func TestObserve_BlockedPublishesNudge(t *testing.T) {
 	}
 }
 
+// countNudger records how many times the facilitator decided to nudge.
+type countNudger struct{ n *int }
+
+func (c countNudger) Decide(t Trigger, _ []Agent) []Nudge {
+	*c.n++
+	return []Nudge{{Kind: NudgeRemind, To: t.Agent, Body: "x"}}
+}
+
+// A flapping agent that keeps reporting blocked is nudged once, not on every report — until the
+// cooldown elapses (or it reports progress, which clears the cooldown).
+func TestObserve_DebouncesRepeatedBlocked(t *testing.T) {
+	var n int
+	f := New(bus.New(journal.NewMemory()), RosterFunc(func() []Agent { return roster }), countNudger{&n})
+	clock := time.Unix(1000, 0)
+	f.now = func() time.Time { return clock }
+
+	blocked := journal.Record{Kind: journal.KindSystem, Actor: "linbot",
+		Data: map[string]any{"event": "report_status", "status": "blocked", "detail": "stuck"}}
+
+	f.Observe(blocked)
+	f.Observe(blocked)
+	f.Observe(blocked)
+	if n != 1 {
+		t.Fatalf("repeated blocked should nudge once within cooldown, got %d", n)
+	}
+
+	// After the cooldown, a still-blocked agent is nudged again.
+	clock = clock.Add(f.cooldown + time.Second)
+	f.Observe(blocked)
+	if n != 2 {
+		t.Fatalf("expected a nudge after cooldown elapsed, got %d", n)
+	}
+
+	// Reporting progress clears the cooldown, so the next block nudges immediately.
+	f.Observe(journal.Record{Kind: journal.KindSystem, Actor: "linbot",
+		Data: map[string]any{"event": "report_status", "status": "working"}})
+	f.Observe(blocked)
+	if n != 3 {
+		t.Fatalf("progress should clear the cooldown so a new block nudges, got %d", n)
+	}
+}
+
 // Loop detection fires only after loopN identical consecutive steps.
 func TestObserve_LoopDetection(t *testing.T) {
 	j := journal.NewMemory()

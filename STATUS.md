@@ -85,9 +85,10 @@ Ranked roughly by value-to-effort within each group.
     (and metadata-only touches) seen by fsnotify don't ping-pong into re-pushes. Stamps record
     the hash; touched-but-identical files refresh their stamp without pushing.
 
-11. **Facilitator debounce + matchmaking.** Works cross-node, but no rate-limit/debounce — a
-    repeatedly-`blocked` agent re-nudges on every status report (the loop trigger self-resets,
-    `blocked` doesn't). Matchmaking (`neededCap`) is OS-keyword-only.
+11. ~~**Facilitator debounce.**~~ ✅ Done. A per-(agent, trigger) cooldown (45s) in `Observe`
+    stops a flapping agent from being nudged on every status report; a progress report clears
+    the agent's blocked cooldown so a genuine later block nudges promptly. *Still open:*
+    matchmaking (`neededCap`) is OS-keyword-only — a quality-of-nudge improvement, not a bug.
 
 12. **State-resume from journal.** The TUI backfills its view, but a restarted core/agent
     doesn't reconstruct task-board / session state from the journal.

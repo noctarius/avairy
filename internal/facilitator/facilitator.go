@@ -14,6 +14,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"avairy/internal/agent"
 	"avairy/internal/bus"
@@ -73,23 +74,29 @@ type Nudger interface {
 
 // Facilitator detects triggers from journal records and publishes nudges to the bus.
 type Facilitator struct {
-	bus    *bus.Bus
-	roster Roster
-	nudger Nudger
-	loopN  int // identical consecutive steps that count as a loop
+	bus      *bus.Bus
+	roster   Roster
+	nudger   Nudger
+	loopN    int           // identical consecutive steps that count as a loop
+	cooldown time.Duration // min gap between nudges for the same (agent, trigger)
+	now      func() time.Time
 
-	mu     sync.Mutex
-	recent map[string][]string // agent -> recent activity signatures
+	mu        sync.Mutex
+	recent    map[string][]string  // agent -> recent activity signatures
+	lastNudge map[string]time.Time // (agent, trigger) -> when we last nudged it
 }
 
 // New builds a Facilitator publishing as "facilitator" onto b.
 func New(b *bus.Bus, roster Roster, nudger Nudger) *Facilitator {
 	return &Facilitator{
-		bus:    b,
-		roster: roster,
-		nudger: nudger,
-		loopN:  3,
-		recent: make(map[string][]string),
+		bus:       b,
+		roster:    roster,
+		nudger:    nudger,
+		loopN:     3,
+		cooldown:  45 * time.Second,
+		now:       time.Now,
+		recent:    make(map[string][]string),
+		lastNudge: make(map[string]time.Time),
 	}
 }
 
@@ -108,27 +115,46 @@ func (f *Facilitator) Run(ctx context.Context, sub <-chan journal.Record) {
 	}
 }
 
-// Observe inspects one record; on a detected trigger it asks the nudger and publishes.
+// Observe inspects one record; on a detected trigger it asks the nudger and publishes — unless
+// that (agent, trigger) was nudged within the cooldown, which keeps a flapping agent from
+// being nudged on every status report. An agent reporting progress clears its blocked
+// cooldown, so a genuine later block nudges promptly instead of waiting out the window.
 func (f *Facilitator) Observe(rec journal.Record) {
+	if agentID, status, ok := reportStatus(rec); ok && status != "blocked" && status != "low_confidence" {
+		f.clearCooldown(agentID, TriggerBlocked)
+	}
 	t, ok := f.detect(rec)
-	if !ok {
+	if !ok || f.suppressed(t) {
 		return
 	}
 	for _, n := range f.nudger.Decide(t, f.roster.Agents()) {
 		f.publish(n)
 	}
+	f.markNudged(t)
+}
+
+// reportStatus extracts (agent, status) from a report_status system record.
+func reportStatus(rec journal.Record) (agentID, status string, ok bool) {
+	if rec.Kind != journal.KindSystem {
+		return "", "", false
+	}
+	m, isMap := rec.Data.(map[string]any)
+	if !isMap || m["event"] != "report_status" {
+		return "", "", false
+	}
+	status, _ = m["status"].(string)
+	return rec.Actor, status, true
 }
 
 func (f *Facilitator) detect(rec journal.Record) (Trigger, bool) {
 	switch rec.Kind {
 	case journal.KindSystem:
-		m, ok := rec.Data.(map[string]any)
-		if !ok || m["event"] != "report_status" {
+		_, status, ok := reportStatus(rec)
+		if !ok {
 			return Trigger{}, false
 		}
-		status, _ := m["status"].(string)
 		if status == "blocked" || status == "low_confidence" {
-			detail, _ := m["detail"].(string)
+			detail, _ := rec.Data.(map[string]any)["detail"].(string)
 			return Trigger{Kind: TriggerBlocked, Agent: rec.Actor, Detail: detail}, true
 		}
 	case journal.KindAgentEvent:
@@ -171,6 +197,28 @@ func (f *Facilitator) publish(n Nudge) {
 		}
 		f.bus.Publish("facilitator", to, n.Body, agent.DeliverySteer)
 	}
+}
+
+func nudgeKey(agentID string, k TriggerKind) string { return agentID + "\x00" + string(k) }
+
+// suppressed reports whether this (agent, trigger) was nudged within the cooldown window.
+func (f *Facilitator) suppressed(t Trigger) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	last, ok := f.lastNudge[nudgeKey(t.Agent, t.Kind)]
+	return ok && f.now().Sub(last) < f.cooldown
+}
+
+func (f *Facilitator) markNudged(t Trigger) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastNudge[nudgeKey(t.Agent, t.Kind)] = f.now()
+}
+
+func (f *Facilitator) clearCooldown(agentID string, k TriggerKind) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.lastNudge, nudgeKey(agentID, k))
 }
 
 func signature(ev agent.Event) string {
