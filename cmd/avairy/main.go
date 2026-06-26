@@ -55,6 +55,8 @@ func main() {
 	mcpAddr := flag.String("mcp-addr", "127.0.0.1:0", "MCP bus listen address (use 0.0.0.0:PORT to allow remote nodes)")
 	advertise := flag.String("advertise", "", "host/IP remote nodes use to reach this core (defaults to the listen host)")
 	workspaceDir := flag.String("workspace", "", "operator project dir to seed/sync into the canonical hub (with -control-addr)")
+	tlsCert := flag.String("tls-cert", "", "PEM cert file: serve the node control channel over TLS (recommended for remote nodes)")
+	tlsKey := flag.String("tls-key", "", "PEM private key file for -tls-cert")
 	flag.Parse()
 
 	// Durable, append-only journal (DESIGN.md §10) under .avairy/; falls back to memory-only.
@@ -198,13 +200,24 @@ func main() {
 			}
 			return out
 		}
+		controlTLS := *tlsCert != "" && *tlsKey != ""
 		go func() {
-			if err := http.ListenAndServe(*controlAddr, core.Handler()); err != nil {
-				fmt.Fprintln(os.Stderr, "control server:", err)
+			var serr error
+			if controlTLS {
+				serr = http.ListenAndServeTLS(*controlAddr, *tlsCert, *tlsKey, core.Handler())
+			} else {
+				serr = http.ListenAndServe(*controlAddr, core.Handler())
+			}
+			if serr != nil {
+				fmt.Fprintln(os.Stderr, "control server:", serr)
 			}
 		}()
 		go core.RunLiveness(ctx) // mark nodes offline when heartbeats lapse
-		ctrlURL := "http://" + advertised(*advertise, *controlAddr)
+		ctrlScheme := "http"
+		if controlTLS {
+			ctrlScheme = "https"
+		}
+		ctrlURL := ctrlScheme + "://" + advertised(*advertise, *controlAddr)
 		busBase := "http://" + advertised(*advertise, ln.Addr().String())
 		warn := ""
 		if unreachableHost(hostOf(advertised(*advertise, ln.Addr().String()))) {

@@ -50,6 +50,8 @@ func main() {
 	family := flag.String("family", "", "spawn & drive the agent here: claude | codex | copilot | grok (empty = proxy only, run the agent yourself)")
 	model := flag.String("model", "", "model for the spawned agent (family default if empty)")
 	role := flag.String("role", "", "system prompt / role for the spawned agent")
+	caFile := flag.String("ca", "", "PEM cert/CA to trust for an https core (self-signed/internal CA)")
+	insecure := flag.Bool("insecure", false, "skip TLS verification for an https core (DEV ONLY — exposes the channel to MITM)")
 	flag.Parse()
 
 	if *core == "" || *token == "" || *id == "" {
@@ -67,6 +69,16 @@ func main() {
 	}
 
 	n := control.NewNode(*core, *id)
+	// Trust config for an https core: a CA/cert PEM the node trusts, or insecure (dev). With a
+	// publicly-trusted cert neither is needed (system roots apply).
+	if *caFile != "" || *insecure {
+		client, err := control.TLSClient(*caFile, *insecure)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "avairy-node: tls:", err)
+			os.Exit(1)
+		}
+		n.HTTP = client
+	}
 	if err := n.Enroll(*token, *osName, map[string]string{"os": *osName}); err != nil {
 		fmt.Fprintln(os.Stderr, "avairy-node: enroll:", err)
 		os.Exit(1)

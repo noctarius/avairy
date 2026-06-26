@@ -99,8 +99,10 @@ avairy-node \
 
 The daemon enrolls (node→core, NAT-friendly), continuously syncs `./repo` to/from the
 canonical workspace on core, heartbeats, and serves a local MCP endpoint at
-`http://127.0.0.1:7800/mcp` — the agent only ever sees localhost. (The channel is plain HTTP
-today; TLS is the production flip.)
+`http://127.0.0.1:7800/mcp` — the agent only ever sees localhost. For remote nodes, serve the
+control channel over TLS: start core with `-tls-cert`/`-tls-key` and point the node at the
+`https://` URL with `-ca <core-cert.pem>` (or `-insecure` for dev). (The MCP bus is still plain
+HTTP today.)
 
 With **`-family claude`** (or `codex`, `copilot`, `grok`) the daemon **spawns and drives the agent for you**:
 core registers it on the bus at enrollment, inbound messages are pulled from core and fed to
@@ -127,8 +129,10 @@ proxy-only and launch the agent yourself against `http://127.0.0.1:7800/mcp`. Us
 
 Working end-to-end: **four agent families** verified live on the bus — Claude Code and Codex
 on native adapters, **Copilot and Grok via a generic ACP engine** (a new ACP agent is just a
-small profile) — plus single-machine and distributed paths, file sync, facilitator, and
-**human-in-the-loop gating** (Claude PreToolUse hook + Codex app-server approvals → operator
-Approvals tab). Known follow-ups: routing local-Claude gating through the hook too, conflict
-auto-merge routing, typed state-resume from the journal, fs-watch (currently poll), and
-channel TLS.
+small profile) — plus single-machine and distributed paths, fsnotify-driven file sync (deletes,
+moves, symlinks, empty-dir pruning, content-hash change detection), agent-reconciled conflicts,
+facilitator, **human-in-the-loop gating** across all families (PreToolUse hook / app-server /
+ACP approvals → operator Approvals tab, with allow-for-session), **git** (history reads, gated
+signed commits, on-node read-only mirror + scratch worktrees for cross-OS bisect/build), and
+**TLS** on the control channel. See [STATUS.md](STATUS.md) for the full picture and remaining
+work (MCP-bus TLS, journal state-resume, semantic loop detection).

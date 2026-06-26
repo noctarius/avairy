@@ -96,8 +96,11 @@ Ranked roughly by value-to-effort within each group.
 
 ### Robustness / operational
 
-8. **Channel TLS.** node↔core is plain HTTP; enrollment tokens and full file contents cross
-   the wire in cleartext. Production flips to TLS (node→core outbound, NAT-friendly).
+8. ~~**Channel TLS.**~~ ✅ Done for the control channel. Core serves it over TLS with
+   `-tls-cert`/`-tls-key`; the node trusts an https core via `-ca <pem>` (self-signed/internal)
+   or system roots (public cert), with `-insecure` for dev. Enrollment tokens + all file-sync
+   content are now encryptable. *Still plain:* the MCP bus — it's dual-use with loopback local
+   agents, so TLS there needs a separate listener (or agent trust config); follow-up.
 
 9. ~~**Dead-node detection.**~~ ✅ Done. `Core.RunLiveness` marks a node offline when its
    heartbeats lapse past `LivenessTimeout` (15s) and online again on return, journaling each
