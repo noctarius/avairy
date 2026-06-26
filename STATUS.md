@@ -175,10 +175,22 @@ Ranked roughly by value-to-effort within each group.
     So it catches the classic back-to-back repeat (period 1), **A↔B oscillation** (period 2,
     e.g. ping-ponging between two fixes), and **interleaved retries** (reasoning between attempts
     no longer hides the repeat); two rounds of edit/test are *not* flagged (normal iteration).
-    On a hit the facilitator auto-runs a fresh look (#0). *Still open:* (a) flag **revisiting
-    seen states with no new state** (circling without a clean cycle); (b) **semantic** loops
-    (same intent, different words) — the LLM-`Nudger` seam (`facilitator.go`), e.g. periodically
-    asking "is this agent making progress?".
+    On a hit the facilitator auto-runs a fresh look (#0). Both deterministic cycle cases are
+    covered; two loop *kinds* the period detector inherently can't see remain open:
+
+    - **(a) Circling without a clean period** — *deterministic, buildable now.* An agent churns
+      the same few actions in no fixed order (`A B C  A D B  A C B …`) — stuck, but no period, so
+      `trackLoop` stays silent. Fix is a **novelty/progress** signal (not periodicity): track the
+      set of distinct action signatures over a window and flag when the agent produces **no new
+      (never-seen) action** for N steps. Tune the window so a repetitive-but-productive phase
+      (edit many files, rerun the same test) doesn't trip it.
+    - **(b) Semantic loops** — *needs an LLM.* Detection is exact string match on
+      `tool:<name>:<arg>`, so conceptually-identical-but-textually-different steps slip through
+      (`go test ./a` ↔ `go test ./b`; the same fix in different files; "try X" ↔ "attempt X
+      again"). Catching "same intent, different surface form" needs judgment → an **LLM `Nudger`**
+      (the design's pluggable seam, `RuleNudger` today) periodically asked "is this agent making
+      progress or circling?". It's just another trigger feeding the existing fresh-look
+      intervention (#0), so the deterministic detector handles cheap cases and the LLM the rest.
 
 ### Usability / driving work
 
