@@ -314,3 +314,18 @@ func (nv *NodeView) SyncDown(h *Hub, dir string) error {
 
 // Base returns the node's known version for a path (for conflict reconciliation flows).
 func (nv *NodeView) Base(path string) uint64 { return nv.base[path] }
+
+// ResumeFromHub primes a freshly-created view against a restored hub so the next SyncUp behaves
+// like a resume, not a first sync. For each hub file that still exists under dir it adopts the
+// hub's version as the view's base: an unchanged local file is then skipped (idempotent), a
+// locally-edited one bumps the version (operator wins), and — crucially — hub files the
+// operator doesn't have locally (e.g. contributed by other nodes) are left unclaimed, so they
+// are NOT seen as local deletions and wiped. Call once at startup before the first SyncUp.
+func (nv *NodeView) ResumeFromHub(h *Hub, dir string) {
+	for _, f := range h.List() {
+		full := filepath.Join(dir, filepath.FromSlash(f.Path))
+		if _, err := os.Stat(full); err == nil {
+			nv.base[f.Path] = f.Version
+		}
+	}
+}

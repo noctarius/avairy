@@ -89,11 +89,38 @@ func main() {
 	// Optionally serve the node control API so remote avairy-node daemons can enroll and sync.
 	var ctrlInfo *tui.ControlInfo
 	if *controlAddr != "" {
-		hub := workspace.NewHub()
+		// Restore the canonical hub from disk so a core restart doesn't lose state (DESIGN.md
+		// §9); persist it periodically and on clean shutdown.
+		hubPath := filepath.Join(".avairy", "hub.json")
+		hub, err := workspace.LoadHub(hubPath)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "avairy: load hub (starting empty):", err)
+			hub = workspace.NewHub()
+		}
+		defer func() {
+			if err := hub.Save(hubPath); err != nil {
+				fmt.Fprintln(os.Stderr, "avairy: persist hub:", err)
+			}
+		}()
+		go func() {
+			t := time.NewTicker(5 * time.Second)
+			defer t.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+					if _, err := hub.SaveIfDirty(hubPath); err != nil {
+						fmt.Fprintln(os.Stderr, "avairy: persist hub:", err)
+					}
+				}
+			}
+		}()
 		// Seed the canonical hub from the operator's project dir and keep it synced both ways,
 		// so remote nodes receive a working copy on their first SyncDown.
 		if *workspaceDir != "" {
 			seed := workspace.NewNodeView("core")
+			seed.ResumeFromHub(hub, *workspaceDir) // adopt restored versions; don't re-conflict/delete
 			if _, err := seed.SyncUp(hub, *workspaceDir, workspace.IgnoreFor(*workspaceDir)); err != nil {
 				fmt.Fprintln(os.Stderr, "avairy: seed workspace:", err)
 			}

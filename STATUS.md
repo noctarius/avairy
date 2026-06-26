@@ -36,9 +36,11 @@ Ranked roughly by value-to-effort within each group.
    - TUI commit affordance.
    - *Today only `.gitignore` parsing touches git.*
 
-2. **Hub persistence.** The canonical workspace is an in-memory map (`workspace.NewHub`). Core
-   restart loses all file state + version counters; nodes then re-sync against an empty hub.
-   The journal is durable but the hub isn't rebuilt from it.
+2. ~~**Hub persistence.**~~ ✅ Done. The hub snapshots to `.avairy/hub.json` (atomic
+   temp+rename), restored on startup via `LoadHub`; persisted every 5s if dirty and on clean
+   shutdown. The seed NodeView calls `ResumeFromHub` so a restored hub isn't re-conflicted or
+   false-deleted (adopts versions only for files still present locally). *Future:* the snapshot
+   is one JSON blob (whole-tree rewrite); a git-backed / per-file store would scale better.
 
 3. **Conflict reconciliation routing.** Concurrent divergent edits are detected, journaled,
    and printed (`CONFLICT … needs reconciliation`), and `Hub.Resolve` exists — but nothing

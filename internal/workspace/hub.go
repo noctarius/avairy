@@ -16,14 +16,15 @@ import (
 	"sync"
 )
 
-// FileState is the canonical state of one path at the hub.
+// FileState is the canonical state of one path at the hub. The json tags pin the on-disk
+// snapshot format (see persist.go) so it stays stable across Go field renames.
 type FileState struct {
-	Path    string
-	Content []byte
-	Mode    fs.FileMode
-	Version uint64 // hub version; bumps on every accepted write
-	Writer  string // node/agent id of the last writer
-	Deleted bool
+	Path    string      `json:"path"`
+	Content []byte      `json:"content,omitempty"`
+	Mode    fs.FileMode `json:"mode"`
+	Version uint64      `json:"version"` // hub version; bumps on every accepted write
+	Writer  string      `json:"writer,omitempty"`
+	Deleted bool        `json:"deleted,omitempty"`
 }
 
 // Change is a node's proposed write to one path, edited from base version Base
@@ -52,10 +53,12 @@ type PushResult struct {
 	Conflict *Conflict
 }
 
-// Hub is the canonical, in-memory workspace store.
+// Hub is the canonical, in-memory workspace store. It can be snapshotted to / restored from
+// disk (see persist.go) so a core restart doesn't lose canonical state.
 type Hub struct {
 	mu    sync.Mutex
 	files map[string]*FileState
+	dirty bool // a write occurred since the last successful Save (skip idle persistence)
 }
 
 // NewHub returns an empty hub.
@@ -115,6 +118,7 @@ func (h *Hub) store(node string, c Change, v uint64) uint64 {
 		Writer:  node,
 		Deleted: c.Deleted,
 	}
+	h.dirty = true
 	return v
 }
 
