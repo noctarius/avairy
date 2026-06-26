@@ -205,6 +205,16 @@ Ranked roughly by value-to-effort within each group.
     the TLS material). Decisions to make: auth for the web endpoint, and whether it shares the
     single-operator model (#13) or is the path to multi-operator.
 
+18. **Detach the TUI from core (remote operator connection).** Today the TUI runs **in-process**:
+    `tui.Deps` holds direct pointers (`*bus.Bus`, `*board.Board`, `journal.Log`,
+    `*control.Approvals`), so the operator must be on the core machine. Add an **operator API** on
+    core — the journal stream + the operator actions (inject/steer, interrupt, allow/deny
+    approvals, `/commit`, token/join, fleet) over the network — and a TUI client that implements
+    `tui.Deps` against it, so `avairy-tui -core https://…` attaches to a remote core. This is the
+    **same API the web UI (#17) needs** (the web UI is remote by definition), so build it once and
+    serve both; reuse the control channel's TLS + auth (token/mTLS/join). The `Deps` indirection
+    already isolates the views from the transport, so the TUI rendering shouldn't need changes.
+
 ### Single operator
 
 13. The TUI is single-operator by design (v1). Multi-operator is out of scope for now.
