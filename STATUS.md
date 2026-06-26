@@ -82,9 +82,12 @@ Ranked roughly by value-to-effort within each group.
    version + the agent's rejected edit, since the node's SyncDown overwrites the local file
    with the hub version) — deduped per (agent, path, hub version). The agent merges and calls
    the `resolve_conflict(path, content)` MCP tool → `Hub.Resolve` lands it as the next version,
-   and both nodes converge on SyncDown. *Note:* the conflicting node's local edit IS overwritten
-   pending resolution, so the bus message is the agent's copy of its own side. Routing an
-   operator/seed conflict to the human (vs an agent) is a follow-up.
+   and both nodes converge on SyncDown. ✅ **Non-clobbering hold (file locking):** a rejected
+   push now writes **git-style 3-way markers** into the node's local file (the agent's edit is
+   the "ours" side — nothing lost), **locks** the path (SyncUp won't push markers, SyncDown won't
+   overwrite it even as the hub moves on), and adopts the hub version as base; the agent resolves
+   in place by removing the markers, which then pushes and converges. *Still open:* routing an
+   operator/seed conflict to the **human** (vs an agent) — #19.
 
 ### Gating — finish what's started
 
@@ -221,6 +224,14 @@ Ranked roughly by value-to-effort within each group.
     isolates the views from the transport, so TUI rendering shouldn't change. *Naming:* the new
     "serve without a local TUI" mode needs its own flag (e.g. `-serve` / `-no-tui`) — `-headless`
     is already taken (one-shot: send a message, print the journal, exit).
+
+19. **Route operator/seed (and git) conflicts to the human.** Conflicts are always handed to the
+    **agent** whose push was rejected. But some conflicts have no owning agent — the operator's
+    own **seed workspace** diverging from a node's edit, or a **git rebase/merge** conflict on
+    core's repo. Surface these in the TUI (a conflict view showing both sides / the markers) where
+    the human can **either resolve it themselves or delegate it to a local agent** ("agent, fix
+    the markers in X"). Builds on the marker machinery from #3; mainly needs seed-conflict
+    detection + a TUI affordance + an "assign conflict to agent" bus action.
 
 ### Single operator
 

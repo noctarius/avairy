@@ -244,8 +244,8 @@ func main() {
 		core.Approvals = approvals // one broker feeds both node agents and the operator TUI
 		core.Bundle = bundleFn     // serve the repo as a bundle for node mirrors (nil if no repo)
 		core.OnConflict = func(agentID, path string, hubVersion uint64, hubContent, yourContent []byte) {
-			body := fmt.Sprintf("CONFLICT on %s — another agent changed it (now hub v%d). Merge the two versions below and call resolve_conflict(path=%q, content=<merged>). Your local copy was overwritten with the hub version, so use YOUR EDIT from here.\n--- hub v%d ---\n%s\n--- YOUR EDIT ---\n%s",
-				path, hubVersion, path, hubVersion, truncateForBus(hubContent), truncateForBus(yourContent))
+			body := fmt.Sprintf("CONFLICT on %s — another agent changed it (now hub v%d). Your working copy now has git-style conflict markers (<<<<<<< your edit / ======= / >>>>>>> hub); edit %s to resolve them and remove the markers — it will then sync as the next version. (Or submit a merge directly with resolve_conflict.)",
+				path, hubVersion, path)
 			b.Publish("avairy", bus.Agent(agentID), body, agent.DeliverySteer)
 		}
 		// When a node enrolls, register its agent on the bus (identity, caps, inbox); deliver

@@ -3,8 +3,22 @@ package control
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+
+	"avairy/internal/workspace"
 )
+
+func read(t *testing.T, dir, rel string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(dir, rel))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
 
 // A node pulls the repo bundle over the channel; a missing repo on core 404s cleanly.
 func TestPullBundleOverWire(t *testing.T) {
@@ -48,6 +62,69 @@ func TestPullBundleOverWire(t *testing.T) {
 	}
 	if _, err := n.PullBundle(ctx, nil); err == nil {
 		t.Fatal("bundle provider error should surface")
+	}
+}
+
+// conflictedNodeB sets up a conflict: A publishes f.go@v1="A", B's divergent "B" is rejected and
+// its file gets 3-way markers. Returns the wired core/server/nodes and B's dir.
+func conflictedNodeB(t *testing.T) (*Core, *Node, *Node, string) {
+	t.Helper()
+	core, srv := newCoreServer(t)
+	dirA, dirB := t.TempDir(), t.TempDir()
+	writeFile(t, dirA, "f.go", "A")
+	writeFile(t, dirB, "f.go", "B")
+
+	nodeA := NewNode(srv.URL, "a")
+	nodeA.Enroll(core.CurrentToken(), "linux", nil)
+	nodeA.SyncUp(dirA) // f.go -> v1 ("A")
+
+	nodeB := NewNode(srv.URL, "b")
+	nodeB.Enroll(core.CurrentToken(), "linux", nil)
+	if c, _ := nodeB.SyncUp(dirB); len(c) != 1 { // push "B" from base 0 → conflict @v1
+		t.Fatalf("expected conflict, got %+v", c)
+	}
+	marked := read(t, dirB, "f.go")
+	if !workspace.HasConflictMarkers([]byte(marked)) || !strings.Contains(marked, "A") || !strings.Contains(marked, "B") {
+		t.Fatalf("expected 3-way markers with both sides, got:\n%s", marked)
+	}
+	// reuse dirA via a closure on nodeA — return what the tests need
+	t.Cleanup(srv.Close)
+	return core, nodeA, nodeB, dirB
+}
+
+// Editing a conflicted file marker-free resolves it: it unlocks, pushes from the adopted base,
+// and the other node converges.
+func TestNodeConflictResolveConverges(t *testing.T) {
+	_, nodeA, nodeB, dirB := conflictedNodeB(t)
+	dirA := t.TempDir()
+	// nodeA needs a dir for SyncDown; reconstruct its v1 state then pull the resolution.
+	writeFile(t, dirA, "f.go", "A")
+	nodeA.SyncDown(dirA) // align A's local with v1 (no-op content-wise)
+
+	writeFile(t, dirB, "f.go", "A+B merged") // agent removes markers, merges
+	if c, _ := nodeB.SyncUp(dirB); len(c) != 0 {
+		t.Fatalf("resolved push should not conflict, got %+v", c)
+	}
+	nodeA.SyncDown(dirA)
+	if got := read(t, dirA, "f.go"); got != "A+B merged" {
+		t.Fatalf("A did not converge on the merged content: %q", got)
+	}
+}
+
+// A conflicted (locked) file is not clobbered by SyncDown even when the hub moves on.
+func TestNodeConflictLockHoldsAgainstSyncDown(t *testing.T) {
+	_, nodeA, nodeB, dirB := conflictedNodeB(t)
+	marked := read(t, dirB, "f.go")
+
+	dirA := t.TempDir()
+	writeFile(t, dirA, "f.go", "A")
+	nodeA.SyncDown(dirA)
+	writeFile(t, dirA, "f.go", "A2") // hub moves to v2
+	nodeA.SyncUp(dirA)
+
+	nodeB.SyncDown(dirB) // must NOT overwrite B's in-progress markers
+	if got := read(t, dirB, "f.go"); got != marked {
+		t.Fatalf("locked conflicted file was clobbered:\n%s", got)
 	}
 }
 

@@ -38,6 +38,7 @@ type Node struct {
 	base        map[string]uint64
 	stamps      workspace.Stamps // last-synced file stamps, to skip unchanged files
 	ignore      workspace.Ignore
+	conflicts   map[string]bool // paths holding unresolved conflict markers (locked from sync)
 
 	reMu sync.Mutex // serializes re-enrollment so concurrent 401s don't stampede
 }
@@ -45,12 +46,13 @@ type Node struct {
 // NewNode returns a node client for the core control API at coreURL.
 func NewNode(coreURL, id string) *Node {
 	return &Node{
-		CoreURL: strings.TrimRight(coreURL, "/"),
-		HTTP:    http.DefaultClient,
-		ID:      id,
-		base:    make(map[string]uint64),
-		stamps:  make(workspace.Stamps),
-		ignore:  workspace.DefaultIgnore(),
+		CoreURL:   strings.TrimRight(coreURL, "/"),
+		HTTP:      http.DefaultClient,
+		ID:        id,
+		base:      make(map[string]uint64),
+		stamps:    make(workspace.Stamps),
+		ignore:    workspace.DefaultIgnore(),
+		conflicts: make(map[string]bool),
 	}
 }
 
@@ -101,6 +103,15 @@ func (n *Node) SyncUp(dir string) ([]SyncResult, error) {
 	changedSet := make(map[string]bool, len(changed))
 	for _, c := range changed {
 		changedSet[c.Path] = true
+		// A path holding unresolved conflict markers is LOCKED: don't push it (that would land
+		// the markers in the hub). When the agent edits it marker-free, it's resolved → unlock
+		// and push from the adopted base so it lands as the next version.
+		if workspace.HasConflictMarkers(c.Content) {
+			n.conflicts[c.Path] = true
+			n.stamps[c.Path] = stampOf[c.Path]
+			continue
+		}
+		delete(n.conflicts, c.Path)
 		wire = append(wire, SyncChange{Path: c.Path, Content: c.Content, Mode: uint32(c.Mode), Base: n.base[c.Path]})
 	}
 	// Files read but unchanged in content (metadata moved only): refresh their stamp now so we
@@ -111,7 +122,7 @@ func (n *Node) SyncUp(dir string) ([]SyncResult, error) {
 		}
 	}
 	for path, b := range n.base {
-		if !seen[path] {
+		if !seen[path] && !n.conflicts[path] { // a conflicted (held) file isn't a deletion
 			wire = append(wire, SyncChange{Path: path, Deleted: true, Base: b})
 		}
 	}
@@ -134,10 +145,32 @@ func (n *Node) SyncUp(dir string) ([]SyncResult, error) {
 				delete(n.stamps, r.Path) // a deletion
 			}
 		case r.Conflict:
+			// Write 3-way markers into the local file (the agent's edit is the "ours" side, so
+			// nothing is lost), adopt the hub version as base, and lock the path until resolved.
+			n.markConflict(dir, r)
 			conflicts = append(conflicts, r)
 		}
 	}
 	return conflicts, nil
+}
+
+// markConflict writes git-style conflict markers into a rejected file so the agent resolves it
+// in place, adopts the hub version as base, and locks the path from further sync until resolved.
+func (n *Node) markConflict(dir string, r SyncResult) {
+	full := filepath.Join(dir, filepath.FromSlash(r.Path))
+	local, err := os.ReadFile(full)
+	if err != nil {
+		return // file vanished; nothing to mark
+	}
+	marked := workspace.MergeMarkers(local, r.HubContent, r.HubVersion)
+	if err := os.WriteFile(full, marked, 0o644); err != nil {
+		return
+	}
+	n.conflicts[r.Path] = true
+	n.base[r.Path] = r.HubVersion // resolved edit will push from here → HubVersion+1
+	if info, e := os.Stat(full); e == nil {
+		n.stamps[r.Path] = workspace.FileStamp{Size: info.Size(), ModNano: info.ModTime().UnixNano(), Hash: workspace.HashContent(marked)}
+	}
 }
 
 // SyncDown pulls updates the node hasn't seen and applies them to dir.
@@ -156,6 +189,9 @@ func (n *Node) SyncDown(dir string) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	for _, f := range resp.Files {
+		if n.conflicts[f.Path] {
+			continue // LOCKED: the agent is resolving conflict markers here — don't clobber it
+		}
 		if err := workspace.ApplyFile(dir, workspace.FileState{
 			Path: f.Path, Content: f.Content, Mode: fs.FileMode(f.Mode), Version: f.Version, Deleted: f.Deleted,
 		}); err != nil {
