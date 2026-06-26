@@ -78,6 +78,9 @@ func main() {
 		}
 		*core = jb.Core
 		joinCA = jb.CA
+		if jb.Bus != "" && *coreMCP == "" {
+			*coreMCP = jb.Bus // so -family works from a join alone (needs the MCP bus base)
+		}
 		if jb.Token != "" {
 			*token = jb.Token
 		}

@@ -371,7 +371,7 @@ func main() {
 		// whenever the token is read or rotated, so "the pubcert travels with the token".
 		joinPath := filepath.Join(".avairy", "join")
 		writeJoin := func(tok string) {
-			jb := control.EncodeJoin(control.JoinBundle{Core: ctrlURL, CA: caPEM, Token: tok})
+			jb := control.EncodeJoin(control.JoinBundle{Core: ctrlURL, Bus: busBase, CA: caPEM, Token: tok})
 			_ = os.WriteFile(joinPath, []byte(jb), 0o600)
 		}
 		curToken := func() string {
@@ -697,6 +697,7 @@ func mintJoin(argv []string) {
 	fs := flag.NewFlagSet("mint-join", flag.ExitOnError)
 	id := fs.String("id", "", "node id (becomes the client cert CN) — required")
 	coreURL := fs.String("core", "", "control API URL the node will dial (https://…) — required")
+	busURL := fs.String("mcp", "", "MCP bus base URL to bundle (so -family works from the join alone)")
 	dir := fs.String("dir", ".avairy", "directory holding the CA (ca.crt/ca.key)")
 	_ = fs.Parse(argv)
 	if *id == "" || *coreURL == "" {
@@ -712,7 +713,7 @@ func mintJoin(argv []string) {
 		fail("mint-join: client cert", err)
 	}
 	fmt.Println(control.EncodeJoin(control.JoinBundle{
-		Core: *coreURL, CA: ca.CertPEM(), NodeID: *id, ClientCert: cert, ClientKey: key,
+		Core: *coreURL, Bus: *busURL, CA: ca.CertPEM(), NodeID: *id, ClientCert: cert, ClientKey: key,
 	}))
 }
 
