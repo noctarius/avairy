@@ -51,6 +51,7 @@ func main() {
 	family := flag.String("family", "", "spawn & drive the agent here: claude | codex | copilot | grok (empty = proxy only, run the agent yourself)")
 	model := flag.String("model", "", "model for the spawned agent (family default if empty)")
 	role := flag.String("role", "", "system prompt / role for the spawned agent")
+	gateEdits := flag.Bool("gate-edits", false, "also require operator approval for file edits (per-edit gating; allow-for-session avoids per-diff prompts)")
 	caFile := flag.String("ca", "", "PEM cert/CA to trust for an https core (self-signed/internal CA)")
 	insecure := flag.Bool("insecure", false, "skip TLS verification for an https core (DEV ONLY — exposes the channel to MITM)")
 	join := flag.String("join", "", "join string from core (carries core URL + CA + token or client cert); supplies -core/-token/-ca")
@@ -138,7 +139,7 @@ func main() {
 			os.Exit(1)
 		}
 		mux := http.NewServeMux()
-		mux.Handle("/gate", gating.HookHandler(gateDecider(n, *id)))
+		mux.Handle("/gate", gating.HookHandler(gateDecider(n, *id, *gateEdits)))
 		mux.Handle("/", h) // MCP proxy (serves /mcp)
 		go func() {
 			fmt.Printf("MCP proxy for agent %q at http://%s/mcp → %s (gate at /gate)\n", *id, *proxy, *coreMCP)
@@ -178,7 +179,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, "avairy-node: -family requires -core-mcp")
 			os.Exit(2)
 		}
-		if err := spawnAgent(ctx, n, *family, *id, *role, *model, *ws, *proxy, mirrorDir); err != nil {
+		if err := spawnAgent(ctx, n, *family, *id, *role, *model, *ws, *proxy, mirrorDir, *gateEdits); err != nil {
 			fmt.Fprintln(os.Stderr, "avairy-node: spawn agent:", err)
 			os.Exit(1)
 		}
@@ -281,7 +282,7 @@ func mirrorRole(ws, mirrorDir string) string {
 
 // spawnAgent starts an agent on this node wired to the local MCP proxy, ships its events to
 // the core journal, and injects inbound bus messages (pulled from core) into its session.
-func spawnAgent(ctx context.Context, n *control.Node, family, agentID, role, model, ws, proxy, mirrorDir string) error {
+func spawnAgent(ctx context.Context, n *control.Node, family, agentID, role, model, ws, proxy, mirrorDir string, gateEdits bool) error {
 	if role == "" {
 		role = defaultRole
 	}
@@ -295,7 +296,7 @@ func spawnAgent(ctx context.Context, n *control.Node, family, agentID, role, mod
 	proxyURL := "http://127.0.0.1:" + pport + "/mcp"
 	gateURL := "http://127.0.0.1:" + pport + "/gate"
 
-	ad, err := buildAdapter(family, gateURL, gateDecider(n, agentID))
+	ad, err := buildAdapter(family, gateURL, gateDecider(n, agentID, gateEdits))
 	if err != nil {
 		return err
 	}
@@ -407,8 +408,8 @@ func buildAdapter(family, gateURL string, dec gating.Decider) (agent.Adapter, er
 // (destructive commands, git mutations, installs) are routed to the human operator at core,
 // which blocks until the operator allows/denies (or it times out → deny). If core is
 // unreachable it fails closed. The verdict is logged so node-side activity is visible.
-func gateDecider(n *control.Node, agentID string) gating.Decider {
-	policy := gating.Policy{Approve: func(ctx context.Context, req gating.Request) (gating.Decision, error) {
+func gateDecider(n *control.Node, agentID string, gateEdits bool) gating.Decider {
+	policy := gating.Policy{GateEdits: gateEdits, Approve: func(ctx context.Context, req gating.Request) (gating.Decision, error) {
 		dec, err := n.RequestApproval(ctx, control.ApprovalRequest{
 			AgentID: agentID, Kind: string(req.Kind), Summary: req.Summary, Reason: req.Reason,
 		})

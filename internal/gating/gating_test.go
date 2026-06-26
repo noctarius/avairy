@@ -23,6 +23,30 @@ func TestGatedCommand(t *testing.T) {
 	}
 }
 
+// Edits are free by default but gated when GateEdits is set; reads are never gated.
+func TestPolicyGateEdits(t *testing.T) {
+	free := Policy{}
+	if d, _ := free.Decide(context.Background(), Request{Kind: ActionFileWrite, Summary: "main.go"}); d != Allow {
+		t.Fatalf("edits should be free by default, got %v", d)
+	}
+
+	var asked bool
+	gated := Policy{GateEdits: true, Approve: func(_ context.Context, _ Request) (Decision, error) {
+		asked = true
+		return Allow, nil
+	}}
+	if d, _ := gated.Decide(context.Background(), Request{Kind: ActionFileWrite, Summary: "main.go"}); d != Allow || !asked {
+		t.Fatalf("with GateEdits, an edit should go to the approver (asked=%v d=%v)", asked, d)
+	}
+	asked = false
+	if d, _ := gated.Decide(context.Background(), Request{Kind: ActionRead, Summary: "cat x"}); d != Allow || asked {
+		t.Fatalf("reads must never be gated (asked=%v d=%v)", asked, d)
+	}
+	if d, _ := (Policy{GateEdits: true}).Decide(context.Background(), Request{Kind: ActionFileWrite}); d != Deny {
+		t.Fatalf("gated edit with no approver should deny, got %v", d)
+	}
+}
+
 func TestPolicyFailsClosedWithoutApprover(t *testing.T) {
 	p := Policy{} // no approver
 	if d, _ := p.Decide(context.Background(), Request{Kind: ActionCommand, Summary: "go test"}); d != Allow {

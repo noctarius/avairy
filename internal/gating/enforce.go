@@ -20,6 +20,7 @@ type ActionKind string
 const (
 	ActionCommand   ActionKind = "command"    // shell/command execution
 	ActionFileWrite ActionKind = "file_write" // edit outside the free set
+	ActionRead      ActionKind = "read"       // read-only inspection (never gated)
 	ActionGitMutate ActionKind = "git_mutate" // commit/tag/push — core-only & signed (§9)
 	ActionCrossNode ActionKind = "cross_node" // action affecting another node
 	ActionInstall   ActionKind = "install"    // package install / sudo

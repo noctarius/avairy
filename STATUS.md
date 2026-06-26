@@ -194,16 +194,14 @@ Ranked roughly by value-to-effort within each group.
 
 ### Usability / driving work
 
-15. **Per-edit (and per-session) human approval of file edits.** Today `ActionFileWrite` is a
-    *free* action (`gating.Gated` returns false — "local edits are free"), so agent Edit/Write
-    runs and syncs with no review; the human's only acceptance gate is at the **commit**
-    (`request_commit`) boundary. Add an **opt-in** mode that gates file edits too — routed to the
-    Approvals tab like everything else (the broker already supports allow / deny / **allow-for-
-    session**, which is the fatigue mitigation: approve "edits by this agent" once per session
-    rather than every diff). Off by default (gating every edit is noisy); a flag (e.g.
-    `-gate-edits`) flips `ActionFileWrite` to gated. The plumbing exists — it's mostly the policy
-    toggle + the per-session grant keyed to file edits. (The deferred half of the edits-acceptance
-    discussion.)
+15. ~~**Per-edit (and per-session) human approval of file edits.**~~ ✅ Done. `-gate-edits`
+    (on both `avairy` and `avairy-node`) sets `Policy.GateEdits`, which routes `ActionFileWrite`
+    to the Approvals tab instead of auto-allowing. Per-session falls out of the broker's existing
+    **allow-for-session** (`a` in the TUI): approve "edits by this agent" once and the rest of the
+    session's edits auto-allow. Off by default. Precise per family: Claude (Edit/Write) and Codex
+    (fileChange) already classified edits as `ActionFileWrite`; ACP was over-broad (reads bucketed
+    as file writes), so reads now map to a new never-gated `ActionRead` — `-gate-edits` gates real
+    edits, not reads.
 
 16. **Blackboard — durable shared memory (§4/§8).** The design calls the blackboard + task board
     "the durable shared memory feeding both," but only the **task board** exists; there's no

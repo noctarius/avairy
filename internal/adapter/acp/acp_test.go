@@ -90,7 +90,14 @@ func TestPermToRequest(t *testing.T) {
 		t.Fatalf("delete should be force-gated: %+v", r)
 	}
 	if r := permToRequest("edit", "edit main.go", nil); r.Kind != gating.ActionFileWrite {
-		t.Fatalf("edit should be free: %+v", r)
+		t.Fatalf("edit should be a file write (gated only with -gate-edits): %+v", r)
+	}
+	// Reads are ActionRead (never gated) — not bucketed as file writes, so -gate-edits won't
+	// catch them.
+	for _, kind := range []string{"read", "search", "fetch", "think", "other"} {
+		if r := permToRequest(kind, "look", nil); r.Kind != gating.ActionRead {
+			t.Fatalf("%q should be ActionRead, got %+v", kind, r)
+		}
 	}
 }
 

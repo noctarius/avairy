@@ -71,6 +71,7 @@ func main() {
 	tlsCert := flag.String("tls-cert", "", "PEM cert file: serve the node control channel over TLS (recommended for remote nodes)")
 	tlsKey := flag.String("tls-key", "", "PEM private key file for -tls-cert")
 	tlsAuto := flag.Bool("tls-auto", false, "self-manage a CA under .avairy and serve the control channel over TLS (the CA travels to nodes in the join bundle; enables mTLS)")
+	gateEdits := flag.Bool("gate-edits", false, "also require operator approval for file edits (per-edit gating; allow-for-session avoids per-diff prompts)")
 	flag.Parse()
 
 	// Durable, append-only journal (DESIGN.md §10) under .avairy/; falls back to memory-only.
@@ -357,7 +358,7 @@ func main() {
 
 	if runLiveAlice {
 		mcpSrv.RegisterAgent("alice", []string{"backend"}, caps)
-		startLiveAlice(ctx, *family, *model, busURL, b, jrnl, approvals)
+		startLiveAlice(ctx, *family, *model, busURL, b, jrnl, approvals, *gateEdits)
 	}
 	if runMockAlice {
 		mcpSrv.RegisterAgent("alice", []string{"backend"}, caps)
@@ -412,7 +413,7 @@ const aliceRole = "You are 'alice', a backend engineer agent in the avairy multi
 	"Collaborate ONLY through the avairy MCP tools: post_task, claim_task, list_tasks, " +
 	"send_message, read_inbox, report_status, git_history, request_commit, scratch_worktree, resolve_conflict, fresh_look. Be terse and do exactly what you are asked, then stop."
 
-func startLiveAlice(ctx context.Context, family, model, busURL string, b *bus.Bus, jrnl journal.Log, approvals *control.Approvals) {
+func startLiveAlice(ctx context.Context, family, model, busURL string, b *bus.Bus, jrnl journal.Log, approvals *control.Approvals, gateEdits bool) {
 	ws, err := os.MkdirTemp("", "avairy-alice-")
 	if err != nil {
 		fail("workspace", err)
@@ -439,18 +440,18 @@ func startLiveAlice(ctx context.Context, family, model, busURL string, b *bus.Bu
 		cx := codex.New()
 		// Real gating with a human in the loop: app-server approvals route through the §7
 		// policy; gated actions block on the operator's allow/deny in the TUI approvals view.
-		cx.Approve = codex.ApproverFromDecider(localGateDecider(approvals, "alice"))
+		cx.Approve = codex.ApproverFromDecider(localGateDecider(approvals, "alice", gateEdits))
 		ad = cx
 	case "copilot":
-		ad = copilot.New(localGateDecider(approvals, "alice")) // ACP; needs `copilot login`
+		ad = copilot.New(localGateDecider(approvals, "alice", gateEdits)) // ACP; needs `copilot login`
 	case "grok":
-		ad = grok.New(localGateDecider(approvals, "alice")) // ACP; needs xAI auth
+		ad = grok.New(localGateDecider(approvals, "alice", gateEdits)) // ACP; needs xAI auth
 	default: // claude
 		ca := claudecode.New()
 		// Real gating, same as a node: serve a local /gate and register a PreToolUse hook for
 		// every tool call (free actions allowed without a prompt, gated ones routed to the
 		// operator's Approvals tab). The hook is the permission system — no --allowedTools.
-		gateURL, err := startLocalGate(localGateDecider(approvals, "alice"))
+		gateURL, err := startLocalGate(localGateDecider(approvals, "alice", gateEdits))
 		if err != nil {
 			fail("local gate", err)
 		}
@@ -472,8 +473,8 @@ func startLiveAlice(ctx context.Context, family, model, busURL string, b *bus.Bu
 // localGateDecider gates a local agent's actions via the §7 policy, routing gated ones to the
 // operator (TUI approvals) through the shared broker — the in-process twin of the node's
 // gateDecider. Free actions pass; gated actions block until allowed/denied (timeout → deny).
-func localGateDecider(approvals *control.Approvals, agentID string) gating.Decider {
-	policy := gating.Policy{Approve: func(ctx context.Context, req gating.Request) (gating.Decision, error) {
+func localGateDecider(approvals *control.Approvals, agentID string, gateEdits bool) gating.Decider {
+	policy := gating.Policy{GateEdits: gateEdits, Approve: func(ctx context.Context, req gating.Request) (gating.Decision, error) {
 		dec := approvals.Ask(ctx, control.Approval{
 			AgentID: agentID, Kind: string(req.Kind), Summary: req.Summary, Reason: req.Reason,
 		})

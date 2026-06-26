@@ -124,8 +124,10 @@ func permToRequest(kind, title string, rawInput map[string]any) gating.Request {
 		return gating.Request{Kind: gating.ActionCommand, Summary: cmd}
 	case "delete":
 		return gating.Request{Kind: gating.ActionGitMutate, Summary: title} // force-gated
-	default: // read, edit, move, search, fetch, think, other → treated as free
-		return gating.Request{Kind: gating.ActionFileWrite, Summary: title}
+	case "edit", "move":
+		return gating.Request{Kind: gating.ActionFileWrite, Summary: title} // gated only with -gate-edits
+	default: // read, search, fetch, think, other → read-only, never gated
+		return gating.Request{Kind: gating.ActionRead, Summary: title}
 	}
 }
 
