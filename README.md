@@ -150,6 +150,48 @@ channels between machines itself.
   avairy mint-join -id linux-box -core https://core:7700  # issue an mTLS client-cert join (no token)
   ```
 
+#### Walkthrough: a TLS node with `-tls-auto`
+
+**1. On the operator machine**, start core with TLS on and a workspace to share:
+
+```sh
+avairy -control-addr 0.0.0.0:7700 -mcp-addr 0.0.0.0:7701 -advertise <operator-ip> \
+       -tls-auto -workspace ./myproject
+```
+
+Core generates a CA + server cert under `.avairy/` (persisted across restarts) and serves the
+control channel **and** the MCP bus over `https`. It writes a join bundle to `.avairy/join`
+carrying the `https` core URL, the CA to trust, and the current enroll token. (Headless prints the
+URLs/token/join paths; the attached TUI shows them in its control line.)
+
+**2. Get the join string to the node.** It's one line of text — copy it however you like:
+
+```sh
+cat .avairy/join        # → a long base64 string; scp it, paste it, etc.
+```
+
+**3. On the remote machine**, join with that one string — no `-core`/`-token`/`-ca` needed, and the
+node trusts core's self-signed CA automatically because it travels in the bundle:
+
+```sh
+avairy-node -join-file ./join -id linux-box -workspace ./repo -family claude
+```
+
+That's it — the node enrolls over TLS, syncs `./repo`, and (with `-family`) spawns the agent.
+
+**mTLS variant (no token).** Mint a client-cert join on core and hand *that* to the node instead;
+it authenticates by certificate (identity = `-id`) and auto-re-enrolls if core restarts:
+
+```sh
+# on core:
+avairy mint-join -id linux-box -core https://<operator-ip>:7700 > linux-box.join
+# on the node:
+avairy-node -join-file ./linux-box.join -workspace ./repo -family claude
+```
+
+> Dev shortcut: for a quick `https` test without distributing the CA, a node can use
+> `-core https://… -token <tok> -insecure` to skip verification — never do this off localhost.
+
 ## Remote operator console (TUI or browser)
 
 The operator console isn't tied to the core machine. When core serves the control API
