@@ -15,17 +15,35 @@ import (
 // the default system roots suffice and no client override is required. insecure skips
 // verification entirely (dev only — it exposes the channel to MITM, defeating the point).
 func TLSClient(caFile string, insecure bool) (*http.Client, error) {
-	tc := &tls.Config{InsecureSkipVerify: insecure} //nolint:gosec // insecure is an explicit opt-in
+	var caPEM []byte
 	if caFile != "" {
-		pem, err := os.ReadFile(caFile)
+		b, err := os.ReadFile(caFile)
 		if err != nil {
 			return nil, err
 		}
+		caPEM = b
+	}
+	return TLSClientPEM(caPEM, insecure, nil, nil)
+}
+
+// TLSClientPEM builds a node's HTTP client from in-memory PEM (as carried in a join bundle):
+// caPEM is the CA to trust (empty → system roots); clientCert/clientKey, if set, are presented
+// for mTLS so a valid client cert authenticates the node in place of an enrollment token.
+func TLSClientPEM(caPEM []byte, insecure bool, clientCert, clientKey []byte) (*http.Client, error) {
+	tc := &tls.Config{InsecureSkipVerify: insecure} //nolint:gosec // insecure is an explicit opt-in
+	if len(caPEM) > 0 {
 		pool := x509.NewCertPool()
-		if !pool.AppendCertsFromPEM(pem) {
-			return nil, fmt.Errorf("control: no certificates found in %s", caFile)
+		if !pool.AppendCertsFromPEM(caPEM) {
+			return nil, fmt.Errorf("control: no certificates found in CA PEM")
 		}
 		tc.RootCAs = pool
+	}
+	if len(clientCert) > 0 && len(clientKey) > 0 {
+		cert, err := tls.X509KeyPair(clientCert, clientKey)
+		if err != nil {
+			return nil, fmt.Errorf("control: bad client cert: %w", err)
+		}
+		tc.Certificates = []tls.Certificate{cert}
 	}
 	return &http.Client{Transport: &http.Transport{TLSClientConfig: tc}}, nil
 }

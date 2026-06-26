@@ -61,6 +61,7 @@ type ControlInfo struct {
 	Warn         string
 	CurrentToken func() string // the operator-facing token for the next node (auto-regenerates on use)
 	NewToken     func() string // rotate to a fresh token (ctrl+e)
+	JoinFile     string        // path to the one-string join bundle (core URL + CA + token) for a new node
 }
 
 const (
@@ -533,6 +534,9 @@ func (m *Model) render() string {
 	controlLines := 0
 	if m.control != nil {
 		line := fmt.Sprintf("control %s · bus %s · enroll token: %s", m.control.ControlURL, m.control.BusBase, m.token)
+		if m.control.JoinFile != "" {
+			line += " · join: " + m.control.JoinFile
+		}
 		b.WriteString(ctrlStyle.Render(truncate(line, m.width)) + "\n")
 		controlLines++
 		if m.control.Warn != "" {

@@ -167,14 +167,28 @@ func (c *Core) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &req) {
 		return
 	}
-	if req.NodeID == "" || req.Token == "" {
-		http.Error(w, "invalid enrollment token", http.StatusUnauthorized)
+	if req.NodeID == "" {
+		http.Error(w, "invalid enrollment: missing node id", http.StatusUnauthorized)
+		return
+	}
+	// mTLS path: a verified client cert authenticates the node by its SAN, no token needed.
+	certID := verifiedNodeID(r)
+	if certID == "" && req.Token == "" {
+		http.Error(w, "invalid enrollment: token or client certificate required", http.StatusUnauthorized)
+		return
+	}
+	if certID != "" && certID != req.NodeID {
+		http.Error(w, "client certificate identity does not match node id", http.StatusUnauthorized)
 		return
 	}
 
 	c.mu.Lock()
 	accepted, rejoin := false, false
 	switch {
+	case certID != "":
+		// Authenticated by client cert: accept; rejoin if we've seen this node before.
+		_, known := c.nodes[req.NodeID]
+		accepted, rejoin = true, known
 	case req.Token == c.pending:
 		// First use: bind the token to this node and regenerate the operator-facing token.
 		c.bound[req.Token] = req.NodeID
@@ -204,6 +218,16 @@ func (c *Core) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		c.OnEnroll(req.NodeID, req.Caps)
 	}
 	writeJSON(w, EnrollResponse{SessionToken: session})
+}
+
+// verifiedNodeID returns the node id from a verified client cert (mTLS), or "" if none was
+// presented. VerifiedChains is non-empty only when the TLS layer verified the cert against the
+// configured ClientCAs, so trusting it here is safe.
+func verifiedNodeID(r *http.Request) string {
+	if r.TLS == nil || len(r.TLS.VerifiedChains) == 0 {
+		return ""
+	}
+	return nodeIDFromCert(r.TLS.VerifiedChains[0][0])
 }
 
 func (c *Core) handleInbox(nodeID string, w http.ResponseWriter, r *http.Request) {

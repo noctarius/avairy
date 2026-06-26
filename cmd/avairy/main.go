@@ -10,6 +10,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"net"
@@ -45,6 +46,12 @@ func main() {
 		gating.RunHookShim(os.Args[2:])
 		return
 	}
+	// `avairy mint-join -id <node> -core <https-url>` issues an mTLS client-cert join (no token)
+	// from the self-managed CA under .avairy, for a node to authenticate by certificate.
+	if len(os.Args) > 1 && os.Args[1] == "mint-join" {
+		mintJoin(os.Args[2:])
+		return
+	}
 
 	demo := flag.Bool("demo", false, "spawn mock agents (alice, bob) for trying the loop / tests — off by default")
 	live := flag.Bool("live", false, "run 'alice' as a real agent on the MCP bus")
@@ -57,6 +64,7 @@ func main() {
 	workspaceDir := flag.String("workspace", "", "operator project dir to seed/sync into the canonical hub (with -control-addr)")
 	tlsCert := flag.String("tls-cert", "", "PEM cert file: serve the node control channel over TLS (recommended for remote nodes)")
 	tlsKey := flag.String("tls-key", "", "PEM private key file for -tls-cert")
+	tlsAuto := flag.Bool("tls-auto", false, "self-manage a CA under .avairy and serve the control channel over TLS (the CA travels to nodes in the join bundle; enables mTLS)")
 	flag.Parse()
 
 	// Durable, append-only journal (DESIGN.md §10) under .avairy/; falls back to memory-only.
@@ -200,34 +208,77 @@ func main() {
 			}
 			return out
 		}
-		controlTLS := *tlsCert != "" && *tlsKey != ""
-		go func() {
-			var serr error
-			if controlTLS {
-				serr = http.ListenAndServeTLS(*controlAddr, *tlsCert, *tlsKey, core.Handler())
-			} else {
-				serr = http.ListenAndServe(*controlAddr, core.Handler())
+		ctrlScheme := "http"
+		serve := func() error {
+			return http.ListenAndServe(*controlAddr, core.Handler())
+		}
+		var caPEM []byte
+		ctrlHost := hostOf(advertised(*advertise, *controlAddr))
+		switch {
+		case *tlsAuto:
+			ca, cerr := control.EnsureCA(".avairy")
+			if cerr != nil {
+				fail("ca", cerr)
 			}
-			if serr != nil {
-				fmt.Fprintln(os.Stderr, "control server:", serr)
+			cert, cerr := ca.ServerTLS([]string{ctrlHost, "127.0.0.1", "localhost", "::1"})
+			if cerr != nil {
+				fail("server cert", cerr)
+			}
+			caPEM = ca.CertPEM()
+			ctrlScheme = "https"
+			srv := &http.Server{
+				Addr:    *controlAddr,
+				Handler: core.Handler(),
+				TLSConfig: &tls.Config{
+					Certificates: []tls.Certificate{cert},
+					ClientAuth:   tls.VerifyClientCertIfGiven, // token OR client-cert auth
+					ClientCAs:    ca.Pool(),
+				},
+			}
+			serve = func() error {
+				return srv.ListenAndServeTLS("", "")
+			}
+		case *tlsCert != "" && *tlsKey != "":
+			ctrlScheme = "https"
+			serve = func() error {
+				return http.ListenAndServeTLS(*controlAddr, *tlsCert, *tlsKey, core.Handler())
+			}
+		}
+		go func() {
+			if err := serve(); err != nil {
+				fmt.Fprintln(os.Stderr, "control server:", err)
 			}
 		}()
 		go core.RunLiveness(ctx) // mark nodes offline when heartbeats lapse
-		ctrlScheme := "http"
-		if controlTLS {
-			ctrlScheme = "https"
-		}
+
 		ctrlURL := ctrlScheme + "://" + advertised(*advertise, *controlAddr)
 		busBase := "http://" + advertised(*advertise, ln.Addr().String())
 		warn := ""
 		if unreachableHost(hostOf(advertised(*advertise, ln.Addr().String()))) {
 			warn = "host not reachable from other machines — pass -advertise <ip/host> and bind -control-addr/-mcp-addr to 0.0.0.0:PORT"
 		}
-		ctrlInfo = &tui.ControlInfo{ControlURL: ctrlURL, BusBase: busBase, Warn: warn, CurrentToken: core.CurrentToken, NewToken: core.NewPendingToken}
-		// Under the TUI's alt-screen, stdout is hidden — so the token is shown in the TUI.
+		// Write a one-string join bundle (core URL + CA + token) for the next node, refreshed
+		// whenever the token is read or rotated, so "the pubcert travels with the token".
+		joinPath := filepath.Join(".avairy", "join")
+		writeJoin := func(tok string) {
+			jb := control.EncodeJoin(control.JoinBundle{Core: ctrlURL, CA: caPEM, Token: tok})
+			_ = os.WriteFile(joinPath, []byte(jb), 0o600)
+		}
+		curToken := func() string {
+			t := core.CurrentToken()
+			writeJoin(t)
+			return t
+		}
+		newToken := func() string {
+			t := core.NewPendingToken()
+			writeJoin(t)
+			return t
+		}
+		ctrlInfo = &tui.ControlInfo{ControlURL: ctrlURL, BusBase: busBase, Warn: warn, CurrentToken: curToken, NewToken: newToken, JoinFile: joinPath}
+		// Under the TUI's alt-screen, stdout is hidden — so the token/join is shown in the TUI.
 		// Only print here when there's no TUI (headless).
 		if *headless != "" {
-			fmt.Printf("control API:  %s\nMCP bus base: %s\nenroll token: %s\n", ctrlURL, busBase, core.CurrentToken())
+			fmt.Printf("control API:  %s\nMCP bus base: %s\nenroll token: %s\njoin file:    %s\n", ctrlURL, busBase, curToken(), joinPath)
 			if warn != "" {
 				fmt.Println("warning:", warn)
 			}
@@ -413,6 +464,31 @@ func truncateForBus(b []byte) string {
 		return string(b)
 	}
 	return string(b[:max]) + "\n… (truncated)"
+}
+
+// mintJoin issues an mTLS client-cert join bundle from the self-managed CA (no enrollment
+// token): the node it's given to authenticates by certificate. Prints the join string.
+func mintJoin(argv []string) {
+	fs := flag.NewFlagSet("mint-join", flag.ExitOnError)
+	id := fs.String("id", "", "node id (becomes the client cert CN) — required")
+	coreURL := fs.String("core", "", "control API URL the node will dial (https://…) — required")
+	dir := fs.String("dir", ".avairy", "directory holding the CA (ca.crt/ca.key)")
+	_ = fs.Parse(argv)
+	if *id == "" || *coreURL == "" {
+		fmt.Fprintln(os.Stderr, "mint-join: -id and -core are required")
+		os.Exit(2)
+	}
+	ca, err := control.EnsureCA(*dir)
+	if err != nil {
+		fail("mint-join: ca", err)
+	}
+	cert, key, err := ca.ClientTLS(*id)
+	if err != nil {
+		fail("mint-join: client cert", err)
+	}
+	fmt.Println(control.EncodeJoin(control.JoinBundle{
+		Core: *coreURL, CA: ca.CertPEM(), NodeID: *id, ClientCert: cert, ClientKey: key,
+	}))
 }
 
 func startMock(ctx context.Context, id string, b *bus.Bus, jrnl journal.Log) {

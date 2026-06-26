@@ -96,11 +96,19 @@ Ranked roughly by value-to-effort within each group.
 
 ### Robustness / operational
 
-8. ~~**Channel TLS.**~~ ✅ Done for the control channel. Core serves it over TLS with
-   `-tls-cert`/`-tls-key`; the node trusts an https core via `-ca <pem>` (self-signed/internal)
-   or system roots (public cert), with `-insecure` for dev. Enrollment tokens + all file-sync
-   content are now encryptable. *Still plain:* the MCP bus — it's dual-use with loopback local
-   agents, so TLS there needs a separate listener (or agent trust config); follow-up.
+8. ~~**Channel TLS.**~~ ✅ Done for the control channel, with self-managed CA + mTLS:
+   - `-tls-cert`/`-tls-key` for operator-supplied certs, or **`-tls-auto`**: core generates a
+     self-signed CA (persisted at `.avairy/ca.{crt,key}`, stable across restarts) and issues its
+     own server cert.
+   - **Join bundle**: core writes `.avairy/join` — one base64 string carrying core URL + CA
+     pubcert + token. The node consumes it with `-join`/`-join-file` (so the CA travels with the
+     token; no cert files copied by hand). TUI shows the join path.
+   - **mTLS as an alternative to the token**: `avairy mint-join -id <node> -core <url>` issues a
+     CA-signed client cert (node id in a URI SAN, `avairy:<id>`) embedded in a join; the node
+     authenticates by certificate (core does VerifyClientCertIfGiven and enrolls by the SAN id,
+     no token). `-ca`/`-insecure` remain for manual/dev trust.
+   - *Still plain:* the MCP bus — dual-use with loopback local agents, so TLS there needs a
+     separate listener (or agent trust config); follow-up.
 
 9. ~~**Dead-node detection.**~~ ✅ Done. `Core.RunLiveness` marks a node offline when its
    heartbeats lapse past `LivenessTimeout` (15s) and online again on return, journaling each

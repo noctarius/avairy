@@ -17,6 +17,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -52,10 +53,42 @@ func main() {
 	role := flag.String("role", "", "system prompt / role for the spawned agent")
 	caFile := flag.String("ca", "", "PEM cert/CA to trust for an https core (self-signed/internal CA)")
 	insecure := flag.Bool("insecure", false, "skip TLS verification for an https core (DEV ONLY — exposes the channel to MITM)")
+	join := flag.String("join", "", "join string from core (carries core URL + CA + token or client cert); supplies -core/-token/-ca")
+	joinFile := flag.String("join-file", "", "file containing a join string (e.g. core's .avairy/join)")
 	flag.Parse()
 
-	if *core == "" || *token == "" || *id == "" {
-		fmt.Fprintln(os.Stderr, "avairy-node: -core, -token and -id are required")
+	// A join bundle supplies core URL + how to trust/authenticate in one string, overriding the
+	// individual flags (DESIGN.md §4). It carries either an enrollment token or an mTLS client cert.
+	var clientCertPEM, clientKeyPEM, joinCA []byte
+	if *join != "" || *joinFile != "" {
+		raw := *join
+		if raw == "" {
+			b, err := os.ReadFile(*joinFile)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "avairy-node: join-file:", err)
+				os.Exit(1)
+			}
+			raw = strings.TrimSpace(string(b))
+		}
+		jb, err := control.DecodeJoin(raw)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "avairy-node:", err)
+			os.Exit(1)
+		}
+		*core = jb.Core
+		joinCA = jb.CA
+		if jb.Token != "" {
+			*token = jb.Token
+		}
+		if jb.NodeID != "" {
+			*id = jb.NodeID // mTLS: id must match the client cert's SAN
+		}
+		clientCertPEM, clientKeyPEM = jb.ClientCert, jb.ClientKey
+	}
+
+	mtls := len(clientCertPEM) > 0
+	if *core == "" || *id == "" || (*token == "" && !mtls) {
+		fmt.Fprintln(os.Stderr, "avairy-node: need -core and -id, plus -token (or a join with a client cert)")
 		os.Exit(2)
 	}
 
@@ -69,9 +102,17 @@ func main() {
 	}
 
 	n := control.NewNode(*core, *id)
-	// Trust config for an https core: a CA/cert PEM the node trusts, or insecure (dev). With a
-	// publicly-trusted cert neither is needed (system roots apply).
-	if *caFile != "" || *insecure {
+	// TLS trust + (optional) mTLS client identity. A join's CA/client-cert take precedence; else
+	// -ca / -insecure. With a publicly-trusted cert and no client cert, none of this is needed.
+	switch {
+	case len(joinCA) > 0 || mtls:
+		client, err := control.TLSClientPEM(joinCA, *insecure, clientCertPEM, clientKeyPEM)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "avairy-node: tls:", err)
+			os.Exit(1)
+		}
+		n.HTTP = client
+	case *caFile != "" || *insecure:
 		client, err := control.TLSClient(*caFile, *insecure)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "avairy-node: tls:", err)
