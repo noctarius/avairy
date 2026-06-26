@@ -187,6 +187,15 @@ Ranked roughly by value-to-effort within each group.
     toggle + the per-session grant keyed to file edits. (The deferred half of the edits-acceptance
     discussion.)
 
+16. **Blackboard — durable shared memory (§4/§8).** The design calls the blackboard + task board
+    "the durable shared memory feeding both," but only the **task board** exists; there's no
+    free-form shared memory. A `board.Task` has no context/brief field, so a task carries no
+    initial context beyond its title — context today comes only from the synced workspace + bus
+    messages. Add a blackboard: keyed, journaled entries with MCP tools (e.g. `note(key, text)` /
+    `read_notes(prefix?)`), so the human or an agent can seed durable context, a task can point at
+    relevant notes, and **`fresh_look`** can curate its clean context from the blackboard (its
+    prompt is hardcoded to the task board today). Journal-backed, so it resumes like the board.
+
 ### Single operator
 
 13. The TUI is single-operator by design (v1). Multi-operator is out of scope for now.
