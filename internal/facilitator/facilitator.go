@@ -12,7 +12,6 @@ package facilitator
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 
@@ -225,7 +224,9 @@ func signature(ev agent.Event) string {
 	switch ev.Type {
 	case agent.EventToolUse:
 		if ev.Tool != nil {
-			return "tool:" + ev.Tool.Name + ":" + fmt.Sprint(ev.Tool.Input)
+			// Key on the full action (tool + identifying arg), so reading 100 different files
+			// is 100 distinct steps, not a loop — only the *same* action repeated counts.
+			return "tool:" + agent.ToolSummary(ev.Tool)
 		}
 	case agent.EventText:
 		return "text:" + ev.Text

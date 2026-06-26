@@ -191,6 +191,7 @@ func spawnAgent(ctx context.Context, n *control.Node, family, agentID, role, mod
 			r := control.AgentEventReport{AgentID: agentID, Type: string(ev.Type), Text: ev.Text}
 			if ev.Tool != nil {
 				r.Tool = ev.Tool.Name
+				r.ToolInput = agent.TrimInput(ev.Tool.Input) // ship the args so core sees what the agent did
 			}
 			if ev.Usage != nil {
 				r.CostUSD = ev.Usage.CostUSD

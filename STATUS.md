@@ -24,6 +24,15 @@ land. Section references (§N) point at DESIGN.md.
 
 ## Backlog
 
+0. ~~**Tool actions carried & shown with detail.**~~ ✅ Done. Tool calls now surface their
+   identifying arg — `Bash: go test ./...`, `Read src/main.go` — in the TUI (`agent.ToolSummary`)
+   instead of a bare repeated "Bash"/"Read". The node ships the (trimmed) tool input over the
+   wire (`agent.TrimInput` drops file bodies/diffs), which it previously dropped — so remote
+   agents no longer look like they're doing nothing, and loop detection keys on the full action
+   (reading 100 different files is 100 steps, not a loop). *Still thin:* ACP (Copilot/Grok)
+   adapters emit the tool name only — args sit in `Raw` and aren't mapped yet.
+
+
 Ranked roughly by value-to-effort within each group.
 
 ### Designed but not built (large)

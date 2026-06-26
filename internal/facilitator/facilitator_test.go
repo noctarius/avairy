@@ -110,6 +110,20 @@ func TestObserve_DebouncesRepeatedBlocked(t *testing.T) {
 	}
 }
 
+// Reading many *different* files is not a loop — only the same action repeated is. (Regression:
+// remote agents used to lose tool args, making every Read look identical.)
+func TestObserve_DifferentFilesAreNotALoop(t *testing.T) {
+	var n int
+	f := New(bus.New(journal.NewMemory()), RosterFunc(func() []Agent { return roster }), countNudger{&n})
+	for _, path := range []string{"a.go", "b.go", "c.go", "d.go"} {
+		f.Observe(journal.Record{Kind: journal.KindAgentEvent, Actor: "linbot",
+			Data: agent.Event{Type: agent.EventToolUse, Tool: &agent.ToolCall{Name: "Read", Input: map[string]any{"file_path": path}}}})
+	}
+	if n != 0 {
+		t.Fatalf("reading distinct files should not trip the loop detector, got %d nudges", n)
+	}
+}
+
 // Loop detection fires only after loopN identical consecutive steps.
 func TestObserve_LoopDetection(t *testing.T) {
 	j := journal.NewMemory()

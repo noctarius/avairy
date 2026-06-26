@@ -393,11 +393,7 @@ func (m *Model) apply(rec journal.Record) {
 				m.addConv(fmt.Sprintf("%s: %s", rec.Actor, ev.Text))
 			case agent.EventToolUse:
 				a.status = "working"
-				name := ""
-				if ev.Tool != nil {
-					name = ev.Tool.Name
-				}
-				m.addConv(fmt.Sprintf("%s ⚙ %s", rec.Actor, name))
+				m.addConv(fmt.Sprintf("%s ⚙ %s", rec.Actor, agent.ToolSummary(ev.Tool)))
 			case agent.EventTurnDone:
 				a.status = "idle"
 				if ev.Usage != nil {

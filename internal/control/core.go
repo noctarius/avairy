@@ -190,7 +190,7 @@ func (c *Core) handleEvents(nodeID string, w http.ResponseWriter, r *http.Reques
 	for _, e := range req.Events {
 		ev := agent.Event{Type: agent.EventType(e.Type), Text: e.Text}
 		if e.Tool != "" {
-			ev.Tool = &agent.ToolCall{Name: e.Tool}
+			ev.Tool = &agent.ToolCall{Name: e.Tool, Input: e.ToolInput}
 		}
 		if e.CostUSD != 0 {
 			ev.Usage = &agent.Usage{CostUSD: e.CostUSD}

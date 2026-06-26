@@ -62,11 +62,12 @@ type InboxPullResponse struct {
 // AgentEventReport is a normalized agent stream event shipped to the core journal so a
 // remote agent's activity shows in the operator TUI.
 type AgentEventReport struct {
-	AgentID string  `json:"agentId"`
-	Type    string  `json:"type"`
-	Text    string  `json:"text,omitempty"`
-	Tool    string  `json:"tool,omitempty"`
-	CostUSD float64 `json:"costUsd,omitempty"`
+	AgentID   string         `json:"agentId"`
+	Type      string         `json:"type"`
+	Text      string         `json:"text,omitempty"`
+	Tool      string         `json:"tool,omitempty"`
+	ToolInput map[string]any `json:"toolInput,omitempty"` // trimmed (agent.TrimInput) — keeps command/file_path, drops bodies
+	CostUSD   float64        `json:"costUsd,omitempty"`
 }
 
 // EventsRequest carries a batch of agent events.
