@@ -101,6 +101,32 @@ func (ig Ignore) Match(rel string) bool {
 	return false
 }
 
+// entryPayload returns the syncable content and mode for a directory entry: a regular file's
+// bytes (mode = perm bits), or a symlink's target path (mode carries fs.ModeSymlink, so the
+// other end recreates a link rather than a file). ok is false for entries avairy doesn't sync
+// (directories, sockets, devices). Symlinks are NOT followed — the link itself is replicated.
+func entryPayload(p string, d fs.DirEntry) (content []byte, mode fs.FileMode, ok bool, err error) {
+	if d.Type()&fs.ModeSymlink != 0 {
+		target, e := os.Readlink(p)
+		if e != nil {
+			return nil, 0, false, e
+		}
+		return []byte(target), fs.ModeSymlink | 0o777, true, nil
+	}
+	if d.Type().IsRegular() {
+		b, e := os.ReadFile(p)
+		if e != nil {
+			return nil, 0, false, e
+		}
+		info, e := d.Info()
+		if e != nil {
+			return nil, 0, false, e
+		}
+		return b, info.Mode().Perm(), true, nil
+	}
+	return nil, 0, false, nil // dir / socket / device — not synced
+}
+
 // normalizeForTransit LF-normalizes text content; binary content (contains NUL) is left as-is.
 func normalizeForTransit(b []byte) []byte {
 	if bytes.IndexByte(b, 0) >= 0 {
@@ -134,18 +160,14 @@ func Scan(dir string, ig Ignore) ([]Change, error) {
 			}
 			return nil
 		}
-		if d.IsDir() || !d.Type().IsRegular() {
+		content, mode, ok, rerr := entryPayload(p, d)
+		if rerr != nil {
+			return rerr
+		}
+		if !ok {
 			return nil
 		}
-		content, rerr := os.ReadFile(p)
-		if rerr != nil {
-			return rerr
-		}
-		info, rerr := d.Info()
-		if rerr != nil {
-			return rerr
-		}
-		out = append(out, Change{Path: rel, Content: content, Mode: info.Mode().Perm()})
+		out = append(out, Change{Path: rel, Content: content, Mode: mode})
 		return nil
 	})
 	return out, err
@@ -159,13 +181,22 @@ func ApplyFile(dir string, f FileState) error {
 		if err := os.Remove(full); err != nil && !os.IsNotExist(err) {
 			return err
 		}
+		pruneEmptyParents(dir, filepath.Dir(full)) // don't leave empty dirs behind after a delete/move
 		return nil
 	}
 	parent := filepath.Dir(full)
 	if err := os.MkdirAll(parent, 0o755); err != nil {
 		return err
 	}
-	mode := f.Mode
+	// A symlink: recreate the link (target = content), replacing whatever is there. Not atomic
+	// (no temp+rename for links), which is acceptable for the rare symlink case.
+	if f.Mode&fs.ModeSymlink != 0 {
+		if err := os.Remove(full); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return os.Symlink(string(f.Content), full)
+	}
+	mode := f.Mode.Perm()
 	if mode == 0 {
 		mode = 0o644
 	}
@@ -188,6 +219,18 @@ func ApplyFile(dir string, f FileState) error {
 		return err
 	}
 	return os.Rename(tmpName, full)
+}
+
+// pruneEmptyParents removes now-empty directories from start upward toward root (exclusive), so
+// deleting the last file in a directory (or moving a subtree away) doesn't leave empty husks on
+// other nodes. It stops at the first directory that isn't empty (os.Remove fails) or at root.
+func pruneEmptyParents(root, start string) {
+	root = filepath.Clean(root)
+	for cur := filepath.Clean(start); cur != root && len(cur) > len(root); cur = filepath.Dir(cur) {
+		if os.Remove(cur) != nil {
+			return // non-empty, or already gone — stop climbing
+		}
+	}
 }
 
 // FileStamp identifies a file revision. Size+ModNano is the cheap stat-only gate (skip
@@ -244,10 +287,11 @@ func ScanChanges(dir string, ig Ignore, prev Stamps) (changed []Change, stampOf 
 			}
 			return nil
 		}
-		if d.IsDir() || !d.Type().IsRegular() {
-			return nil
+		typ := d.Type()
+		if d.IsDir() || (!typ.IsRegular() && typ&fs.ModeSymlink == 0) {
+			return nil // dirs and non-regular non-symlink entries (sockets/devices) aren't synced
 		}
-		info, ierr := d.Info()
+		info, ierr := d.Info() // lstat (WalkDir doesn't follow links) — the link's own size/mtime
 		if ierr != nil {
 			return ierr
 		}
@@ -257,17 +301,21 @@ func ScanChanges(dir string, ig Ignore, prev Stamps) (changed []Change, stampOf 
 		if had && prevSt.Size == st.Size && prevSt.ModNano == st.ModNano {
 			return nil // cheap gate: size+mtime unchanged → skip the read
 		}
-		// Gate tripped — read and hash to find out whether the content actually changed.
-		content, rerr := os.ReadFile(p)
+		// Gate tripped — read content (file bytes, or symlink target) and hash to find out
+		// whether it actually changed.
+		content, mode, ok, rerr := entryPayload(p, d)
 		if rerr != nil {
 			return rerr
+		}
+		if !ok {
+			return nil
 		}
 		st.Hash = HashContent(content)
 		stampOf[rel] = st
 		if had && prevSt.Hash == st.Hash {
 			return nil // metadata moved but content identical → refresh stamp, don't re-push
 		}
-		changed = append(changed, Change{Path: rel, Content: content, Mode: info.Mode().Perm()})
+		changed = append(changed, Change{Path: rel, Content: content, Mode: mode})
 		return nil
 	})
 	return changed, stampOf, seen, err

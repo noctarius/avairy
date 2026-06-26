@@ -11,9 +11,10 @@ land. Section references (§N) point at DESIGN.md.
   `report_status`, inbox delivery.
 - **Single-machine and distributed paths**: `cmd/avairy` core + `cmd/avairy-node` daemon
   (token enrollment, rejoin, heartbeat, local MCP reverse-proxy).
-- **File sync hub** (§9): per-file hub versions, stat-skip change detection, idempotent push,
-  LF/mode normalization, `.gitignore`/`.dockerignore`/`.avairyignore` excludes. Conflicts are
-  *detected* and surfaced (see backlog #3 for the missing resolution half).
+- **File sync hub** (§9): per-file hub versions, stat+content-hash change detection, idempotent
+  push, LF/mode normalization, `.gitignore`/`.dockerignore`/`.avairyignore` excludes. Deletes
+  and moves (move = delete+add) propagate; symlinks replicate as links; empty dirs are pruned
+  on delete. Conflicts are detected and routed to agents for reconciliation (#3).
 - **Facilitator** (§5): journal-driven blocked/loop detection → rule-based nudges.
 - **Human-in-the-loop gating** (§7): gated actions block and route to the operator's
   **Approvals** tab (allow/deny); Claude via PreToolUse hook, Codex via app-server approvals;

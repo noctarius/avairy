@@ -85,6 +85,74 @@ func TestIgnoreForReadsProjectFiles(t *testing.T) {
 	}
 }
 
+// Symlinks replicate as links (not as the dereferenced file), and a retargeted link re-syncs.
+func TestSymlinkSync(t *testing.T) {
+	h := NewHub()
+	dirA, dirB := t.TempDir(), t.TempDir()
+	write(t, dirA, "real.txt", "hi\n", 0o644)
+	if err := os.Symlink("real.txt", filepath.Join(dirA, "link.txt")); err != nil {
+		t.Skipf("symlinks unsupported here: %v", err)
+	}
+	nvA, nvB := NewNodeView("alice"), NewNodeView("bob")
+	if _, err := nvA.SyncUp(h, dirA, DefaultIgnore()); err != nil {
+		t.Fatal(err)
+	}
+	if err := nvB.SyncDown(h, dirB); err != nil {
+		t.Fatal(err)
+	}
+
+	li, err := os.Lstat(filepath.Join(dirB, "link.txt"))
+	if err != nil || li.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("link.txt should be a symlink on bob: mode=%v err=%v", li.Mode(), err)
+	}
+	if tgt, _ := os.Readlink(filepath.Join(dirB, "link.txt")); tgt != "real.txt" {
+		t.Fatalf("link target = %q, want real.txt", tgt)
+	}
+
+	// Retarget the link → re-syncs.
+	if err := os.Remove(filepath.Join(dirA, "link.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("other.txt", filepath.Join(dirA, "link.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := nvA.SyncUp(h, dirA, DefaultIgnore()); err != nil {
+		t.Fatal(err)
+	}
+	if err := nvB.SyncDown(h, dirB); err != nil {
+		t.Fatal(err)
+	}
+	if tgt, _ := os.Readlink(filepath.Join(dirB, "link.txt")); tgt != "other.txt" {
+		t.Fatalf("retargeted link = %q, want other.txt", tgt)
+	}
+}
+
+// Deleting the last file in a directory prunes the now-empty directory on the receiving node.
+func TestDeletePrunesEmptyDir(t *testing.T) {
+	h := NewHub()
+	dirA, dirB := t.TempDir(), t.TempDir()
+	write(t, dirA, "pkg/sub/only.go", "package sub\n", 0o644)
+	nvA, nvB := NewNodeView("alice"), NewNodeView("bob")
+	nvA.SyncUp(h, dirA, DefaultIgnore())
+	nvB.SyncDown(h, dirB)
+	if _, err := os.Stat(filepath.Join(dirB, "pkg", "sub")); err != nil {
+		t.Fatalf("dir should exist after first sync: %v", err)
+	}
+
+	// Remove the only file → its empty parents should be pruned on bob.
+	if err := os.Remove(filepath.Join(dirA, "pkg", "sub", "only.go")); err != nil {
+		t.Fatal(err)
+	}
+	nvA.SyncUp(h, dirA, DefaultIgnore())
+	nvB.SyncDown(h, dirB)
+	if _, err := os.Stat(filepath.Join(dirB, "pkg", "sub")); !os.IsNotExist(err) {
+		t.Fatalf("empty 'pkg/sub' should be pruned on bob, stat err=%v", err)
+	}
+	if _, err := os.Stat(dirB); err != nil {
+		t.Fatalf("the workspace root must NOT be pruned: %v", err)
+	}
+}
+
 // A conflict resolved via Hub.Resolve converges both nodes (the reconciliation end state).
 func TestConflictResolveConverges(t *testing.T) {
 	h := NewHub()
