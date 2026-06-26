@@ -109,11 +109,8 @@ avairy-node \
 
 The daemon enrolls (node→core, NAT-friendly), continuously syncs `./repo` to/from the
 canonical workspace on core, heartbeats, and serves a local MCP endpoint at
-`http://127.0.0.1:7800/mcp` — the agent only ever sees localhost. For remote nodes, serve the
-channels over TLS: start core with `-tls-auto` (self-signed CA, written into the join bundle so
-the node trusts it automatically) or `-tls-cert`/`-tls-key`. With `-tls-auto` both the control
-channel and the remote-facing MCP bus are encrypted, and a node can authenticate by mTLS client
-cert (`avairy mint-join`) instead of a token. Local agents always use a plain loopback bus.
+`http://127.0.0.1:7800/mcp` — the agent only ever sees localhost. (Tune `-os` to advertise a
+capability other than the host OS, and `-interval` for the sync/heartbeat cadence.)
 
 With **`-family claude`** (or `codex`, `copilot`, `grok`) the daemon **spawns and drives the agent for you**:
 core registers it on the bus at enrollment, inbound messages are pulled from core and fed to
@@ -121,10 +118,37 @@ the agent, and its activity is shipped back to the core journal/TUI. **Omit `-fa
 proxy-only and launch the agent yourself against `http://127.0.0.1:7800/mcp`. Use `-model` /
 `-role` to tune the spawned agent, and `-gate-edits` to gate its file edits like the core flag.
 
-A node can also join with a single **join string** instead of separate flags — core writes one to
-`.avairy/join` (and refreshes it as the token rotates); it bundles the core URL, the CA to trust,
-and the token/cert: `avairy-node -join-file path/to/join -id linux-box`. `avairy mint-join` issues
-an mTLS client-cert join (no token).
+### Security & TLS
+
+avairy never handles your agent credentials (each CLI uses its own login), and it can secure the
+channels between machines itself.
+
+- **Enrollment.** Core mints an enroll token that **auto-regenerates each time a node uses it**, so
+  every node gets its own; the token a node first joins with is **bound to that node id** and stays
+  valid for it, so a restarted daemon **rejoins with the same `-token`/`-id`**. `ctrl+e` rotates the
+  current operator-facing token manually.
+- **TLS, self-managed (`-tls-auto`).** Core creates and persists a CA under `.avairy/ca.{crt,key}`
+  and a server cert covering the advertised control + bus hosts (and loopback). It encrypts **both**
+  the control channel and the remote-facing MCP bus; the CA is written into the join bundle so nodes
+  trust it **automatically** — no copying cert files. (Local agents always use a plain loopback bus,
+  TLS or not.)
+- **TLS, bring-your-own.** `-tls-cert` / `-tls-key` serve the control channel with your own PEM cert
+  instead. On a node without a bundled CA, point it at the cert to trust with `-ca` (or `-insecure`
+  to skip verification — dev only, exposes the channel to MITM).
+- **mTLS (client-cert auth).** Instead of a token, a node can authenticate with a client certificate
+  whose identity is its node id (carried in the cert's URI SAN, `avairy:<id>`). `avairy mint-join
+  -id <node> -core <https-url>` issues one from the self-managed CA, bundled into a join string.
+  Cert auth is **stateless** on core, so an mTLS node transparently **re-enrolls** if core restarts
+  and forgets its session (a token node can't — its binding is gone).
+- **Join strings.** One base64 string bundles the core URL + the CA to trust + the credential
+  (token *or* client cert+key), so "the pubcert travels with the token." Core writes `.avairy/join`
+  for nodes (refreshed as the token rotates) and `.avairy/operator-join` for the operator console;
+  pass either with `-join-file` (or `-join <string>`):
+
+  ```sh
+  avairy-node -join-file path/to/join -id linux-box      # node: URL + CA + token/cert in one arg
+  avairy mint-join -id linux-box -core https://core:7700  # issue an mTLS client-cert join (no token)
+  ```
 
 ## Remote operator console (TUI or browser)
 
@@ -174,6 +198,57 @@ live SSE journal stream; auth is the operator token. Single operator for now.
 - **Operator console** — fleet/progress, conversation, handover timeline, task board, approvals,
   and conflicts, plus your command line — as a local TUI, a remote TUI (`avairy-tui`), or a
   browser console, all over one operator API.
+
+## Command reference
+
+### `avairy` (core + TUI)
+
+| Flag | Default | What it does |
+|------|---------|--------------|
+| `-demo` | off | Spawn mock agents `alice`+`bob` (zero credits) to try the loop. |
+| `-live` | off | Run `alice` as a real agent on the bus. |
+| `-family` | `claude` | Live agent family: `claude` \| `codex` \| `copilot` \| `grok`. |
+| `-model` | `haiku` | Model for the live agent (kept cheap by default). |
+| `-send <msg>` | — | One-shot: send to a local `alice`, wait for the turn, print the journal, exit. |
+| `-headless` | off | Serve the bus/control with no TUI; block until interrupted (attach remotely). |
+| `-control-addr <addr>` | — | Serve the node control + operator API here (e.g. `0.0.0.0:7700`). |
+| `-mcp-addr <addr>` | `127.0.0.1:0` | MCP bus listen address (`0.0.0.0:PORT` to allow remote nodes). |
+| `-advertise <host>` | listen host | Host/IP remote nodes use to reach this core. |
+| `-workspace <dir>` | — | Project dir to seed/sync into the canonical hub. |
+| `-tls-auto` | off | Self-manage a CA under `.avairy` and serve control + bus over TLS (enables mTLS). |
+| `-tls-cert` / `-tls-key` | — | Serve the control channel with your own PEM cert/key instead. |
+| `-gate-edits` | off | Also require operator approval for file edits (not just risky commands). |
+| `-operator-token <tok>` | random | Bearer token for the remote operator API / web console. |
+
+Subcommands: `avairy mint-join -id <node> -core <https-url>` issues an mTLS client-cert join;
+`avairy hook …` is the internal PreToolUse shim Claude invokes per tool call (not run by hand).
+
+### `avairy-node` (node daemon — one process per agent)
+
+| Flag | Default | What it does |
+|------|---------|--------------|
+| `-core <url>` | — | Core control API URL (or supplied by `-join`/`-join-file`). |
+| `-core-mcp <url>` | — | Core MCP bus base URL for the local proxy. |
+| `-token <tok>` | — | Enrollment token (or a client cert via a join bundle). |
+| `-id <name>` | — | Node id — also the agent's bus identity. **Required.** |
+| `-os <name>` | host OS | OS capability this node advertises. |
+| `-workspace <dir>` | — | Local dir synced to/from the canonical workspace. |
+| `-proxy <addr>` | `127.0.0.1:7800` | Local MCP proxy listen address the agent connects to. |
+| `-interval <dur>` | `2s` | Sync/heartbeat cadence. |
+| `-family <fam>` | — | Spawn & drive the agent here (`claude`/`codex`/`copilot`/`grok`); empty = proxy-only. |
+| `-model` / `-role` | — | Tune the spawned agent. |
+| `-gate-edits` | off | Gate the spawned agent's file edits. |
+| `-ca <file>` / `-insecure` | — | Trust a PEM CA for an https core / skip verification (dev only). |
+| `-join <str>` / `-join-file <path>` | — | One bundled string: core URL + CA + token/cert. |
+
+### `avairy-tui` (remote operator console)
+
+| Flag | What it does |
+|------|--------------|
+| `-join-file <path>` / `-join <str>` | Attach with one bundled string (e.g. core's `.avairy/operator-join`). |
+| `-core <url>` | Core control API URL (if not using a join). |
+| `-token <tok>` | Operator API token. |
+| `-ca <file>` / `-insecure` | Trust a PEM CA for an https core / skip verification (dev only). |
 
 ## Status
 
