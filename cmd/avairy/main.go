@@ -131,6 +131,12 @@ func main() {
 			if _, err := seed.SyncUp(hub, *workspaceDir, workspace.IgnoreFor(*workspaceDir)); err != nil {
 				fmt.Fprintln(os.Stderr, "avairy: seed workspace:", err)
 			}
+			var seedWatch <-chan struct{}
+			if ch, werr := workspace.Watch(ctx, *workspaceDir, workspace.IgnoreFor(*workspaceDir)); werr != nil {
+				fmt.Fprintln(os.Stderr, "avairy: watch (falling back to poll):", werr)
+			} else {
+				seedWatch = ch
+			}
 			go func() {
 				t := time.NewTicker(2 * time.Second)
 				defer t.Stop()
@@ -138,7 +144,9 @@ func main() {
 					select {
 					case <-ctx.Done():
 						return
-					case <-t.C:
+					case <-seedWatch: // operator edited the project → push now
+						_, _ = seed.SyncUp(hub, *workspaceDir, workspace.IgnoreFor(*workspaceDir))
+					case <-t.C: // fallback poll + pull remote changes (no server→node push)
 						_, _ = seed.SyncUp(hub, *workspaceDir, workspace.IgnoreFor(*workspaceDir))
 						_ = seed.SyncDown(hub, *workspaceDir)
 					}

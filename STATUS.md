@@ -77,9 +77,13 @@ Ranked roughly by value-to-effort within each group.
    node→core heartbeat (no new keep-alive). *Still open:* core doesn't know a node's heartbeat
    interval, so `LivenessTimeout` must exceed it (fine at the 2s default).
 
-10. **fsnotify.** Sync is poll-based. Pattern: fsnotify as the trigger (kills latency + idle
-    CPU) + a coarse fallback poll for the new-subdir race / dropped events / network FS.
-    Supported on all targets (Linux inotify, macOS/BSD kqueue, Windows ReadDirectoryChangesW).
+10. ~~**fsnotify.**~~ ✅ Done. `workspace.Watch` recursively watches the tree (auto-adds new
+    subdirs, honors Ignore, debounces bursts) and emits a coalesced signal; node + seed loops
+    SyncUp on it immediately, ticker stays as the fallback poll + drives heartbeat/SyncDown.
+    Paired with **content-hash change detection**: size+mtime is the cheap stat gate, but a
+    real change now requires a content-hash difference — so our own SyncDown/reconcile writes
+    (and metadata-only touches) seen by fsnotify don't ping-pong into re-pushes. Stamps record
+    the hash; touched-but-identical files refresh their stamp without pushing.
 
 11. **Facilitator debounce + matchmaking.** Works cross-node, but no rate-limit/debounce — a
     repeatedly-`blocked` agent re-nudges on every status report (the loop trigger self-resets,

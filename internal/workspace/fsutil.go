@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"bytes"
+	"hash/fnv"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -189,19 +190,36 @@ func ApplyFile(dir string, f FileState) error {
 	return os.Rename(tmpName, full)
 }
 
-// FileStamp cheaply identifies a file revision (size + mtime) so unchanged files can be
-// skipped with a stat instead of a full read — the difference between idle and pegging a CPU.
+// FileStamp identifies a file revision. Size+ModNano is the cheap stat-only gate (skip
+// unchanged files without reading them — the difference between idle and pegging a CPU). Hash
+// is the authoritative content identity, checked only when the cheap gate trips: it stops a
+// metadata-only change (atomic rename, touch, git checkout — or our own SyncDown/reconcile
+// writes seen by fsnotify) from being mistaken for a content change and re-pushed. Without it,
+// fsnotify-triggered syncs over content-identical writes can ping-pong (write → resync →
+// write …).
 type FileStamp struct {
 	Size    int64
 	ModNano int64
+	Hash    uint64 // FNV-1a of content; 0 until the file is read
+}
+
+// HashContent is a fast non-cryptographic content fingerprint for change detection.
+func HashContent(b []byte) uint64 {
+	h := fnv.New64a()
+	_, _ = h.Write(b)
+	return h.Sum64()
 }
 
 // Stamps maps a path to its last-synced stamp.
 type Stamps map[string]FileStamp
 
-// ScanChanges walks dir and returns Changes only for files new or modified since prev (whose
-// stamp it also reports), plus the set of paths seen. Unchanged files are stat-only, not read.
-// prev is not mutated — the caller updates its stamps once a push is accepted.
+// ScanChanges walks dir and returns Changes for files whose *content* differs from prev, plus
+// the set of paths seen. Detection is two-stage: an unchanged size+mtime is a stat-only skip
+// (no read); when that gate trips the file is read and content-hashed, and only a real hash
+// difference counts as changed. stampOf carries the fresh stamp for every file that was read —
+// both genuinely-changed files and "touched but identical" ones — so the caller can refresh
+// the latter immediately and stop re-reading them (and never re-push identical content). prev
+// is not mutated.
 func ScanChanges(dir string, ig Ignore, prev Stamps) (changed []Change, stampOf map[string]FileStamp, seen map[string]bool, err error) {
 	seen = make(map[string]bool)
 	stampOf = make(map[string]FileStamp)
@@ -234,15 +252,21 @@ func ScanChanges(dir string, ig Ignore, prev Stamps) (changed []Change, stampOf 
 			return ierr
 		}
 		seen[rel] = true
-		st := FileStamp{Size: info.Size(), ModNano: info.ModTime().UnixNano()}
-		if prev[rel] == st {
-			return nil // unchanged since last sync — skip the read
+		prevSt, had := prev[rel]
+		st := FileStamp{Size: info.Size(), ModNano: info.ModTime().UnixNano(), Hash: prevSt.Hash}
+		if had && prevSt.Size == st.Size && prevSt.ModNano == st.ModNano {
+			return nil // cheap gate: size+mtime unchanged → skip the read
 		}
+		// Gate tripped — read and hash to find out whether the content actually changed.
 		content, rerr := os.ReadFile(p)
 		if rerr != nil {
 			return rerr
 		}
+		st.Hash = HashContent(content)
 		stampOf[rel] = st
+		if had && prevSt.Hash == st.Hash {
+			return nil // metadata moved but content identical → refresh stamp, don't re-push
+		}
 		changed = append(changed, Change{Path: rel, Content: content, Mode: info.Mode().Perm()})
 		return nil
 	})
@@ -267,6 +291,17 @@ func (nv *NodeView) SyncUp(h *Hub, dir string, ig Ignore) ([]Conflict, error) {
 	changed, stampOf, seen, err := ScanChanges(dir, ig, nv.stamps)
 	if err != nil {
 		return nil, err
+	}
+	changedSet := make(map[string]bool, len(changed))
+	for _, c := range changed {
+		changedSet[c.Path] = true
+	}
+	// Files read but unchanged in content (metadata moved only): refresh their stamp now so we
+	// don't re-read them — and never push identical content (no fsnotify ping-pong).
+	for path, st := range stampOf {
+		if !changedSet[path] {
+			nv.stamps[path] = st
+		}
 	}
 	var conflicts []Conflict
 	for _, c := range changed {
@@ -306,7 +341,9 @@ func (nv *NodeView) SyncDown(h *Hub, dir string) error {
 		if f.Deleted {
 			delete(nv.stamps, f.Path)
 		} else if info, e := os.Stat(filepath.Join(dir, filepath.FromSlash(f.Path))); e == nil {
-			nv.stamps[f.Path] = FileStamp{Size: info.Size(), ModNano: info.ModTime().UnixNano()}
+			// Record size+mtime AND content hash: a later touch trips the cheap gate but the
+			// hash match then proves the content is unchanged, so we don't re-push our own write.
+			nv.stamps[f.Path] = FileStamp{Size: info.Size(), ModNano: info.ModTime().UnixNano(), Hash: HashContent(f.Content)}
 		}
 	}
 	return nil

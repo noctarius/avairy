@@ -76,8 +76,17 @@ func (n *Node) SyncUp(dir string) ([]SyncResult, error) {
 		return nil, err
 	}
 	wire := make([]SyncChange, 0, len(changed))
+	changedSet := make(map[string]bool, len(changed))
 	for _, c := range changed {
+		changedSet[c.Path] = true
 		wire = append(wire, SyncChange{Path: c.Path, Content: c.Content, Mode: uint32(c.Mode), Base: n.base[c.Path]})
+	}
+	// Files read but unchanged in content (metadata moved only): refresh their stamp now so we
+	// don't re-read them — and never push identical content (no fsnotify ping-pong).
+	for path, st := range stampOf {
+		if !changedSet[path] {
+			n.stamps[path] = st
+		}
 	}
 	for path, b := range n.base {
 		if !seen[path] {
@@ -135,7 +144,9 @@ func (n *Node) SyncDown(dir string) error {
 		if f.Deleted {
 			delete(n.stamps, f.Path)
 		} else if info, e := os.Stat(filepath.Join(dir, filepath.FromSlash(f.Path))); e == nil {
-			n.stamps[f.Path] = workspace.FileStamp{Size: info.Size(), ModNano: info.ModTime().UnixNano()}
+			// Hash too: a later touch trips the cheap gate, but the hash match then proves the
+			// content is unchanged so we don't re-push our own write (no fsnotify ping-pong).
+			n.stamps[f.Path] = workspace.FileStamp{Size: info.Size(), ModNano: info.ModTime().UnixNano(), Hash: workspace.HashContent(f.Content)}
 		}
 	}
 	return nil

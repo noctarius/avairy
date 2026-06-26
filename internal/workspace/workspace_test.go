@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestPushPullBetweenNodes(t *testing.T) {
@@ -165,6 +166,36 @@ func TestScanChangesSkipsUnchanged(t *testing.T) {
 	}
 	if changed, _, _, _ = ScanChanges(dir, DefaultIgnore(), stamps); len(changed) != 0 {
 		t.Fatalf("unchanged file should be skipped, got %d", len(changed))
+	}
+}
+
+// A rewrite with identical content (new mtime) must NOT be reported as changed — this is what
+// stops an fsnotify-triggered sync over our own write from ping-ponging.
+func TestScanChangesIgnoresIdenticalRewrite(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "a.go", "package a\n", 0o644)
+	stamps := make(Stamps)
+	_, stampOf, _, _ := ScanChanges(dir, DefaultIgnore(), stamps)
+	for p, s := range stampOf {
+		stamps[p] = s
+	}
+
+	// Rewrite the same bytes with a bumped mtime (as an atomic-rename / touch would).
+	full := filepath.Join(dir, "a.go")
+	if err := os.WriteFile(full, []byte("package a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(full, future, future); err != nil {
+		t.Fatal(err)
+	}
+
+	changed, stampOf2, _, _ := ScanChanges(dir, DefaultIgnore(), stamps)
+	if len(changed) != 0 {
+		t.Fatalf("identical-content rewrite reported %d changes (want 0)", len(changed))
+	}
+	if _, ok := stampOf2["a.go"]; !ok {
+		t.Fatal("touched file's refreshed stamp should be returned so it isn't re-read forever")
 	}
 }
 

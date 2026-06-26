@@ -26,6 +26,7 @@ import (
 	"avairy/internal/agent"
 	"avairy/internal/control"
 	"avairy/internal/gating"
+	"avairy/internal/workspace"
 )
 
 func main() {
@@ -104,6 +105,31 @@ func main() {
 		}
 	}
 
+	syncUp := func() {
+		if *ws == "" {
+			return
+		}
+		conflicts, err := n.SyncUp(*ws)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "syncUp:", err)
+		}
+		for _, c := range conflicts {
+			fmt.Printf("CONFLICT %s (hub v%d) — needs reconciliation\n", c.Path, c.HubVersion)
+		}
+	}
+
+	// Push local edits the instant they happen (fsnotify), with the ticker as the fallback poll
+	// and the driver for heartbeat + SyncDown (pulling others' changes can't be event-driven —
+	// there's no server→node push).
+	var watch <-chan struct{}
+	if *ws != "" {
+		if ch, err := workspace.Watch(ctx, *ws, workspace.IgnoreFor(*ws)); err != nil {
+			fmt.Fprintln(os.Stderr, "avairy-node: watch (falling back to poll):", err)
+		} else {
+			watch = ch
+		}
+	}
+
 	ticker := time.NewTicker(*interval)
 	defer ticker.Stop()
 	for {
@@ -111,22 +137,17 @@ func main() {
 		case <-ctx.Done():
 			fmt.Println("avairy-node: shutting down")
 			return
+		case <-watch:
+			syncUp() // local change → propagate now
 		case <-ticker.C:
 			if err := n.Heartbeat(); err != nil {
 				fmt.Fprintln(os.Stderr, "heartbeat:", err)
 			}
-			if *ws == "" {
-				continue
-			}
-			conflicts, err := n.SyncUp(*ws)
-			if err != nil {
-				fmt.Fprintln(os.Stderr, "syncUp:", err)
-			}
-			for _, c := range conflicts {
-				fmt.Printf("CONFLICT %s (hub v%d) — needs reconciliation\n", c.Path, c.HubVersion)
-			}
-			if err := n.SyncDown(*ws); err != nil {
-				fmt.Fprintln(os.Stderr, "syncDown:", err)
+			syncUp()
+			if *ws != "" {
+				if err := n.SyncDown(*ws); err != nil {
+					fmt.Fprintln(os.Stderr, "syncDown:", err)
+				}
 			}
 		}
 	}
