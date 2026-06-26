@@ -40,7 +40,9 @@ func TestApprovalsAllowForSession(t *testing.T) {
 	a := NewApprovals(2 * time.Second)
 	ask := func() string {
 		done := make(chan string, 1)
-		go func() { done <- a.Ask(context.Background(), Approval{AgentID: "alice", Kind: "command", Summary: "git push"}) }()
+		go func() {
+			done <- a.Ask(context.Background(), Approval{AgentID: "alice", Kind: "command", Summary: "git push"})
+		}()
 		return waitResolve(t, a, done, DecisionAllowForSession)
 	}
 	// First ask is resolved allow-for-session by the operator.
