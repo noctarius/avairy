@@ -324,14 +324,15 @@ func ScanChanges(dir string, ig Ignore, prev Stamps) (changed []Change, stampOf 
 // NodeView tracks a node's per-path hub version and content stamp, and syncs a directory
 // to/from the hub. Unchanged files are skipped via their stamp (no re-read, no re-push).
 type NodeView struct {
-	ID     string
-	base   map[string]uint64
-	stamps Stamps
+	ID        string
+	base      map[string]uint64
+	stamps    Stamps
+	conflicts map[string]bool // paths holding unresolved conflict markers (locked from sync)
 }
 
 // NewNodeView returns a node view for the given node/agent id.
 func NewNodeView(id string) *NodeView {
-	return &NodeView{ID: id, base: make(map[string]uint64), stamps: make(Stamps)}
+	return &NodeView{ID: id, base: make(map[string]uint64), stamps: make(Stamps), conflicts: make(map[string]bool)}
 }
 
 // SyncUp pushes changed files (and detected deletions) to the hub, returning any conflicts.
@@ -353,6 +354,15 @@ func (nv *NodeView) SyncUp(h *Hub, dir string, ig Ignore) ([]Conflict, error) {
 	}
 	var conflicts []Conflict
 	for _, c := range changed {
+		// A path holding unresolved conflict markers is LOCKED: don't push it (that would land the
+		// markers in the hub). When it's edited marker-free, it's resolved → unlock and push from
+		// the adopted base so it lands as the next version. Mirrors control.Node.SyncUp.
+		if HasConflictMarkers(c.Content) {
+			nv.conflicts[c.Path] = true
+			nv.stamps[c.Path] = stampOf[c.Path]
+			continue
+		}
+		delete(nv.conflicts, c.Path)
 		c.Base = nv.base[c.Path]
 		res := h.Push(nv.ID, c)
 		switch {
@@ -364,7 +374,7 @@ func (nv *NodeView) SyncUp(h *Hub, dir string, ig Ignore) ([]Conflict, error) {
 		}
 	}
 	for path := range nv.base {
-		if seen[path] {
+		if seen[path] || nv.conflicts[path] { // a conflicted (held) file isn't a deletion
 			continue
 		}
 		res := h.Push(nv.ID, Change{Path: path, Deleted: true, Base: nv.base[path]})
@@ -382,6 +392,9 @@ func (nv *NodeView) SyncUp(h *Hub, dir string, ig Ignore) ([]Conflict, error) {
 // recording the written file's stamp (so the next SyncUp won't re-read it).
 func (nv *NodeView) SyncDown(h *Hub, dir string) error {
 	for _, f := range h.Pull(nv.base) {
+		if nv.conflicts[f.Path] {
+			continue // LOCKED: the operator/agent is resolving conflict markers here — don't clobber it
+		}
 		if err := ApplyFile(dir, f); err != nil {
 			return err
 		}
@@ -399,6 +412,43 @@ func (nv *NodeView) SyncDown(h *Hub, dir string) error {
 
 // Base returns the node's known version for a path (for conflict reconciliation flows).
 func (nv *NodeView) Base(path string) uint64 { return nv.base[path] }
+
+// MarkConflict writes git-style markers into a rejected file under dir (the operator's local edit
+// is the "ours" side, so nothing is lost), adopts the hub version as base, and locks the path from
+// further sync until the markers are removed. Use after SyncUp returned a Conflict for an
+// owner-less (seed) edit, so the human — or a local agent sharing this workspace — can resolve it
+// in place and the next SyncUp lands the result as HubVersion+1. Mirrors control.Node.markConflict.
+func (nv *NodeView) MarkConflict(dir string, c Conflict) error {
+	full := filepath.Join(dir, filepath.FromSlash(c.Path))
+	local, err := os.ReadFile(full)
+	if err != nil {
+		return err // file vanished; nothing to mark
+	}
+	if !HasConflictMarkers(local) {
+		marked := MergeMarkers(local, c.Hub.Content, c.Hub.Version)
+		if err := os.WriteFile(full, marked, 0o644); err != nil {
+			return err
+		}
+		if info, e := os.Stat(full); e == nil {
+			nv.stamps[c.Path] = FileStamp{Size: info.Size(), ModNano: info.ModTime().UnixNano(), Hash: HashContent(marked)}
+		}
+	}
+	nv.conflicts[c.Path] = true
+	nv.base[c.Path] = c.Hub.Version // resolved edit will push from here → Hub.Version+1
+	return nil
+}
+
+// LockedPaths returns the paths currently held with unresolved conflict markers.
+func (nv *NodeView) LockedPaths() []string {
+	out := make([]string, 0, len(nv.conflicts))
+	for p := range nv.conflicts {
+		out = append(out, p)
+	}
+	return out
+}
+
+// IsLocked reports whether path is held with unresolved conflict markers.
+func (nv *NodeView) IsLocked(path string) bool { return nv.conflicts[path] }
 
 // ResumeFromHub primes a freshly-created view against a restored hub so the next SyncUp behaves
 // like a resume, not a first sync. For each hub file that still exists under dir it adopts the

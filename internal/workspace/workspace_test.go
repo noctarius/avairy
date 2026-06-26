@@ -195,6 +195,82 @@ func TestConflictResolveConverges(t *testing.T) {
 	}
 }
 
+// The operator's seed view (item #19): when the seed loses a race to a node, MarkConflict writes
+// git-style markers locally + locks the path; SyncDown won't clobber the held file; and once the
+// markers are removed the next SyncUp pushes the resolution as the next version.
+func TestSeedConflictMarkLockResolve(t *testing.T) {
+	h := NewHub()
+	seedDir, nodeDir := t.TempDir(), t.TempDir()
+	write(t, seedDir, "f.go", "base\n", 0o644)
+	seed, node := NewNodeView("core"), NewNodeView("node")
+
+	// seed publishes v1; node pulls it.
+	if _, err := seed.SyncUp(h, seedDir, DefaultIgnore()); err != nil {
+		t.Fatal(err)
+	}
+	if err := node.SyncDown(h, nodeDir); err != nil {
+		t.Fatal(err)
+	}
+
+	// Both edit from v1 → node lands v2, the operator's seed push conflicts.
+	write(t, seedDir, "f.go", "operator-edit\n", 0o644)
+	write(t, nodeDir, "f.go", "node-edit\n", 0o644)
+	if _, err := node.SyncUp(h, nodeDir, DefaultIgnore()); err != nil {
+		t.Fatal(err)
+	}
+	conflicts, err := seed.SyncUp(h, seedDir, DefaultIgnore())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(conflicts) != 1 || conflicts[0].Path != "f.go" {
+		t.Fatalf("expected seed to conflict, got %+v", conflicts)
+	}
+
+	// Mark it: markers land in the operator's file, the path is locked.
+	if err := seed.MarkConflict(seedDir, conflicts[0]); err != nil {
+		t.Fatal(err)
+	}
+	if !seed.IsLocked("f.go") {
+		t.Fatal("path should be locked after MarkConflict")
+	}
+	if got := read(t, seedDir, "f.go"); !HasConflictMarkers([]byte(got)) {
+		t.Fatalf("file should hold conflict markers, got %q", got)
+	}
+
+	// A held file is NOT pushed (markers must not reach the hub) and NOT clobbered by SyncDown.
+	if c, _ := seed.SyncUp(h, seedDir, DefaultIgnore()); len(c) != 0 {
+		t.Fatalf("locked file should not re-conflict, got %+v", c)
+	}
+	if v, _ := h.Get("f.go"); v.Version != 2 || string(v.Content) != "node-edit\n" {
+		t.Fatalf("hub should still be the node's v2, got v%d %q", v.Version, v.Content)
+	}
+	if err := seed.SyncDown(h, seedDir); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(t, seedDir, "f.go"); !HasConflictMarkers([]byte(got)) {
+		t.Fatalf("SyncDown clobbered the held file: %q", got)
+	}
+
+	// Operator resolves in place (removes markers) → next SyncUp unlocks and pushes v3.
+	write(t, seedDir, "f.go", "operator-edit+node-edit\n", 0o644)
+	if c, _ := seed.SyncUp(h, seedDir, DefaultIgnore()); len(c) != 0 {
+		t.Fatalf("resolved push should not conflict, got %+v", c)
+	}
+	if seed.IsLocked("f.go") {
+		t.Fatal("path should be unlocked after marker-free push")
+	}
+	v, _ := h.Get("f.go")
+	if v.Version != 3 || string(v.Content) != "operator-edit+node-edit\n" {
+		t.Fatalf("hub should be the resolved v3, got v%d %q", v.Version, v.Content)
+	}
+	if err := node.SyncDown(h, nodeDir); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(t, nodeDir, "f.go"); got != "operator-edit+node-edit\n" {
+		t.Fatalf("node did not converge: %q", got)
+	}
+}
+
 // Round-trip a real directory through the hub: alice's tree syncs up, bob's tree syncs down,
 // with .git excluded, LF-normalized, and the executable bit preserved.
 func TestDirectoryRoundTrip(t *testing.T) {

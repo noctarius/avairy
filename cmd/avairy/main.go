@@ -104,6 +104,17 @@ func main() {
 		jrnl.Append(journal.KindSystem, a.AgentID, map[string]any{"event": "approval_resolved", "id": a.ID, "kind": a.Kind, "summary": a.Summary, "decision": decision})
 	}
 
+	// Owner-less conflicts (DESIGN.md §9, item #19): the operator's seed workspace diverging from a
+	// node's edit (or a git conflict) has no agent to hand it to, so it surfaces in the TUI Conflicts
+	// view. Journaling the lifecycle wakes the TUI to refresh.
+	conflictBroker := control.NewConflicts()
+	conflictBroker.OnRaise = func(oc control.OperatorConflict) {
+		jrnl.Append(journal.KindSystem, "core", map[string]any{"event": "conflict_raised", "id": oc.ID, "path": oc.Path, "source": oc.Source})
+	}
+	conflictBroker.OnResolve = func(oc control.OperatorConflict, decision string) {
+		jrnl.Append(journal.KindSystem, "core", map[string]any{"event": "conflict_resolved", "id": oc.ID, "path": oc.Path, "decision": decision})
+	}
+
 	// Self-managed TLS material (DESIGN.md §4), shared by the MCP bus and the control channel:
 	// build the CA + one server cert (SANs cover the advertised control + mcp hosts and loopback)
 	// once, so both encrypted listeners use it and the CA travels to nodes in the join bundle.
@@ -195,9 +206,33 @@ func main() {
 		if *workspaceDir != "" {
 			seed := workspace.NewNodeView("core")
 			seed.ResumeFromHub(hub, *workspaceDir) // adopt restored versions; don't re-conflict/delete
-			if _, err := seed.SyncUp(hub, *workspaceDir, workspace.IgnoreFor(*workspaceDir)); err != nil {
-				fmt.Fprintln(os.Stderr, "avairy: seed workspace:", err)
+			// seedSyncUp pushes the operator's edits, and for any that lost a race with a node's edit
+			// writes git-style markers into the local file + routes the (owner-less) conflict to the
+			// TUI. A path that was held last tick but isn't now → its markers were removed and it
+			// synced → clear the notification.
+			seedSyncUp := func() {
+				before := seed.LockedPaths()
+				conflicts, serr := seed.SyncUp(hub, *workspaceDir, workspace.IgnoreFor(*workspaceDir))
+				if serr != nil {
+					fmt.Fprintln(os.Stderr, "avairy: seed workspace:", serr)
+					return
+				}
+				for _, c := range conflicts {
+					if mErr := seed.MarkConflict(*workspaceDir, c); mErr != nil {
+						continue
+					}
+					conflictBroker.Raise(control.OperatorConflict{
+						Path: c.Path, HubVersion: c.Hub.Version, Source: "seed",
+						Detail: "a node changed it while you were editing — your copy now has markers",
+					})
+				}
+				for _, p := range before {
+					if !seed.IsLocked(p) {
+						conflictBroker.ClearPath(p)
+					}
+				}
 			}
+			seedSyncUp()
 			var seedWatch <-chan struct{}
 			if ch, werr := workspace.Watch(ctx, *workspaceDir, workspace.IgnoreFor(*workspaceDir)); werr != nil {
 				fmt.Fprintln(os.Stderr, "avairy: watch (falling back to poll):", werr)
@@ -212,9 +247,9 @@ func main() {
 					case <-ctx.Done():
 						return
 					case <-seedWatch: // operator edited the project → push now
-						_, _ = seed.SyncUp(hub, *workspaceDir, workspace.IgnoreFor(*workspaceDir))
+						seedSyncUp()
 					case <-t.C: // fallback poll + pull remote changes (no server→node push)
-						_, _ = seed.SyncUp(hub, *workspaceDir, workspace.IgnoreFor(*workspaceDir))
+						seedSyncUp()
 						_ = seed.SyncDown(hub, *workspaceDir)
 					}
 				}
@@ -403,7 +438,27 @@ func main() {
 			return out
 		},
 		ResolveApproval: func(id, decision string) { approvals.Resolve(id, decision) },
-		Commit:          commitFn,
+		PendingConflicts: func() []tui.ConflictItem {
+			cs := conflictBroker.Pending()
+			out := make([]tui.ConflictItem, 0, len(cs))
+			for _, c := range cs {
+				out = append(out, tui.ConflictItem{ID: c.ID, Path: c.Path, HubVersion: c.HubVersion, Source: c.Source, Detail: c.Detail})
+			}
+			return out
+		},
+		ResolveConflict: func(id, decision, target string) {
+			oc, ok := conflictBroker.Resolve(id, decision)
+			if !ok || decision != control.ConflictDelegate {
+				return // "mine": the operator edits the marked file; the next seed sync picks it up
+			}
+			body := fmt.Sprintf("Please resolve the conflict in %s (hub v%d). The file has git-style conflict markers (<<<<<<< / ======= / >>>>>>>); edit it to merge both sides and remove the markers, then call resolve_conflict (or just save it marker-free).", oc.Path, oc.HubVersion)
+			to := bus.Broadcast()
+			if target != "" && target != "broadcast" {
+				to = bus.Agent(target)
+			}
+			b.Publish("human", to, body, agent.DeliverySteer)
+		},
+		Commit: commitFn,
 	}
 	if err := tui.Run(deps); err != nil {
 		fail("tui", err)

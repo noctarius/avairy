@@ -32,6 +32,13 @@ type Deps struct {
 	PendingApprovals func() []ApprovalItem
 	ResolveApproval  func(id, decision string)
 
+	// PendingConflicts/ResolveConflict drive the Conflicts view (DESIGN.md §9, item #19): owner-less
+	// conflicts (the operator's seed workspace diverging from a node's edit, or a git conflict) the
+	// human resolves themselves or delegates to an agent. target is the agent id when delegating.
+	// Nil disables the view.
+	PendingConflicts func() []ConflictItem
+	ResolveConflict  func(id, decision, target string)
+
 	// Commit signs a commit of the canonical repo on the operator's behalf (DESIGN.md §9, the
 	// human-commits-via-TUI path). Returns the new short hash. Nil when core has no git repo.
 	Commit func(message string) (string, error)
@@ -46,11 +53,22 @@ type ApprovalItem struct {
 	Reason  string
 }
 
-// Decision strings passed to Deps.ResolveApproval.
+// ConflictItem is one owner-less conflict awaiting the operator (resolve themselves or delegate).
+type ConflictItem struct {
+	ID         string
+	Path       string
+	HubVersion uint64
+	Source     string
+	Detail     string
+}
+
+// Decision strings passed to Deps.ResolveApproval / Deps.ResolveConflict.
 const (
 	decisionAllow        = "allow"
 	decisionDeny         = "deny"
 	decisionAllowSession = "allow_for_session"
+	decisionMine         = "mine"
+	decisionDelegate     = "delegate"
 )
 
 // ControlInfo surfaces node-enrollment details in the TUI (the alt-screen hides stdout, so
@@ -69,10 +87,11 @@ const (
 	tabHandovers
 	tabTasks
 	tabApprovals
+	tabConflicts
 	numTabs
 )
 
-var tabNames = []string{"Conversation", "Handovers", "Tasks", "Approvals"}
+var tabNames = []string{"Conversation", "Handovers", "Tasks", "Approvals", "Conflicts"}
 
 // inputHeight is the number of rows the multi-line command input occupies.
 const inputHeight = 3
@@ -108,6 +127,7 @@ type Model struct {
 	control     *ControlInfo
 	token       string
 	approvalSel int  // selected row in the Approvals view
+	conflictSel int  // selected row in the Conflicts view
 	quitArmed   bool // first ctrl+c arms; second (in succession) quits
 
 	seen map[uint64]bool
@@ -228,6 +248,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// On the Approvals tab, navigation/verdict keys are consumed here (not typed into the
 		// message input). Global keys (tab, esc, ctrl+*) fall through to the switch below.
 		if m.tab == tabApprovals && m.handleApprovalKey(s) {
+			return m, nil
+		}
+		if m.tab == tabConflicts && m.handleConflictKey(s) {
 			return m, nil
 		}
 		switch s {
@@ -414,6 +437,51 @@ func (m *Model) resolveSelected(pend []ApprovalItem, decision string) {
 	}
 }
 
+// --- conflicts (owner-less file conflicts the operator resolves or delegates) ---
+
+func (m *Model) pendingConflicts() []ConflictItem {
+	if m.deps.PendingConflicts == nil {
+		return nil
+	}
+	return m.deps.PendingConflicts()
+}
+
+// handleConflictKey processes a keystroke on the Conflicts tab; it reports whether it consumed
+// the key. 'm' takes it on yourself (the file already holds markers — fix it in your editor); 'd'
+// delegates it to the currently-selected recipient agent (ctrl+t to pick who).
+func (m *Model) handleConflictKey(s string) bool {
+	pend := m.pendingConflicts()
+	switch s {
+	case "up", "k":
+		if m.conflictSel > 0 {
+			m.conflictSel--
+		}
+		return true
+	case "down", "j":
+		if m.conflictSel < len(pend)-1 {
+			m.conflictSel++
+		}
+		return true
+	case "m", "enter":
+		m.resolveConflictSelected(pend, decisionMine, "")
+		return true
+	case "d":
+		m.resolveConflictSelected(pend, decisionDelegate, m.selectedTarget())
+		return true
+	}
+	return false
+}
+
+func (m *Model) resolveConflictSelected(pend []ConflictItem, decision, target string) {
+	if m.conflictSel < 0 || m.conflictSel >= len(pend) || m.deps.ResolveConflict == nil {
+		return
+	}
+	m.deps.ResolveConflict(pend[m.conflictSel].ID, decision, target)
+	if m.conflictSel > 0 {
+		m.conflictSel-- // keep selection in range as the list shrinks
+	}
+}
+
 // apply folds a journal record into view state.
 func (m *Model) apply(rec journal.Record) {
 	if m.seen[rec.Seq] {
@@ -577,6 +645,9 @@ func (m *Model) render() string {
 		if m.tab == tabApprovals {
 			help = "tab: view · ↑/↓ (j/k): select · y: allow · a: allow kind this session · n: deny · esc: stop · ctrl+c ×2: quit"
 		}
+		if m.tab == tabConflicts {
+			help = "tab: view · ↑/↓ (j/k): select · m: I'll resolve · d: delegate to ‹" + m.selectedTarget() + "› (ctrl+t) · ctrl+c ×2: quit"
+		}
 		if m.control != nil {
 			help += " · ctrl+e: new enroll token"
 		}
@@ -590,6 +661,11 @@ func (m *Model) tabBar() string {
 	for i, name := range tabNames {
 		if i == tabApprovals {
 			if n := len(m.pendingApprovals()); n > 0 {
+				name = fmt.Sprintf("%s (%d)", name, n)
+			}
+		}
+		if i == tabConflicts {
+			if n := len(m.pendingConflicts()); n > 0 {
 				name = fmt.Sprintf("%s (%d)", name, n)
 			}
 		}
@@ -647,6 +723,27 @@ func (m *Model) bodyLines() []string {
 			line := fmt.Sprintf("%s%s wants [%s]: %s", marker, ap.AgentID, ap.Kind, ap.Summary)
 			if ap.Reason != "" {
 				line += helpStyle.Render("  — " + ap.Reason)
+			}
+			out = append(out, line)
+		}
+		return out
+	case tabConflicts:
+		pend := m.pendingConflicts()
+		if len(pend) == 0 {
+			return []string{helpStyle.Render("(no conflicts — seed/git conflicts with no owning agent appear here to resolve or delegate)")}
+		}
+		if m.conflictSel >= len(pend) {
+			m.conflictSel = len(pend) - 1
+		}
+		out := make([]string, 0, len(pend))
+		for i, cf := range pend {
+			marker := "  "
+			if i == m.conflictSel {
+				marker = activeTab.Render("▸ ")
+			}
+			line := fmt.Sprintf("%s%s (hub v%d, %s) — has git-style markers; edit to resolve", marker, cf.Path, cf.HubVersion, cf.Source)
+			if cf.Detail != "" {
+				line += helpStyle.Render("  — " + cf.Detail)
 			}
 			out = append(out, line)
 		}

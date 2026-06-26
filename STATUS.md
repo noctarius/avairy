@@ -236,13 +236,21 @@ Ranked roughly by value-to-effort within each group.
     "serve without a local TUI" mode needs its own flag (e.g. `-serve` / `-no-tui`) — `-headless`
     is already taken (one-shot: send a message, print the journal, exit).
 
-19. **Route operator/seed (and git) conflicts to the human.** Conflicts are always handed to the
-    **agent** whose push was rejected. But some conflicts have no owning agent — the operator's
-    own **seed workspace** diverging from a node's edit, or a **git rebase/merge** conflict on
-    core's repo. Surface these in the TUI (a conflict view showing both sides / the markers) where
-    the human can **either resolve it themselves or delegate it to a local agent** ("agent, fix
-    the markers in X"). Builds on the marker machinery from #3; mainly needs seed-conflict
-    detection + a TUI affordance + an "assign conflict to agent" bus action.
+19. ~~**Route operator/seed (and git) conflicts to the human.**~~ ✅ Done (seed conflicts). Some
+    conflicts have no owning agent to hand to. The operator's **seed workspace** diverging from a
+    node's edit is now detected in core's seed-sync loop: `NodeView` gained the same marker/lock
+    machinery as a node (`MarkConflict`/`IsLocked`/`LockedPaths`) — the operator's local file gets
+    git-style markers, the path is held (not pushed, not clobbered by SyncDown), and the conflict
+    is raised on a new `control.Conflicts` broker. A **Conflicts** TUI tab shows pending ones; the
+    operator presses **`m`** to take it (resolve in their editor — the next sync picks it up) or
+    **`d`** to delegate it to the selected recipient agent (a steer message: "fix the markers in
+    X and call resolve_conflict"); `ctrl+t` picks the agent. Once the markers are removed and the
+    file syncs, the notification auto-clears (`ClearPath`).
+
+    **Git rebase/merge conflicts** are deferred: avairy has no merge/rebase operation today
+    (`git.Repo` does history reads + `Commit`, never a merge), so there's no trigger to route. The
+    broker carries a `Source` field (`"seed"` | `"git"`) so a future merge op can raise into the
+    same view without rework.
 
 ### Single operator
 
