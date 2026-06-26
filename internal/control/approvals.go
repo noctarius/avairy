@@ -11,8 +11,9 @@ import (
 // Decision strings delivered to a waiting Ask. Kept as plain strings so this package stays
 // independent of internal/gating (which maps them to gating.Decision at the edges).
 const (
-	DecisionAllow = "allow"
-	DecisionDeny  = "deny"
+	DecisionAllow           = "allow"
+	DecisionDeny            = "deny"
+	DecisionAllowForSession = "allow_for_session" // allow this, and auto-allow this kind from this agent for the rest of the session
 )
 
 // Approval is a pending request for the operator to allow or deny a gated action (DESIGN.md
@@ -39,9 +40,10 @@ type Approvals struct {
 	OnRequest func(Approval)
 	OnResolve func(Approval, string)
 
-	mu      sync.Mutex
-	seq     int
-	pending map[string]*waiter
+	mu           sync.Mutex
+	seq          int
+	pending      map[string]*waiter
+	sessionAllow map[string]bool // (agentID, kind) the operator has blanket-allowed this session
 }
 
 type waiter struct {
@@ -54,19 +56,20 @@ func NewApprovals(timeout time.Duration) *Approvals {
 	if timeout <= 0 {
 		timeout = 5 * time.Minute
 	}
-	return &Approvals{timeout: timeout, pending: make(map[string]*waiter)}
+	return &Approvals{timeout: timeout, pending: make(map[string]*waiter), sessionAllow: make(map[string]bool)}
 }
+
+func sessionKey(agentID, kind string) string { return agentID + "\x00" + kind }
 
 // Ask registers req as pending and blocks until the operator resolves it, ctx is cancelled,
 // or the timeout elapses. Returns DecisionAllow or DecisionDeny (deny on cancel/timeout).
 func (a *Approvals) Ask(ctx context.Context, req Approval) string {
-	a.mu.Lock()
-	a.seq++
-	req.ID = fmt.Sprintf("ap%d", a.seq)
-	req.At = time.Now()
-	w := &waiter{Approval: req, ch: make(chan string, 1)}
-	a.pending[req.ID] = w
-	a.mu.Unlock()
+	// The locked critical section is just registration; we must NOT hold the lock across the
+	// blocking wait below, or Resolve/Pending would deadlock. So the lock lives in register().
+	w := a.register(&req)
+	if w == nil {
+		return DecisionAllow // operator blanket-allowed this kind earlier; don't re-prompt
+	}
 
 	if a.OnRequest != nil {
 		a.OnRequest(req)
@@ -89,6 +92,22 @@ func (a *Approvals) Ask(ctx context.Context, req Approval) string {
 	return decision
 }
 
+// register assigns req an id and adds it to the pending set, returning its waiter — or nil if
+// the (agent, kind) is already blanket-allowed for the session (caller short-circuits allow).
+func (a *Approvals) register(req *Approval) *waiter {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.sessionAllow[sessionKey(req.AgentID, req.Kind)] {
+		return nil
+	}
+	a.seq++
+	req.ID = fmt.Sprintf("ap%d", a.seq)
+	req.At = time.Now()
+	w := &waiter{Approval: *req, ch: make(chan string, 1)}
+	a.pending[req.ID] = w
+	return w
+}
+
 // Pending returns a snapshot of unresolved approvals, oldest first (for the TUI).
 func (a *Approvals) Pending() []Approval {
 	a.mu.Lock()
@@ -104,21 +123,32 @@ func (a *Approvals) Pending() []Approval {
 // Resolve delivers the operator's decision to the waiting Ask and clears the request. It
 // reports whether id was still pending (false if it already timed out or was resolved).
 func (a *Approvals) Resolve(id, decision string) bool {
-	a.mu.Lock()
-	w, ok := a.pending[id]
-	if ok {
-		delete(a.pending, id)
-	}
-	a.mu.Unlock()
-	if !ok {
+	w := a.take(id, decision) // critical section in take(); deliver outside the lock
+	if w == nil {
 		return false
 	}
 	w.ch <- decision
 	return true
 }
 
+// take removes a pending request and records a session-allow grant, returning its waiter (nil
+// if already resolved/timed out). The channel send happens in the caller, lock-free.
+func (a *Approvals) take(id, decision string) *waiter {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	w, ok := a.pending[id]
+	if !ok {
+		return nil
+	}
+	delete(a.pending, id)
+	if decision == DecisionAllowForSession {
+		a.sessionAllow[sessionKey(w.AgentID, w.Kind)] = true // auto-allow this kind from here on
+	}
+	return w
+}
+
 func (a *Approvals) remove(id string) {
 	a.mu.Lock()
+	defer a.mu.Unlock()
 	delete(a.pending, id)
-	a.mu.Unlock()
 }

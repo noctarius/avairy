@@ -317,7 +317,7 @@ func localGateDecider(approvals *control.Approvals, agentID string) gating.Decid
 		dec := approvals.Ask(ctx, control.Approval{
 			AgentID: agentID, Kind: string(req.Kind), Summary: req.Summary, Reason: req.Reason,
 		})
-		if dec == control.DecisionAllow {
+		if dec == control.DecisionAllow || dec == control.DecisionAllowForSession {
 			return gating.Allow, nil
 		}
 		return gating.Deny, nil

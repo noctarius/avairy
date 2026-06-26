@@ -36,6 +36,60 @@ func TestApprovalsResolveAllow(t *testing.T) {
 	}
 }
 
+func TestApprovalsAllowForSession(t *testing.T) {
+	a := NewApprovals(2 * time.Second)
+	ask := func() string {
+		done := make(chan string, 1)
+		go func() { done <- a.Ask(context.Background(), Approval{AgentID: "alice", Kind: "command", Summary: "git push"}) }()
+		return waitResolve(t, a, done, DecisionAllowForSession)
+	}
+	// First ask is resolved allow-for-session by the operator.
+	if got := ask(); got != DecisionAllowForSession {
+		t.Fatalf("first ask: got %q", got)
+	}
+	// A second identical-kind action from the same agent is auto-allowed with no pending entry.
+	got := a.Ask(context.Background(), Approval{AgentID: "alice", Kind: "command", Summary: "git tag v2"})
+	if got != DecisionAllow {
+		t.Fatalf("second ask should auto-allow, got %q", got)
+	}
+	// A different kind, and a different agent, still prompt.
+	if !wouldBlock(a, Approval{AgentID: "alice", Kind: "install", Summary: "npm i x"}) {
+		t.Fatal("different kind should still prompt")
+	}
+	if !wouldBlock(a, Approval{AgentID: "bob", Kind: "command", Summary: "git push"}) {
+		t.Fatal("different agent should still prompt")
+	}
+}
+
+// waitResolve waits for the request to register, resolves it with decision, and returns Ask's result.
+func waitResolve(t *testing.T, a *Approvals, done <-chan string, decision string) string {
+	t.Helper()
+	for i := 0; i < 100; i++ {
+		if p := a.Pending(); len(p) == 1 {
+			a.Resolve(p[0].ID, decision)
+			return <-done
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("request never became pending")
+	return ""
+}
+
+// wouldBlock reports whether Ask for req would register a pending request (i.e. isn't auto-allowed).
+func wouldBlock(a *Approvals, req Approval) bool {
+	go a.Ask(context.Background(), req)
+	for i := 0; i < 100; i++ {
+		for _, p := range a.Pending() {
+			if p.AgentID == req.AgentID && p.Kind == req.Kind {
+				a.Resolve(p.ID, DecisionDeny) // clean up the goroutine
+				return true
+			}
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	return false
+}
+
 func TestApprovalsTimeoutDenies(t *testing.T) {
 	a := NewApprovals(40 * time.Millisecond)
 	if got := a.Ask(context.Background(), Approval{Summary: "rm -rf /"}); got != DecisionDeny {

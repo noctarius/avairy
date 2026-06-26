@@ -245,7 +245,7 @@ func gateDecider(n *control.Node, agentID string) gating.Decider {
 			fmt.Fprintf(os.Stderr, "GATE ask-core failed, denying [%s] %s: %v\n", req.Kind, req.Summary, err)
 			return gating.Deny, nil
 		}
-		if dec == control.DecisionAllow {
+		if dec == control.DecisionAllow || dec == control.DecisionAllowForSession {
 			return gating.Allow, nil
 		}
 		return gating.Deny, nil

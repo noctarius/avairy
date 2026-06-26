@@ -59,8 +59,9 @@ Ranked roughly by value-to-effort within each group.
    `cmd/avairy` now serves a loopback `/gate` and registers the PreToolUse hook for local
    Claude — same broker path as a node, no more `--allowedTools`.
 
-6. **`AllowForSession`.** The decision constant exists but the TUI only offers allow/deny, so
-   the human re-approves identical actions every time. No "allow this kind for the session."
+6. ~~**`AllowForSession`.**~~ ✅ Done. The Approvals tab adds `a` = "allow this kind from this
+   agent for the session"; the broker remembers `(agentID, kind)` grants and auto-allows
+   matching requests with no re-prompt (centralized, so local + node paths both benefit).
 
 7. **Live `--settings` hook validation.** The shim + policy + broker are tested, but a live
    `claude` run actually parsing the injected `--settings` and calling the hook is unverified.

@@ -79,10 +79,10 @@ func TestApprovalsViewAndResolve(t *testing.T) {
 	if resolved != [2]string{"ap2", "deny"} {
 		t.Fatalf("expected ap2 denied, got %v", resolved)
 	}
-	// Allow the remaining one with 'y'.
-	m.Update(tea.KeyPressMsg{Code: 'y', Text: "y"})
-	if resolved != [2]string{"ap1", "allow"} {
-		t.Fatalf("expected ap1 allowed, got %v", resolved)
+	// Allow the remaining one for the whole session with 'a'.
+	m.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	if resolved != [2]string{"ap1", "allow_for_session"} {
+		t.Fatalf("expected ap1 allowed-for-session, got %v", resolved)
 	}
 }
 

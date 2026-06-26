@@ -44,8 +44,9 @@ type ApprovalItem struct {
 
 // Decision strings passed to Deps.ResolveApproval.
 const (
-	decisionAllow = "allow"
-	decisionDeny  = "deny"
+	decisionAllow        = "allow"
+	decisionDeny         = "deny"
+	decisionAllowSession = "allow_for_session"
 )
 
 // ControlInfo surfaces node-enrollment details in the TUI (the alt-screen hides stdout, so
@@ -351,6 +352,9 @@ func (m *Model) handleApprovalKey(s string) bool {
 	case "y", "enter":
 		m.resolveSelected(pend, decisionAllow)
 		return true
+	case "a":
+		m.resolveSelected(pend, decisionAllowSession)
+		return true
 	case "n", "d":
 		m.resolveSelected(pend, decisionDeny)
 		return true
@@ -530,7 +534,7 @@ func (m *Model) render() string {
 	} else {
 		help := "tab: view · ctrl+t: recipient · enter: send · " + newlineKey + ": newline · esc: stop · ctrl+c ×2: quit"
 		if m.tab == tabApprovals {
-			help = "tab: view · ↑/↓ (j/k): select · y: allow · n: deny · esc: stop · ctrl+c ×2: quit"
+			help = "tab: view · ↑/↓ (j/k): select · y: allow · a: allow kind this session · n: deny · esc: stop · ctrl+c ×2: quit"
 		}
 		if m.control != nil {
 			help += " · ctrl+e: new enroll token"

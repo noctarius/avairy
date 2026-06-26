@@ -43,7 +43,7 @@ local agents** — you bring them via `avairy-node` or `-live`.)
 - Type `@alice <message>` to address an agent; a bare line broadcasts to everyone.
 - **Enter** sends; **Shift+Enter** (Kitty-protocol terminals) / **Option·Alt+Enter** / **Ctrl+J** insert a newline.
 - `tab` cycles **Conversation / Handovers / Tasks / Approvals**; **Esc** stops running agents; **Ctrl+C twice** quits.
-- On the **Approvals** tab, `↑/↓` (or `j/k`) selects a pending gated action and **`y`** allows / **`n`** denies it; the tab shows a `(N)` badge while any are waiting.
+- On the **Approvals** tab, `↑/↓` (or `j/k`) selects a pending gated action; **`y`** allows it once, **`a`** allows that kind from that agent for the rest of the session, **`n`** denies. The tab shows a `(N)` badge while any are waiting.
 - The fleet line shows each agent's status and running cost.
 
 **A real Claude agent on the bus:**
