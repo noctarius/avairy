@@ -133,6 +133,15 @@ func main() {
 	}
 	fmt.Printf("enrolled node %q (os=%s) with core %s\n", *id, *osName, *core)
 
+	// Adopt the hub's versions for files already present locally before the first sync, so a
+	// pre-populated workspace (or a restart — base is in-memory) doesn't push everything from base 0
+	// and report a spurious conflict on every file.
+	if *ws != "" {
+		if err := n.ResumeFromHub(*ws); err != nil {
+			fmt.Fprintln(os.Stderr, "avairy-node: resume from hub:", err)
+		}
+	}
+
 	// Local HTTP server for agents on this machine: the MCP proxy → core bus (stamping this
 	// node's identity == agent id) plus the /gate endpoint the Claude PreToolUse hook calls.
 	if *coreMCP != "" {

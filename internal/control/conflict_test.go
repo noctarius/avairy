@@ -128,6 +128,45 @@ func TestNodeConflictLockHoldsAgainstSyncDown(t *testing.T) {
 	}
 }
 
+// A fresh node whose workspace is already populated with the hub's files (a pre-existing checkout,
+// or a restart that lost its in-memory base) must NOT report a conflict on every file: ResumeFromHub
+// adopts the hub versions first so the initial SyncUp pushes idempotently instead of from base 0.
+func TestResumeFromHubAvoidsSpuriousConflicts(t *testing.T) {
+	core, srv := newCoreServer(t)
+	t.Cleanup(srv.Close)
+
+	// Core/seed publishes the project into the hub via node "seed".
+	dirSeed := t.TempDir()
+	writeFile(t, dirSeed, "main.go", "package main")
+	writeFile(t, dirSeed, "go.mod", "module x")
+	seed := NewNode(srv.URL, "seed")
+	seed.Enroll(core.CurrentToken(), "linux", nil)
+	seed.SyncUp(dirSeed)
+
+	// A new node joins with the SAME files already on disk (e.g. an existing checkout).
+	dirNew := t.TempDir()
+	writeFile(t, dirNew, "main.go", "package main")
+	writeFile(t, dirNew, "go.mod", "module x")
+	fresh := NewNode(srv.URL, "fresh")
+	fresh.Enroll(core.CurrentToken(), "linux", nil)
+
+	if err := fresh.ResumeFromHub(dirNew); err != nil {
+		t.Fatal(err)
+	}
+	if c, err := fresh.SyncUp(dirNew); err != nil || len(c) != 0 {
+		t.Fatalf("initial sync after ResumeFromHub: conflicts=%+v err=%v (want none)", c, err)
+	}
+
+	// A genuine local edit after resume still flows (and doesn't conflict, hub hasn't moved).
+	writeFile(t, dirNew, "main.go", "package main // edited")
+	if c, _ := fresh.SyncUp(dirNew); len(c) != 0 {
+		t.Fatalf("edit after resume should push cleanly, got %+v", c)
+	}
+	if f, ok := core.hub.Get("main.go"); !ok || string(f.Content) != "package main // edited" {
+		t.Fatalf("edit did not land on the hub: %q ok=%v", f.Content, ok)
+	}
+}
+
 // newConflict notifies once per (agent, path, hub version): a node re-pushing the same stale
 // edit doesn't re-notify until the hub moves on.
 func TestNewConflictDedup(t *testing.T) {

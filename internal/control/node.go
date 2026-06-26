@@ -173,6 +173,33 @@ func (n *Node) markConflict(dir string, r SyncResult) {
 	}
 }
 
+// ResumeFromHub primes the node's base versions against core before the first sync, so a node
+// whose workspace is already populated (a pre-existing checkout, or a restart — base is in-memory
+// and lost across restarts) doesn't push every file from base 0 and collide with the canonical hub.
+// For each hub file that also exists locally it adopts the hub's version as the base: an unchanged
+// local file then pushes idempotently (no conflict), a locally-edited one pushes from the correct
+// base (a real edit, not a phantom new-file conflict), and hub files absent locally are left for
+// SyncDown to fetch. Mirrors workspace.NodeView.ResumeFromHub (the core seed's resume). Call once
+// after Enroll, before the sync loop.
+func (n *Node) ResumeFromHub(dir string) error {
+	var resp PullResponse
+	if err := n.post(PathPull, n.sess(), PullRequest{Base: map[string]uint64{}}, &resp); err != nil {
+		return err
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	for _, f := range resp.Files {
+		if f.Deleted {
+			continue
+		}
+		full := filepath.Join(dir, filepath.FromSlash(f.Path))
+		if _, err := os.Stat(full); err == nil {
+			n.base[f.Path] = f.Version // adopt; don't write (SyncUp's push is idempotent for equal content)
+		}
+	}
+	return nil
+}
+
 // SyncDown pulls updates the node hasn't seen and applies them to dir.
 func (n *Node) SyncDown(dir string) error {
 	n.mu.Lock()
