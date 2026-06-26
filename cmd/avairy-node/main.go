@@ -235,6 +235,23 @@ func main() {
 const defaultRole = "You are an avairy agent. Collaborate ONLY through the avairy MCP tools " +
 	"(send_message, read_inbox, post_task, claim_task, list_tasks, report_status, git_history, request_commit, scratch_worktree, resolve_conflict). Be terse."
 
+// readSession reads a persisted agent session id (empty if absent/unreadable).
+func readSession(path string) string {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}
+
+// writeSession persists the agent's session id (best-effort) so a respawn can resume it.
+func writeSession(path, id string) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return
+	}
+	_ = os.WriteFile(path, []byte(id), 0o600)
+}
+
 // refreshMirror pulls a fresh repo bundle from core and (re)builds the node's read-only mirror.
 // Best-effort: a missing repo on core or a transient error just leaves the mirror as-is.
 func refreshMirror(ctx context.Context, n *control.Node, mirrorDir string) {
@@ -282,21 +299,41 @@ func spawnAgent(ctx context.Context, n *control.Node, family, agentID, role, mod
 	if err != nil {
 		return err
 	}
-	sess, err := ad.Start(ctx, agent.SessionConfig{
+	cfg := agent.SessionConfig{
 		AgentID:   agentID,
 		Role:      role,
 		Workspace: ws,
 		Model:     model,
 		MCP:       []agent.MCPServer{{Name: "avairy", Type: "http", URL: proxyURL}},
-	})
+	}
+	// Resume the agent's prior conversation across a node restart (DESIGN.md §8): the session id
+	// is persisted under the sync-excluded .avairy dir and passed back as ResumeID. Only for
+	// families that actually honor it (claude --resume, codex thread/resume).
+	var sessionFile string
+	if ws != "" && ad.Capabilities().SupportsResume {
+		sessionFile = filepath.Join(ws, ".avairy", "session")
+		if prev := readSession(sessionFile); prev != "" {
+			cfg.ResumeID = prev
+			fmt.Printf("resuming %s session %s for agent %q\n", family, prev, agentID)
+		}
+	}
+	sess, err := ad.Start(ctx, cfg)
 	if err != nil {
 		return err
 	}
 	fmt.Printf("spawned %s agent %q → bus via %s\n", family, agentID, proxyURL)
 
-	// Ship the agent's events to the core journal (so they appear in the operator TUI).
+	// Ship the agent's events to the core journal (so they appear in the operator TUI), and
+	// persist the session id once the agent reports it so a respawn can resume.
 	go func() {
+		savedSession := ""
 		for ev := range sess.Events() {
+			if sessionFile != "" {
+				if id := sess.ID(); id != "" && id != savedSession {
+					savedSession = id
+					writeSession(sessionFile, id)
+				}
+			}
 			r := control.AgentEventReport{AgentID: agentID, Type: string(ev.Type), Text: ev.Text}
 			if ev.Tool != nil {
 				r.Tool = ev.Tool.Name

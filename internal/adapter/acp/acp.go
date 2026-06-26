@@ -50,7 +50,7 @@ func (a *Adapter) Capabilities() agent.Capabilities {
 	return agent.Capabilities{
 		SupportsInterrupt: true,  // session/cancel
 		SupportsSteer:     false, // no native mid-turn inject; a new prompt starts after the turn
-		SupportsResume:    true,  // session/load
+		SupportsResume:    false, // protocol has session/load, but Start doesn't honor ResumeID yet
 		MCPClient:         true,  // mcpServers in session/new (http verified)
 		Enforcement:       agent.EnforcementHooked,
 	}

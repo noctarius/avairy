@@ -140,7 +140,12 @@ Ranked roughly by value-to-effort within each group.
     renumbered contiguously for stable de-dup). **By design, token enrollment state is NOT
     persisted** — one-time tokens are short-lived secrets; a node that must reliably reconnect
     across a core restart should use mTLS (#8), whose cert auth is stateless on core and
-    auto-reenrolls. *Still open:* agent **session** resume (adapter ResumeID) is untouched.
+    auto-reenrolls. ✅ **Agent session resume**: the node persists the agent's session id under
+    `.avairy/session` and passes it back as `ResumeID` on respawn, so a restarted agent continues
+    its conversation — wired for **Claude** (`--resume`) and **Codex** (`thread/resume` by
+    threadId, verified against the app-server schema; falls back to a fresh thread if the id
+    can't be loaded). *Still open:* ACP (Copilot/Grok) — the protocol has `session/load` but it's
+    not wired and I haven't verified those agents implement it (their `SupportsResume` is `false`).
 
 14. **Loop detection only catches a step repeated back-to-back.** `trackLoop` keeps a sliding
     window of the last 3 event signatures and fires only when all 3 are *identical and

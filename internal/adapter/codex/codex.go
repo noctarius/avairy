@@ -48,7 +48,7 @@ func (a *Adapter) Capabilities() agent.Capabilities {
 	return agent.Capabilities{
 		SupportsInterrupt: true, // turn/steer injects mid-turn; turn/interrupt cancels
 		SupportsSteer:     true,
-		SupportsResume:    true,
+		SupportsResume:    true, // thread/resume by threadId (verified against the app-server schema)
 		MCPClient:         true,
 		Enforcement:       agent.EnforcementHooked, // in-protocol approval requests
 	}
@@ -102,13 +102,27 @@ func (a *Adapter) Start(ctx context.Context, cfg agent.SessionConfig) (agent.Ses
 		_ = s.Close()
 		return nil, fmt.Errorf("codex: initialize: %w", err)
 	}
-	tsRes, err := s.call(hctx, "thread/start", threadStartParams{
-		Cwd:                   nonEmpty(cfg.Workspace),
-		Model:                 nonEmpty(cfg.Model),
-		DeveloperInstructions: nonEmpty(cfg.Role),
-		ApprovalPolicy:        orDefault(a.ApprovalPolicy, "never"),
-		Sandbox:               orDefault(a.Sandbox, "workspace-write"),
-	})
+	approval, sandbox := orDefault(a.ApprovalPolicy, "never"), orDefault(a.Sandbox, "workspace-write")
+	var tsRes json.RawMessage
+	if cfg.ResumeID != "" {
+		// Resume the prior thread by id; fall back to a fresh thread if it can't be loaded
+		// (e.g. the app-server's store was cleared), so respawn never hard-fails.
+		tsRes, err = s.call(hctx, "thread/resume", threadResumeParams{
+			ThreadID: cfg.ResumeID, Cwd: nonEmpty(cfg.Workspace), ApprovalPolicy: approval, Sandbox: sandbox,
+		})
+		if err != nil {
+			tsRes, err = nil, nil
+		}
+	}
+	if tsRes == nil {
+		tsRes, err = s.call(hctx, "thread/start", threadStartParams{
+			Cwd:                   nonEmpty(cfg.Workspace),
+			Model:                 nonEmpty(cfg.Model),
+			DeveloperInstructions: nonEmpty(cfg.Role),
+			ApprovalPolicy:        approval,
+			Sandbox:               sandbox,
+		})
+	}
 	if err != nil {
 		_ = s.Close()
 		return nil, fmt.Errorf("codex: thread/start: %w", err)
@@ -341,6 +355,14 @@ type threadStartParams struct {
 	DeveloperInstructions string `json:"developerInstructions,omitempty"`
 	ApprovalPolicy        string `json:"approvalPolicy,omitempty"`
 	Sandbox               string `json:"sandbox,omitempty"`
+}
+
+// threadResumeParams resumes a prior thread by id (loaded from the app-server's on-disk store).
+type threadResumeParams struct {
+	ThreadID       string `json:"threadId"`
+	Cwd            string `json:"cwd,omitempty"`
+	ApprovalPolicy string `json:"approvalPolicy,omitempty"`
+	Sandbox        string `json:"sandbox,omitempty"`
 }
 
 type turnStartParams struct {
