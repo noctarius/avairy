@@ -137,10 +137,10 @@ Ranked roughly by value-to-effort within each group.
     history** resumes too: `cmd` re-decodes the persisted records to their typed forms
     (`decodeRecords`) and seeds the in-memory log via `journal.Memory.Restore` before the TUI
     subscribes, so conversation / handovers / fleet / approvals replay on the backfill (seqs
-    renumbered contiguously for stable de-dup). *Still open:* (a) **token** enrollment state
-    (`bound`/`sessions`) isn't persisted, so token nodes can't rejoin after a restart — tokens
-    are secrets we don't journal; needs a separate secret store (mTLS already survives, #8);
-    (b) agent **session** resume (adapter ResumeID) is untouched.
+    renumbered contiguously for stable de-dup). **By design, token enrollment state is NOT
+    persisted** — one-time tokens are short-lived secrets; a node that must reliably reconnect
+    across a core restart should use mTLS (#8), whose cert auth is stateless on core and
+    auto-reenrolls. *Still open:* agent **session** resume (adapter ResumeID) is untouched.
 
 14. **Loop detection only catches a step repeated back-to-back.** `trackLoop` keeps a sliding
     window of the last 3 event signatures and fires only when all 3 are *identical and
