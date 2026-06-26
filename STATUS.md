@@ -31,8 +31,10 @@ land. Section references (§N) point at DESIGN.md.
     the task board, tools denied) and returns an independent answer — the §8 anti-anchoring tool.
     A one-shot persists **nothing** (throwaway workspace, no session id), and node session
     persistence is guarded `!= SessionEphemeral`, so a fresh look can never overwrite the agent's
-    real session. *Still open:* facilitator **auto-invoking** fresh_look on a detected loop (today
-    it can only nudge the agent to call it); curating richer blackboard context.
+    real session. ✅ The **facilitator auto-invokes** fresh_look on a detected loop and delivers
+    the independent take to the stuck agent (async, rate-limited by the nudge cooldown; gated to
+    runs with a real agent so a `-demo` mock loop can't spawn a paid session). *Still open:*
+    curating richer blackboard context for the fresh-look prompt.
 
 0. ~~**Tool actions carried & shown with detail.**~~ ✅ Done. Tool calls now surface their
    identifying arg — `Bash: go test ./...`, `Read src/main.go` — in the TUI (`agent.ToolSummary`)

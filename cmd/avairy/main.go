@@ -303,6 +303,11 @@ func main() {
 		}
 		return out
 	}), facilitator.RuleNudger{})
+	// Let the facilitator run a fresh look on a detected loop — but only with a real agent in
+	// play (a -demo mock loop must not spawn a credit-spending session).
+	if *live || *controlAddr != "" {
+		fac.FreshLook = makeFreshLook(*family, *model, bd)
+	}
 	facSub, _ := jrnl.Subscribe()
 	go fac.Run(ctx, facSub)
 

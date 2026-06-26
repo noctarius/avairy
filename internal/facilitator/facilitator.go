@@ -12,6 +12,8 @@ package facilitator
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -79,6 +81,10 @@ type Facilitator struct {
 	loopN    int           // identical consecutive steps that count as a loop
 	cooldown time.Duration // min gap between nudges for the same (agent, trigger)
 	now      func() time.Time
+	// FreshLook, if set, runs a clean-context one-shot session (DESIGN.md §8) — the facilitator's
+	// primary tool against loops. On a detected loop it asks for an independent take and delivers
+	// the answer to the stuck agent. Spawns a real session, so it's gated by the nudge cooldown.
+	FreshLook func(ctx context.Context, question string) (string, error)
 
 	mu        sync.Mutex
 	recent    map[string][]string  // agent -> recent activity signatures
@@ -130,6 +136,25 @@ func (f *Facilitator) Observe(rec journal.Record) {
 		f.publish(n)
 	}
 	f.markNudged(t)
+
+	// A loop is exactly what ephemeral fresh-look is for: get an unanchored take and hand it to
+	// the stuck agent. Async — it spawns a session; the cooldown above already rate-limits it.
+	if t.Kind == TriggerLoop && f.FreshLook != nil {
+		go f.runFreshLook(t)
+	}
+}
+
+func (f *Facilitator) runFreshLook(t Trigger) {
+	q := fmt.Sprintf("Agent %q is stuck repeating the same step (%s). With no prior context or "+
+		"assumptions, what is it most likely missing, and what concretely different approach should "+
+		"it try? Be brief.", t.Agent, t.Detail)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	ans, err := f.FreshLook(ctx, q)
+	if err != nil || strings.TrimSpace(ans) == "" {
+		return
+	}
+	f.bus.Publish("facilitator", bus.Agent(t.Agent), "fresh look (no prior context) on your loop — "+ans, agent.DeliverySteer)
 }
 
 // reportStatus extracts (agent, status) from a report_status system record.

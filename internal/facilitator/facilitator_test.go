@@ -1,6 +1,7 @@
 package facilitator
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -123,6 +124,41 @@ func TestObserve_DifferentFilesAreNotALoop(t *testing.T) {
 	}
 	if n != 0 {
 		t.Fatalf("reading distinct files should not trip the loop detector, got %d nudges", n)
+	}
+}
+
+// On a detected loop, the facilitator runs a fresh look and delivers its answer to the agent.
+func TestObserve_LoopRunsFreshLook(t *testing.T) {
+	j := journal.NewMemory()
+	b := bus.New(j)
+	f := New(b, RosterFunc(func() []Agent { return roster }), RuleNudger{})
+
+	var gotQ string
+	f.FreshLook = func(_ context.Context, q string) (string, error) {
+		gotQ = q
+		return "try a different command", nil
+	}
+	inbox, _ := b.Subscribe("linbot")
+
+	rec := journal.Record{Kind: journal.KindAgentEvent, Actor: "linbot",
+		Data: agent.Event{Type: agent.EventToolUse, Tool: &agent.ToolCall{Name: "Bash", Input: map[string]any{"command": "make"}}}}
+	f.Observe(rec)
+	f.Observe(rec)
+	f.Observe(rec) // 3rd identical → loop
+
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case m := <-inbox:
+			if strings.Contains(m.Body, "fresh look") && strings.Contains(m.Body, "try a different command") {
+				if gotQ == "" {
+					t.Fatal("FreshLook called with empty question")
+				}
+				return // success
+			}
+		case <-deadline:
+			t.Fatal("expected a fresh-look message delivered to the looping agent")
+		}
 	}
 }
 
