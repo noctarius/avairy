@@ -31,6 +31,10 @@ type Deps struct {
 	// agents block on a gated action, the operator allows/denies it here. Nil disables the view.
 	PendingApprovals func() []ApprovalItem
 	ResolveApproval  func(id, decision string)
+
+	// Commit signs a commit of the canonical repo on the operator's behalf (DESIGN.md §9, the
+	// human-commits-via-TUI path). Returns the new short hash. Nil when core has no git repo.
+	Commit func(message string) (string, error)
 }
 
 // ApprovalItem is one pending gated action awaiting the operator's verdict.
@@ -110,6 +114,12 @@ type Model struct {
 
 // recordMsg carries a journal record into the Bubble Tea update loop.
 type recordMsg journal.Record
+
+// commitResultMsg carries the outcome of an operator-initiated /commit back into the loop.
+type commitResultMsg struct {
+	hash string
+	err  error
+}
 
 var (
 	titleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12"))
@@ -194,6 +204,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshRoster() // pick up newly-enrolled agents (enrollment journals a record)
 		return m, listen(m.sub)
 
+	case commitResultMsg:
+		if msg.err != nil {
+			m.addConv(warnStyle.Render("⚠ commit failed: " + msg.err.Error()))
+		} else {
+			m.addConv("✓ committed " + msg.hash)
+		}
+		return m, nil
+
 	case tea.KeyPressMsg:
 		// Ctrl+C twice in succession quits; the first press just arms (hint in the footer).
 		// Any other key disarms. Esc stops running agents; it no longer quits.
@@ -230,9 +248,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.input.InsertRune('\n')
 			return m, nil
 		case "enter":
-			m.submit()
+			cmd := m.submit()
 			m.input.Reset()
-			return m, nil
+			return m, cmd
 		}
 	}
 
@@ -241,17 +259,40 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// submit publishes the input line to the bus as a human injection.
-func (m *Model) submit() {
+// submit handles the input line: a "/commit <msg>" slash command commits the canonical repo;
+// anything else is published to the bus as a human injection. Returns a tea.Cmd for async work
+// (the commit, which may block on signing), or nil.
+func (m *Model) submit() tea.Cmd {
 	text := strings.TrimSpace(m.input.Value())
 	if text == "" {
-		return
+		return nil
+	}
+	if rest, ok := strings.CutPrefix(text, "/commit"); ok {
+		return m.commitCmd(strings.TrimSpace(rest))
 	}
 	if mention, body := splitMention(text); mention != "" && body != "" {
 		m.deps.Bus.Publish("human", bus.Agent(mention), body, agent.DeliverySteer)
-		return
+		return nil
 	}
 	m.deps.Bus.Publish("human", bus.Broadcast(), text, agent.DeliverySteer)
+	return nil
+}
+
+// commitCmd runs an operator-initiated signed commit off the UI thread (signing can block).
+func (m *Model) commitCmd(message string) tea.Cmd {
+	if m.deps.Commit == nil {
+		m.addConv(helpStyle.Render("(commit unavailable — core has no git repo)"))
+		return nil
+	}
+	if message == "" {
+		m.addConv(helpStyle.Render("usage: /commit <message>"))
+		return nil
+	}
+	commit := m.deps.Commit
+	return func() tea.Msg {
+		hash, err := commit(message)
+		return commitResultMsg{hash: hash, err: err}
+	}
 }
 
 // splitMention separates a leading "@name" recipient from the rest of the text.

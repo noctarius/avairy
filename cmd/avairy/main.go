@@ -96,6 +96,7 @@ func main() {
 
 	// Optionally serve the node control API so remote avairy-node daemons can enroll and sync.
 	var ctrlInfo *tui.ControlInfo
+	var commitFn func(string) (string, error) // operator-initiated /commit; nil unless git is enabled
 	if *controlAddr != "" {
 		// Restore the canonical hub from disk so a core restart doesn't lose state (DESIGN.md
 		// §9); persist it periodically and on clean shutdown.
@@ -160,6 +161,13 @@ func main() {
 			} else {
 				mcpSrv.EnableGit(repo, gitApprover(approvals))
 				defer repo.PruneWorktrees(context.Background()) // disposable: clean up scratch checkouts on exit
+				commitFn = func(message string) (string, error) {
+					hash, cerr := repo.Commit(context.Background(), nil, message)
+					if cerr == nil {
+						jrnl.Append(journal.KindSystem, "human", map[string]any{"event": "git_commit", "hash": hash, "message": message})
+					}
+					return hash, cerr
+				}
 			}
 		}
 		core := control.NewCore(hub, jrnl)
@@ -259,6 +267,7 @@ func main() {
 			return out
 		},
 		ResolveApproval: func(id, decision string) { approvals.Resolve(id, decision) },
+		Commit:          commitFn,
 	}
 	if err := tui.Run(deps); err != nil {
 		fail("tui", err)

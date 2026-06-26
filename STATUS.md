@@ -38,8 +38,8 @@ Ranked roughly by value-to-effort within each group.
 
 ### Designed but not built (large)
 
-1. **Git integration (§9) — core done, extras pending.** `internal/git` wraps the git CLI on
-   core's canonical repo; two MCP tools are wired (enabled when `-workspace` is a repo):
+1. **Git integration (§9) — done (one cross-OS extra left).** `internal/git` wraps the git CLI
+   on core's canonical repo; MCP tools wired (enabled when `-workspace` is a repo):
    - ✅ `git_history(mode, ref, path, limit)` — log/show/diff/blame, read-only, any agent (for
      RCA); args validated against flag-injection.
    - ✅ `request_commit(message, paths)` — **gated** (routes to the operator's Approvals tab via
@@ -48,7 +48,9 @@ Ranked roughly by value-to-effort within each group.
      off the synced tree (so bisect/build/repro doesn't disturb the canonical tree), tracked and
      pruned on shutdown. *Note:* the checkout lives on core; materializing it onto a node for
      on-node cross-OS build/repro is a further step.
-   - ⬜ TUI-initiated commit (human commits directly; today the human approves agent commits).
+   - ✅ TUI-initiated commit: the operator types `/commit <message>` to sign a commit directly
+     (runs off the UI thread, result folds into the conversation).
+   - ⬜ Remaining: materialize a scratch worktree onto a *node* for on-node cross-OS build/repro.
 
 2. ~~**Hub persistence.**~~ ✅ Done. The hub snapshots to `.avairy/hub.json` (atomic
    temp+rename), restored on startup via `LoadHub`; persisted every 5s if dirty and on clean

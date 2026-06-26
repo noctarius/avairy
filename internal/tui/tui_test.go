@@ -86,6 +86,46 @@ func TestApprovalsViewAndResolve(t *testing.T) {
 	}
 }
 
+// "/commit <msg>" runs the Commit dep off-thread and folds the result into the conversation.
+func TestSlashCommit(t *testing.T) {
+	j := journal.NewMemory()
+	b := bus.New(j)
+	bd := board.New(j)
+	var gotMsg string
+	m := NewModel(Deps{
+		Bus: b, Board: bd, Journal: j,
+		Commit: func(message string) (string, error) { gotMsg = message; return "abc1234", nil },
+	})
+
+	m.input.SetValue("/commit fix the panic")
+	cmd := m.submit()
+	if cmd == nil {
+		t.Fatal("/commit should return a command")
+	}
+	if msg, ok := cmd().(commitResultMsg); !ok || msg.hash != "abc1234" {
+		t.Fatalf("commit cmd produced %#v", cmd())
+	}
+	if gotMsg != "fix the panic" {
+		t.Fatalf("commit message = %q", gotMsg)
+	}
+	// Feeding the result back renders a confirmation line.
+	m.Update(commitResultMsg{hash: "abc1234"})
+	if !strings.Contains(strings.Join(m.conv, "\n"), "committed abc1234") {
+		t.Fatalf("conversation missing commit confirmation: %v", m.conv)
+	}
+
+	// No message → usage hint, no command. No Commit dep → unavailable note.
+	m.input.SetValue("/commit")
+	if m.submit() != nil {
+		t.Fatal("/commit with no message should not run")
+	}
+	m.deps.Commit = nil
+	m.input.SetValue("/commit something")
+	if m.submit() != nil {
+		t.Fatal("/commit with no git repo should not run")
+	}
+}
+
 // Dedup: applying the same Seq twice doesn't double-render.
 func TestApplyDedup(t *testing.T) {
 	m, _, _ := newTestModel()

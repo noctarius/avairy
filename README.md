@@ -45,6 +45,7 @@ local agents** — you bring them via `avairy-node` or `-live`.)
 - `tab` cycles **Conversation / Handovers / Tasks / Approvals**; **Esc** stops running agents; **Ctrl+C twice** quits.
 - On the **Approvals** tab, `↑/↓` (or `j/k`) selects a pending gated action; **`y`** allows it once, **`a`** allows that kind from that agent for the rest of the session, **`n`** denies. The tab shows a `(N)` badge while any are waiting.
 - The fleet line shows each agent's status and running cost.
+- Type `/commit <message>` to sign a commit of the canonical repo yourself (when core has one).
 
 **A real Claude agent on the bus:**
 
