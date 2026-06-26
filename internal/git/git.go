@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -133,8 +134,15 @@ func (r *Repo) Commit(ctx context.Context, paths []string, message string) (stri
 
 // run executes git in the repo dir and returns stdout (stderr is folded into the error).
 func (r *Repo) run(ctx context.Context, args ...string) (string, error) {
+	return runGit(ctx, r.Dir, args...)
+}
+
+// runGit executes git in dir (cwd if empty) and returns stdout (stderr folded into the error).
+func runGit(ctx context.Context, dir string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Dir = r.Dir
+	if dir != "" {
+		cmd.Dir = dir
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
@@ -145,6 +153,23 @@ func (r *Repo) run(ctx context.Context, args ...string) (string, error) {
 		return "", fmt.Errorf("git %s: %s", args[0], msg)
 	}
 	return stdout.String(), nil
+}
+
+// Bundle packs the entire repo history into a git bundle (a single transportable file). Core
+// serves this to nodes, which build a read-only mirror from it (see UpdateMirror) — the basis
+// for on-node, cross-OS bisect/build/repro (DESIGN.md §9). Errors on an empty repo (no commits).
+func (r *Repo) Bundle(ctx context.Context) ([]byte, error) {
+	f, err := os.CreateTemp("", "avairy-bundle-*.bundle")
+	if err != nil {
+		return nil, err
+	}
+	path := f.Name()
+	f.Close()
+	defer os.Remove(path)
+	if _, err := r.run(ctx, "bundle", "create", path, "--all"); err != nil {
+		return nil, err
+	}
+	return os.ReadFile(path)
 }
 
 // safeArg rejects empty-allowed values that would be read as flags (a leading '-'), so an agent

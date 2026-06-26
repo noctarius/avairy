@@ -39,8 +39,8 @@ Ranked roughly by value-to-effort within each group.
 
 ### Designed but not built (large)
 
-1. **Git integration (§9) — done (one cross-OS extra left).** `internal/git` wraps the git CLI
-   on core's canonical repo; MCP tools wired (enabled when `-workspace` is a repo):
+1. ~~**Git integration (§9).**~~ ✅ Done. `internal/git` wraps the git CLI on core's canonical
+   repo; MCP tools wired (enabled when `-workspace` is a repo):
    - ✅ `git_history(mode, ref, path, limit)` — log/show/diff/blame, read-only, any agent (for
      RCA); args validated against flag-injection.
    - ✅ `request_commit(message, paths)` — **gated** (routes to the operator's Approvals tab via
@@ -51,7 +51,12 @@ Ranked roughly by value-to-effort within each group.
      on-node cross-OS build/repro is a further step.
    - ✅ TUI-initiated commit: the operator types `/commit <message>` to sign a commit directly
      (runs off the UI thread, result folds into the conversation).
-   - ⬜ Remaining: materialize a scratch worktree onto a *node* for on-node cross-OS build/repro.
+   - ✅ On-node cross-OS bisect/build/repro: core serves the repo as a git **bundle**
+     (`/repo/bundle`); the node maintains a **read-only mirror** under `.avairy/mirror.git`
+     (refreshed every 5 min) and the agent's role tells it to `git --git-dir=<mirror> worktree
+     add` past commits into `.avairy/scratch/`, build/bisect there, and commit via
+     `request_commit` (no push rights to the mirror). *Future:* incremental bundles (today each
+     refresh ships the full bundle).
 
 2. ~~**Hub persistence.**~~ ✅ Done. The hub snapshots to `.avairy/hub.json` (atomic
    temp+rename), restored on startup via `LoadHub`; persisted every 5s if dirty and on clean

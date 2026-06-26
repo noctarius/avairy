@@ -173,6 +173,28 @@ func (n *Node) RequestApproval(ctx context.Context, req ApprovalRequest) (string
 	return resp.Decision, nil
 }
 
+// PullBundle fetches a git bundle of the canonical repo from core (raw bytes) for the node's
+// read-only mirror. Returns an error if core has no repo (404) or the call fails.
+func (n *Node) PullBundle(ctx context.Context) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, n.CoreURL+PathBundle, nil)
+	if err != nil {
+		return nil, err
+	}
+	if s := n.sess(); s != "" {
+		req.Header.Set("Authorization", "Bearer "+s)
+	}
+	resp, err := n.HTTP.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("control %s: %s: %s", PathBundle, resp.Status, strings.TrimSpace(string(msg)))
+	}
+	return io.ReadAll(resp.Body)
+}
+
 // PostEvents ships an agent's stream events to the core journal (so they show in the TUI).
 func (n *Node) PostEvents(events []AgentEventReport) error {
 	if len(events) == 0 {

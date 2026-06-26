@@ -48,6 +48,9 @@ type Core struct {
 	// hub version before the agent acts, so the message is the agent's only copy of its own edit.
 	// Deduped per (agent, path, hub version) so re-pushing a stale edit doesn't re-notify each tick.
 	OnConflict func(agentID, path string, hubVersion uint64, hubContent, yourContent []byte)
+	// Bundle, if set, returns a git bundle of the canonical repo (DESIGN.md §9). Nodes pull it
+	// to build a local read-only mirror for on-node bisect/build. nil → /repo/bundle 404s.
+	Bundle func(ctx context.Context) ([]byte, error)
 
 	mu        sync.Mutex
 	conflicts map[string]uint64 // agent\x00path -> last-notified hub version
@@ -112,7 +115,25 @@ func (c *Core) Handler() http.Handler {
 	mux.Handle(PathInbox, c.auth(c.handleInbox))
 	mux.Handle(PathEvents, c.auth(c.handleEvents))
 	mux.Handle(PathApprove, c.auth(c.handleApprove))
+	mux.Handle(PathBundle, c.auth(c.handleBundle))
 	return mux
+}
+
+// handleBundle streams a git bundle of the canonical repo to an enrolled node (raw bytes, not
+// JSON). The node builds/refreshes its read-only mirror from it.
+func (c *Core) handleBundle(nodeID string, w http.ResponseWriter, r *http.Request) {
+	c.touch(nodeID)
+	if c.Bundle == nil {
+		http.Error(w, "no canonical repo on core", http.StatusNotFound)
+		return
+	}
+	b, err := c.Bundle(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/octet-stream")
+	_, _ = w.Write(b)
 }
 
 // handleApprove blocks until the operator rules on a node agent's gated action (or it times

@@ -96,7 +96,8 @@ func main() {
 
 	// Optionally serve the node control API so remote avairy-node daemons can enroll and sync.
 	var ctrlInfo *tui.ControlInfo
-	var commitFn func(string) (string, error) // operator-initiated /commit; nil unless git is enabled
+	var commitFn func(string) (string, error)          // operator-initiated /commit; nil unless git is enabled
+	var bundleFn func(context.Context) ([]byte, error) // repo bundle for node mirrors; nil unless git is enabled
 	if *controlAddr != "" {
 		// Restore the canonical hub from disk so a core restart doesn't lose state (DESIGN.md
 		// §9); persist it periodically and on clean shutdown.
@@ -168,6 +169,7 @@ func main() {
 					}
 					return hash, cerr
 				}
+				bundleFn = repo.Bundle
 			}
 		}
 		// Conflict reconciliation (DESIGN.md §9): agents resolve divergent edits via the bus +
@@ -178,6 +180,7 @@ func main() {
 
 		core := control.NewCore(hub, jrnl)
 		core.Approvals = approvals // one broker feeds both node agents and the operator TUI
+		core.Bundle = bundleFn     // serve the repo as a bundle for node mirrors (nil if no repo)
 		core.OnConflict = func(agentID, path string, hubVersion uint64, hubContent, yourContent []byte) {
 			body := fmt.Sprintf("CONFLICT on %s — another agent changed it (now hub v%d). Merge the two versions below and call resolve_conflict(path=%q, content=<merged>). Your local copy was overwritten with the hub version, so use YOUR EDIT from here.\n--- hub v%d ---\n%s\n--- YOUR EDIT ---\n%s",
 				path, hubVersion, path, hubVersion, truncateForBus(hubContent), truncateForBus(yourContent))

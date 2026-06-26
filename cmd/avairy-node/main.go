@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"syscall"
 	"time"
@@ -26,6 +27,7 @@ import (
 	"avairy/internal/agent"
 	"avairy/internal/control"
 	"avairy/internal/gating"
+	"avairy/internal/git"
 	"avairy/internal/workspace"
 )
 
@@ -93,13 +95,34 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// Maintain a read-only mirror of core's repo so the agent can bisect/build past commits
+	// locally — on this node's OS — without commit rights (DESIGN.md §9). Lives under the
+	// sync-excluded .avairy dir; refreshed in the background, best-effort.
+	mirrorDir := ""
+	if *ws != "" {
+		mirrorDir = filepath.Join(*ws, ".avairy", "mirror.git")
+		go func() {
+			refreshMirror(ctx, n, mirrorDir)
+			t := time.NewTicker(5 * time.Minute)
+			defer t.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+					refreshMirror(ctx, n, mirrorDir)
+				}
+			}
+		}()
+	}
+
 	// Optionally spawn & drive the agent on this node, wired to the local MCP proxy.
 	if *family != "" {
 		if *coreMCP == "" {
 			fmt.Fprintln(os.Stderr, "avairy-node: -family requires -core-mcp")
 			os.Exit(2)
 		}
-		if err := spawnAgent(ctx, n, *family, *id, *role, *model, *ws, *proxy); err != nil {
+		if err := spawnAgent(ctx, n, *family, *id, *role, *model, *ws, *proxy, mirrorDir); err != nil {
 			fmt.Fprintln(os.Stderr, "avairy-node: spawn agent:", err)
 			os.Exit(1)
 		}
@@ -156,11 +179,37 @@ func main() {
 const defaultRole = "You are an avairy agent. Collaborate ONLY through the avairy MCP tools " +
 	"(send_message, read_inbox, post_task, claim_task, list_tasks, report_status, git_history, request_commit, scratch_worktree, resolve_conflict). Be terse."
 
+// refreshMirror pulls a fresh repo bundle from core and (re)builds the node's read-only mirror.
+// Best-effort: a missing repo on core or a transient error just leaves the mirror as-is.
+func refreshMirror(ctx context.Context, n *control.Node, mirrorDir string) {
+	b, err := n.PullBundle(ctx)
+	if err != nil {
+		return // core may have no repo, or be briefly unreachable; try again next tick
+	}
+	if err := git.UpdateMirror(ctx, mirrorDir, b); err != nil {
+		fmt.Fprintln(os.Stderr, "avairy-node: mirror update:", err)
+	}
+}
+
+// mirrorRole describes, for the agent's system prompt, how to use the local read-only mirror
+// for isolated bisect/build/repro without touching the synced workspace.
+func mirrorRole(ws, mirrorDir string) string {
+	scratch := filepath.Join(ws, ".avairy", "scratch")
+	return " For root-cause analysis you have a READ-ONLY git mirror of the repo at " + mirrorDir +
+		". To build/bisect a past commit on this machine, make a throwaway checkout: " +
+		"`git --git-dir=" + mirrorDir + " worktree add " + scratch + "/<name> <ref>`, build/test there, " +
+		"then `git --git-dir=" + mirrorDir + " worktree remove " + scratch + "/<name>`. Keep scratch checkouts under " +
+		scratch + " (NOT the synced workspace), and commit via request_commit — you cannot push the mirror."
+}
+
 // spawnAgent starts an agent on this node wired to the local MCP proxy, ships its events to
 // the core journal, and injects inbound bus messages (pulled from core) into its session.
-func spawnAgent(ctx context.Context, n *control.Node, family, agentID, role, model, ws, proxy string) error {
+func spawnAgent(ctx context.Context, n *control.Node, family, agentID, role, model, ws, proxy, mirrorDir string) error {
 	if role == "" {
 		role = defaultRole
+	}
+	if mirrorDir != "" {
+		role += mirrorRole(ws, mirrorDir)
 	}
 	_, pport, err := net.SplitHostPort(proxy)
 	if err != nil {

@@ -13,6 +13,7 @@ const (
 	PathInbox     = "/inbox/pull"
 	PathEvents    = "/events"
 	PathApprove   = "/approve"
+	PathBundle    = "/repo/bundle"
 )
 
 // ApprovalRequest asks core to route a gated action to the human operator (DESIGN.md §7). The

@@ -109,6 +109,50 @@ func TestScratchWorktree(t *testing.T) {
 	}
 }
 
+// The cross-OS RCA path: core bundles its repo, a node builds a read-only mirror from the
+// bundle, and an agent checks out a past commit locally from that mirror.
+func TestBundleMirrorWorktree(t *testing.T) {
+	dir, ctx := initRepo(t)
+	write := func(s string) {
+		if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte(s), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r, _ := Open(ctx, dir, false)
+	write("v1\n")
+	if _, err := r.Commit(ctx, nil, "v1"); err != nil {
+		t.Fatal(err)
+	}
+	write("v2\n")
+	if _, err := r.Commit(ctx, nil, "v2"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Core bundles the repo; node builds a mirror from the bundle bytes.
+	bundle, err := r.Bundle(ctx)
+	if err != nil || len(bundle) == 0 {
+		t.Fatalf("bundle: len=%d err=%v", len(bundle), err)
+	}
+	mirror := filepath.Join(t.TempDir(), "mirror.git")
+	if err := UpdateMirror(ctx, mirror, bundle); err != nil {
+		t.Fatalf("build mirror: %v", err)
+	}
+
+	// From the mirror, an agent checks out a PAST commit locally (what it'd build/bisect).
+	scratch := filepath.Join(t.TempDir(), "scratch")
+	if _, err := runGit(ctx, "", "--git-dir="+mirror, "worktree", "add", "--detach", scratch, "HEAD~1"); err != nil {
+		t.Fatalf("worktree from mirror: %v", err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(scratch, "a.txt")); string(got) != "v1\n" {
+		t.Fatalf("mirror worktree has %q, want old version v1", got)
+	}
+
+	// Refresh is idempotent (re-applying the same bundle succeeds).
+	if err := UpdateMirror(ctx, mirror, bundle); err != nil {
+		t.Fatalf("refresh mirror: %v", err)
+	}
+}
+
 func TestHistoryRejectsFlagInjection(t *testing.T) {
 	dir, ctx := initRepo(t)
 	r, _ := Open(ctx, dir, false)
