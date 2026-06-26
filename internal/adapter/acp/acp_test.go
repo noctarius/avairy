@@ -33,6 +33,27 @@ func TestSessionUpdate_TextThenTool(t *testing.T) {
 	}
 }
 
+// A tool_call carries its args into ToolCall.Input — from rawInput, and from locations when
+// rawInput is absent — so the TUI/loop detection see the action, not just the tool name.
+func TestSessionUpdate_ToolInput(t *testing.T) {
+	s := newTestSession()
+	s.handleNotification("session/update", json.RawMessage(`{"update":{"sessionUpdate":"tool_call","toolCallId":"t1","title":"Bash","kind":"execute","rawInput":{"command":"go test ./..."}}}`))
+	ev := <-s.events
+	if ev.Tool.Input["command"] != "go test ./..." {
+		t.Fatalf("rawInput not mapped: %+v", ev.Tool.Input)
+	}
+	if got := agent.ToolSummary(ev.Tool); got != "Bash: go test ./..." {
+		t.Fatalf("summary = %q", got)
+	}
+
+	// No rawInput, but a touched file location → path is captured as a fallback.
+	s.handleNotification("session/update", json.RawMessage(`{"update":{"sessionUpdate":"tool_call","toolCallId":"t2","title":"Edit","kind":"edit","locations":[{"path":"src/main.go"}]}}`))
+	ev = <-s.events
+	if ev.Tool.Input["path"] != "src/main.go" {
+		t.Fatalf("locations fallback not mapped: %+v", ev.Tool.Input)
+	}
+}
+
 func TestSessionUpdate_ToolResult(t *testing.T) {
 	s := newTestSession()
 	s.handleNotification("session/update", json.RawMessage(`{"update":{"sessionUpdate":"tool_call_update","toolCallId":"t1","status":"completed"}}`))

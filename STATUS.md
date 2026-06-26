@@ -29,8 +29,9 @@ land. Section references (§N) point at DESIGN.md.
    instead of a bare repeated "Bash"/"Read". The node ships the (trimmed) tool input over the
    wire (`agent.TrimInput` drops file bodies/diffs), which it previously dropped — so remote
    agents no longer look like they're doing nothing, and loop detection keys on the full action
-   (reading 100 different files is 100 steps, not a loop). *Still thin:* ACP (Copilot/Grok)
-   adapters emit the tool name only — args sit in `Raw` and aren't mapped yet.
+   (reading 100 different files is 100 steps, not a loop). ACP (Copilot/Grok) now map
+   `rawInput` (and `locations` as a fallback for file ops) into `ToolCall.Input`, so all four
+   families carry action detail.
 
 
 Ranked roughly by value-to-effort within each group.

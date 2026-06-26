@@ -21,10 +21,14 @@ func (s *session) handleNotification(method string, params json.RawMessage) {
 				Type string `json:"type"`
 				Text string `json:"text"`
 			} `json:"content"`
-			ToolCallID string `json:"toolCallId"`
-			Title      string `json:"title"`
-			Kind       string `json:"kind"`
-			Status     string `json:"status"`
+			ToolCallID string         `json:"toolCallId"`
+			Title      string         `json:"title"`
+			Kind       string         `json:"kind"`
+			Status     string         `json:"status"`
+			RawInput   map[string]any `json:"rawInput"` // agent-specific args (command, path, …)
+			Locations  []struct {
+				Path string `json:"path"`
+			} `json:"locations"` // files the call touches
 		} `json:"update"`
 	}
 	if json.Unmarshal(params, &p) != nil {
@@ -44,7 +48,19 @@ func (s *session) handleNotification(method string, params json.RawMessage) {
 		if name == "" {
 			name = u.Kind
 		}
-		s.emit(agent.Event{Type: agent.EventToolUse, Tool: &agent.ToolCall{ID: u.ToolCallID, Name: name}, Raw: cloneRaw(params)})
+		// Carry the call's args so the TUI shows what it's doing and loop detection can tell
+		// distinct actions apart (ACP previously emitted the name only). rawInput when present,
+		// else the first touched file path — agents vary in which they send.
+		input := u.RawInput
+		if len(u.Locations) > 0 && u.Locations[0].Path != "" {
+			if input == nil {
+				input = map[string]any{}
+			}
+			if _, ok := input["path"]; !ok {
+				input["path"] = u.Locations[0].Path
+			}
+		}
+		s.emit(agent.Event{Type: agent.EventToolUse, Tool: &agent.ToolCall{ID: u.ToolCallID, Name: name, Input: input}, Raw: cloneRaw(params)})
 	case "tool_call_update":
 		if u.Status == "completed" || u.Status == "failed" {
 			s.emit(agent.Event{Type: agent.EventToolResult, Tool: &agent.ToolCall{ID: u.ToolCallID, Result: u.Status}, Raw: cloneRaw(params)})
