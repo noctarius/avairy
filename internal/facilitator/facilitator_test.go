@@ -26,6 +26,26 @@ func TestRuleNudger_CapabilityMatchmaking(t *testing.T) {
 	}
 }
 
+// Matchmaking generalizes beyond OS: it matches the blocker text against any declared cap
+// (arch synonyms, boolean caps by key) and picks the differentiated peer.
+func TestRuleNudger_MatchmakingBeyondOS(t *testing.T) {
+	roster := []Agent{
+		{ID: "x86bot", Caps: map[string]string{"os": "linux", "arch": "amd64"}},
+		{ID: "armbot", Caps: map[string]string{"os": "linux", "arch": "arm64"}},
+		{ID: "gpubot", Caps: map[string]string{"os": "linux", "gpu": "true"}},
+	}
+	// "aarch64" → arch=arm64 (synonym) → armbot, not x86bot.
+	got := RuleNudger{}.Decide(Trigger{Kind: TriggerBlocked, Agent: "x86bot", Detail: "segfault only on aarch64"}, roster)
+	if len(got) != 1 || got[0].Kind != NudgeConsult || got[0].To != "x86bot" || !strings.Contains(got[0].Body, "armbot") {
+		t.Fatalf("aarch64 should point at armbot: %+v", got)
+	}
+	// "needs a GPU" → gpu=true matched by key → gpubot.
+	got = RuleNudger{}.Decide(Trigger{Kind: TriggerBlocked, Agent: "armbot", Detail: "needs a GPU to reproduce"}, roster)
+	if len(got) != 1 || got[0].To != "armbot" || !strings.Contains(got[0].Body, "gpubot") {
+		t.Fatalf("GPU blocker should point at gpubot: %+v", got)
+	}
+}
+
 func TestRuleNudger_BlockedNoCapablePeerSuggestsConsult(t *testing.T) {
 	// blocker mentions linux but only a darwin peer exists → fall back to "ask a peer".
 	got := RuleNudger{}.Decide(Trigger{Kind: TriggerBlocked, Agent: "linbot", Detail: "stuck on linux build"},

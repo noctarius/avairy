@@ -143,10 +143,13 @@ Ranked roughly by value-to-effort within each group.
     (and metadata-only touches) seen by fsnotify don't ping-pong into re-pushes. Stamps record
     the hash; touched-but-identical files refresh their stamp without pushing.
 
-11. ~~**Facilitator debounce.**~~ ✅ Done. A per-(agent, trigger) cooldown (45s) in `Observe`
-    stops a flapping agent from being nudged on every status report; a progress report clears
-    the agent's blocked cooldown so a genuine later block nudges promptly. *Still open:*
-    matchmaking (`neededCap`) is OS-keyword-only — a quality-of-nudge improvement, not a bug.
+11. ~~**Facilitator debounce + matchmaking.**~~ ✅ Done. A per-(agent, trigger) cooldown (45s)
+    in `Observe` stops a flapping agent from being nudged on every status report; a progress
+    report clears the agent's blocked cooldown so a genuine later block nudges promptly.
+    Matchmaking is now **roster-driven** (`bestPeer`): the blocker text is matched against *any*
+    declared capability (arch, qemu, gpu, docker, … — with value synonyms like aarch64↔arm64,
+    boolean caps by key), picking the peer that's differentiated from the blocked agent — not the
+    old OS-only keyword table.
 
 12. **State-resume from journal — mostly done.** ✅ The **task board** resumes (`board.Restore`
     replays the journal, recovering each task's final state + continuing ids). ✅ The **TUI

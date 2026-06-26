@@ -21,17 +21,15 @@ func (RuleNudger) Decide(t Trigger, roster []Agent) []Nudge {
 		}}
 
 	case TriggerBlocked:
-		// 1) Capability matchmaking: if the blocker mentions an environment another agent
-		//    has, suggest handing off to that agent (the flagship "better positioned" nudge).
-		if need := neededCap(t.Detail); need != nil {
-			if peer := firstCapable(roster, t.Agent, need); peer != "" {
-				return []Nudge{{
-					Kind: NudgeConsult,
-					To:   t.Agent,
-					Body: fmt.Sprintf("%s looks better positioned for this (%s) — consider handing "+
-						"off the repro or asking them to try it.", peer, capStr(need)),
-				}}
-			}
+		// 1) Capability matchmaking: if the blocker text refers to a capability some other agent
+		//    has (and the blocked one lacks), suggest handing off (the "better positioned" nudge).
+		if peer, caps := bestPeer(roster, t.Agent, t.Detail); peer != "" {
+			return []Nudge{{
+				Kind: NudgeConsult,
+				To:   t.Agent,
+				Body: fmt.Sprintf("%s looks better positioned for this (%s) — consider handing "+
+					"off the repro or asking them to try it.", peer, capStr(caps)),
+			}}
 		}
 		// 2) Otherwise suggest consulting any available peer.
 		if peer := firstPeer(roster, t.Agent); peer != "" {
@@ -47,30 +45,71 @@ func (RuleNudger) Decide(t Trigger, roster []Agent) []Nudge {
 	return nil
 }
 
-// neededCap maps free-text blocker detail to a required capability (OS keywords for now).
-func neededCap(detail string) map[string]string {
+// bestPeer finds the peer best positioned for a blocker: the one with the most capabilities the
+// blocker text refers to (by value, synonyms, or key) that the blocked agent itself lacks. It's
+// roster-driven — any declared cap (arch, qemu, gpu, docker, …), not just OS. Returns the peer id
+// and the matched caps (for the nudge), or "" if none stands out.
+func bestPeer(roster []Agent, blockedID, detail string) (string, map[string]string) {
 	d := strings.ToLower(detail)
-	switch {
-	case strings.Contains(d, "linux"):
-		return map[string]string{"os": "linux"}
-	case strings.Contains(d, "windows"):
-		return map[string]string{"os": "windows"}
-	case strings.Contains(d, "macos"), strings.Contains(d, "darwin"), strings.Contains(d, " mac"):
-		return map[string]string{"os": "darwin"}
+	var blocked map[string]string
+	for _, a := range roster {
+		if a.ID == blockedID {
+			blocked = a.Caps
+		}
 	}
-	return nil
-}
-
-func firstCapable(roster []Agent, exclude string, need map[string]string) string {
+	bestID, bestScore := "", 0
+	var bestCaps map[string]string
 	for _, a := range sortedByID(roster) {
-		if a.ID == exclude {
+		if a.ID == blockedID {
 			continue
 		}
-		if capMatch(a.Caps, need) {
-			return a.ID
+		matched := map[string]string{}
+		for k, v := range a.Caps {
+			if blocked[k] == v { // both have it → not differentiating
+				continue
+			}
+			if capMentioned(d, k, v) {
+				matched[k] = v
+			}
+		}
+		if len(matched) > bestScore {
+			bestID, bestScore, bestCaps = a.ID, len(matched), matched
 		}
 	}
-	return ""
+	return bestID, bestCaps
+}
+
+// capMentioned reports whether lowercased blocker text refers to capability k=v — by the value,
+// a common synonym, or the key name. Short/boolean values match only via the key (so "gpu=true"
+// matches "needs a GPU", not the literal "true"); keys under 3 chars (e.g. "os") are ignored.
+func capMentioned(detail, k, v string) bool {
+	vl := strings.ToLower(v)
+	terms := capSynonyms(vl)
+	if len(vl) >= 3 && vl != "true" && vl != "false" && vl != "yes" && vl != "no" {
+		terms = append(terms, vl)
+	}
+	terms = append(terms, strings.ToLower(k))
+	for _, t := range terms {
+		if len(t) >= 3 && strings.Contains(detail, t) {
+			return true
+		}
+	}
+	return false
+}
+
+// capSynonyms gives common alternate spellings for a capability value.
+func capSynonyms(v string) []string {
+	switch v {
+	case "darwin":
+		return []string{"darwin", "macos", "mac os", "osx"}
+	case "windows":
+		return []string{"windows", "win32"}
+	case "arm64":
+		return []string{"arm64", "aarch64", "apple silicon"}
+	case "amd64":
+		return []string{"amd64", "x86_64", "x86-64"}
+	}
+	return nil
 }
 
 func firstPeer(roster []Agent, exclude string) string {
@@ -80,15 +119,6 @@ func firstPeer(roster []Agent, exclude string) string {
 		}
 	}
 	return ""
-}
-
-func capMatch(have, need map[string]string) bool {
-	for k, v := range need {
-		if have[k] != v {
-			return false
-		}
-	}
-	return true
 }
 
 func capStr(m map[string]string) string {
