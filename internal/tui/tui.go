@@ -90,6 +90,7 @@ type ControlInfo struct {
 	NewToken     func() string // rotate to a fresh token (ctrl+e)
 	JoinFile     string        // path to the one-string join bundle (core URL + CA + token) for a new node
 	OperatorJoin string        // path to the operator-join bundle (for a remote TUI to attach, #18)
+	WebURL       string        // browser operator console URL, with token (#17)
 }
 
 const (
@@ -622,6 +623,9 @@ func (m *Model) render() string {
 		}
 		if m.control.OperatorJoin != "" {
 			line += " · op-join: " + m.control.OperatorJoin
+		}
+		if m.control.WebURL != "" {
+			line += " · web: " + m.control.WebURL
 		}
 		b.WriteString(ctrlStyle.Render(truncate(line, m.width)) + "\n")
 		controlLines++

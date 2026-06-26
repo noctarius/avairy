@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>avairy</title>
+<style>
+  :root{
+    --bg:#f7f7f8; --panel:#ffffff; --ink:#1f2024; --muted:#8a8f98; --line:#e6e7ea;
+    --accent:#4f46e5; --accent-ink:#fff; --bubble:#f0f1f3; --ok:#16a34a; --warn:#dc2626; --idle:#9ca3af;
+    --chip:#eceef1;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#1a1b1e; --panel:#212327; --ink:#e8e9ec; --muted:#9aa0aa; --line:#33363c;
+      --accent:#7c74ff; --bubble:#2a2d33; --chip:#2a2d33; }
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  .app{display:grid;grid-template-columns:248px 1fr 300px;grid-template-rows:auto 1fr;height:100vh}
+  header{grid-column:1/4;display:flex;align-items:center;gap:14px;padding:10px 16px;
+    border-bottom:1px solid var(--line);background:var(--panel)}
+  header .brand{font-weight:700;letter-spacing:.2px}
+  header .sub{color:var(--muted);font-size:12px}
+  header .spacer{flex:1}
+  header .stat{font-size:12px;color:var(--muted)}
+  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--idle);margin-right:5px;vertical-align:middle}
+  .dot.ok{background:var(--ok)} .dot.warn{background:var(--warn)} .dot.work{background:var(--ok)}
+  .dot.off{background:var(--idle);opacity:.5}
+  aside{overflow:auto;padding:14px;border-right:1px solid var(--line);background:var(--panel)}
+  aside.right{border-right:none;border-left:1px solid var(--line)}
+  aside h3{font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin:18px 0 8px}
+  aside h3:first-child{margin-top:0}
+  .agent,.task{padding:6px 8px;border-radius:8px}
+  .agent{display:flex;align-items:center;gap:6px}
+  .agent .name{font-weight:600}
+  .agent .st{margin-left:auto;font-size:11px;color:var(--muted)}
+  .task{border:1px solid var(--line);margin-bottom:6px;font-size:13px}
+  .task .t{font-weight:600} .task .meta{color:var(--muted);font-size:11px}
+  .empty{color:var(--muted);font-size:13px;padding:4px 8px}
+  /* chat */
+  main{display:flex;flex-direction:column;min-width:0;min-height:0}
+  #log{flex:1;overflow:auto;padding:22px 0}
+  .wrap{max-width:760px;margin:0 auto;padding:0 20px}
+  .row{display:flex;margin:10px 0}
+  .row.me{justify-content:flex-end}
+  .row.sys{justify-content:center}
+  .msg{max-width:78%;padding:9px 13px;border-radius:14px;background:var(--bubble);
+    border:1px solid var(--line);white-space:pre-wrap;overflow-wrap:anywhere}
+  .row.me .msg{background:var(--accent);color:var(--accent-ink);border-color:transparent}
+  .who{font-size:11px;font-weight:700;margin-bottom:2px}
+  .to{font-weight:400;color:var(--muted)}
+  .row.me .to{color:rgba(255,255,255,.8)}
+  .tool .msg{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;color:var(--muted)}
+  .err .msg{border-color:var(--warn);color:var(--warn)}
+  .syspill{font-size:12px;color:var(--muted);background:var(--chip);padding:4px 12px;border-radius:999px}
+  /* composer */
+  .composer{border-top:1px solid var(--line);background:var(--panel);padding:12px 0}
+  .composer .wrap{display:flex;gap:8px;align-items:flex-end}
+  select,textarea,button{font:inherit;color:inherit}
+  select{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:9px;height:40px}
+  .box{flex:1;display:flex;align-items:flex-end;gap:8px;border:1px solid var(--line);
+    border-radius:14px;background:var(--panel);padding:6px 6px 6px 12px}
+  textarea{flex:1;border:0;outline:0;background:transparent;resize:none;max-height:160px;padding:6px 0}
+  button{cursor:pointer;border:1px solid var(--line);background:var(--panel);border-radius:10px;padding:8px 12px}
+  button.primary{background:var(--accent);color:var(--accent-ink);border-color:transparent}
+  button.ghost{color:var(--muted)}
+  button:disabled{opacity:.5;cursor:default}
+  .card{border:1px solid var(--line);border-radius:10px;padding:9px;margin-bottom:8px;font-size:13px}
+  .card .head{font-weight:600;margin-bottom:2px}
+  .card .meta{color:var(--muted);font-size:11px;margin-bottom:7px;overflow-wrap:anywhere}
+  .card .acts{display:flex;gap:6px;flex-wrap:wrap}
+  .card .acts button{padding:5px 9px;font-size:12px}
+  .card select{height:auto;padding:5px;font-size:12px;width:100%;margin-bottom:6px}
+  .count{display:inline-block;min-width:16px;text-align:center;background:var(--accent);
+    color:var(--accent-ink);border-radius:999px;font-size:10px;padding:1px 5px;margin-left:6px}
+  .tok{font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--muted);
+    cursor:pointer;border-bottom:1px dotted var(--muted)}
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <span class="brand">avairy</span>
+    <span class="sub">operator console</span>
+    <span class="spacer"></span>
+    <span class="stat" id="cost">$0.00</span>
+    <span class="stat tok" id="token" title="click to copy enroll token"></span>
+    <span class="stat"><span class="dot" id="conn"></span><span id="connTxt">connecting…</span></span>
+  </header>
+
+  <aside class="left">
+    <h3>Fleet</h3>
+    <div id="fleet"><div class="empty">no agents yet</div></div>
+    <h3>Tasks</h3>
+    <div id="tasks"><div class="empty">no tasks</div></div>
+  </aside>
+
+  <main>
+    <div id="log"><div class="wrap" id="logwrap"></div></div>
+    <div class="composer"><div class="wrap">
+      <select id="to" title="recipient"></select>
+      <div class="box">
+        <textarea id="msg" rows="1" placeholder="Message the fleet…  (/commit <msg> to commit; Enter to send, Shift+Enter for newline)"></textarea>
+        <button class="primary" id="send">Send</button>
+      </div>
+      <button class="ghost" id="stop" title="interrupt running agents">Stop</button>
+    </div></div>
+  </main>
+
+  <aside class="right">
+    <h3>Approvals <span class="count" id="apCount" style="display:none">0</span></h3>
+    <div id="approvals"><div class="empty">none pending</div></div>
+    <h3>Conflicts <span class="count" id="cfCount" style="display:none">0</span></h3>
+    <div id="conflicts"><div class="empty">none</div></div>
+  </aside>
+</div>
+
+<script>
+const token = new URLSearchParams(location.search).get("token") || "";
+const authq = token ? "?token=" + encodeURIComponent(token) : "";
+const hdr = token ? {"Authorization":"Bearer "+token} : {};
+
+const agents = new Map();   // id -> status
+let cost = 0;
+const $ = id => document.getElementById(id);
+
+// ---- API helpers ----
+async function post(path, body){
+  try{ await fetch(path, {method:"POST", headers:{...hdr,"Content-Type":"application/json"}, body:JSON.stringify(body||{})}); }
+  catch(e){ /* transient */ }
+}
+async function getState(){
+  const r = await fetch("/operator/state", {headers:hdr});
+  if(!r.ok) throw new Error(r.status);
+  return r.json();
+}
+
+// ---- transcript rendering (mirrors the TUI's apply) ----
+const logwrap = $("logwrap");
+function atBottom(){ const l=$("log"); return l.scrollHeight - l.scrollTop - l.clientHeight < 80; }
+function scroll(){ const l=$("log"); l.scrollTop = l.scrollHeight; }
+function colorFor(name){ let h=0; for(const c of name) h=(h*31+c.charCodeAt(0))%360; return `hsl(${h} 55% 45%)`; }
+
+function bubble(author, to, text, cls){
+  const stick = atBottom();
+  const row = document.createElement("div");
+  row.className = "row " + (cls||"");
+  if(author==="human") row.classList.add("me");
+  const m = document.createElement("div"); m.className="msg";
+  if(author && author!=="human"){
+    const w=document.createElement("div"); w.className="who"; w.textContent=author;
+    w.style.color = colorFor(author);
+    if(to){ const t=document.createElement("span"); t.className="to"; t.textContent=" → "+to; w.appendChild(t); }
+    m.appendChild(w);
+  } else if(author==="human" && to){
+    const w=document.createElement("div"); w.className="who"; w.textContent="you";
+    const t=document.createElement("span"); t.className="to"; t.textContent=" → "+to; w.appendChild(t);
+    m.appendChild(w);
+  }
+  const b=document.createElement("div"); b.textContent=text; m.appendChild(b);
+  row.appendChild(m); logwrap.appendChild(row);
+  if(stick) scroll();
+}
+function sysline(text){
+  const stick=atBottom();
+  const row=document.createElement("div"); row.className="row sys";
+  const p=document.createElement("span"); p.className="syspill"; p.textContent=text;
+  row.appendChild(p); logwrap.appendChild(row); if(stick) scroll();
+}
+function addrStr(to){ if(!to) return ""; return to.Kind==="broadcast" ? "all" : to.Kind+":"+to.Value; }
+function setStatus(id, st){ if(!id||id==="human") return; agents.set(id, st); renderFleet(); }
+
+function applyRecord(rec){
+  const d = rec.data || {};
+  switch(rec.kind){
+    case "message":
+      if(d.Interrupt) return;
+      bubble(d.From, addrStr(d.To), d.Body); break;
+    case "agent_event":
+      if(d.Type==="text"){ setStatus(rec.actor,"working"); bubble(rec.actor, null, d.Text); }
+      else if(d.Type==="tool_use"){ setStatus(rec.actor,"working");
+        bubble(rec.actor, null, "⚙ "+(d.Tool?d.Tool.Name:"tool"), "tool"); }
+      else if(d.Type==="turn_done"){ setStatus(rec.actor,"idle");
+        if(d.Usage){ cost += d.Usage.CostUSD||0; $("cost").textContent="$"+cost.toFixed(2); } }
+      else if(d.Type==="error"){ bubble(rec.actor, null, "⚠ "+d.Text, "err"); }
+      break;
+    case "handover":
+      sysline(`${d.Claimant} claimed ${d.ID} — “${d.Title}”`); break;
+    case "system":
+      applySystem(rec.actor, d); break;
+  }
+}
+function applySystem(actor, d){
+  switch(d.event){
+    case "report_status":
+      if(actor){ const s=d.status; setStatus(actor, (s==="blocked"||s==="low_confidence")?"blocked":(s==="done"?"idle":"working")); }
+      break;
+    case "node_offline": if(agents.has(actor)) setStatus(actor,"offline"); break;
+    case "node_online": if(agents.get(actor)==="offline") setStatus(actor,"idle"); break;
+    case "conflict_raised": sysline(`conflict on ${d.path} needs resolution`); break;
+  }
+}
+
+// ---- side panels (from /operator/state) ----
+function dotClass(st){ return st==="working"?"work":st==="blocked"?"warn":st==="offline"?"off":st==="idle"?"ok":""; }
+function renderFleet(){
+  const el=$("fleet");
+  if(agents.size===0){ el.innerHTML='<div class="empty">no agents yet</div>'; return; }
+  el.innerHTML="";
+  [...agents.keys()].sort().forEach(id=>{
+    const st=agents.get(id);
+    const d=document.createElement("div"); d.className="agent";
+    d.innerHTML=`<span class="dot ${dotClass(st)}"></span><span class="name"></span><span class="st">${st}</span>`;
+    d.querySelector(".name").textContent=id; d.querySelector(".name").style.color=colorFor(id);
+    el.appendChild(d);
+  });
+}
+function renderTasks(tasks){
+  const el=$("tasks");
+  if(!tasks||tasks.length===0){ el.innerHTML='<div class="empty">no tasks</div>'; return; }
+  el.innerHTML="";
+  tasks.forEach(t=>{
+    const d=document.createElement("div"); d.className="task";
+    const claim=t.Claimant?(" · "+t.Claimant):"";
+    d.innerHTML=`<div class="t"></div><div class="meta">${t.State}${claim}</div>`;
+    d.querySelector(".t").textContent=t.Title; el.appendChild(d);
+  });
+}
+function agentOptions(sel, includeBroadcast){
+  const cur=sel.value;
+  sel.innerHTML="";
+  if(includeBroadcast){ const o=document.createElement("option"); o.value=""; o.textContent="broadcast"; sel.appendChild(o); }
+  [...agents.keys()].sort().forEach(id=>{ const o=document.createElement("option"); o.value=id; o.textContent=id; sel.appendChild(o); });
+  if([...sel.options].some(o=>o.value===cur)) sel.value=cur;
+}
+function renderApprovals(items){
+  const el=$("approvals"), c=$("apCount");
+  c.style.display = items&&items.length ? "inline-block":"none"; if(items) c.textContent=items.length;
+  if(!items||items.length===0){ el.innerHTML='<div class="empty">none pending</div>'; return; }
+  el.innerHTML="";
+  items.forEach(a=>{
+    const d=document.createElement("div"); d.className="card";
+    d.innerHTML=`<div class="head"></div><div class="meta"></div>
+      <div class="acts">
+        <button class="primary" data-d="allow">Allow</button>
+        <button data-d="allow_for_session">Allow session</button>
+        <button class="ghost" data-d="deny">Deny</button>
+      </div>`;
+    d.querySelector(".head").textContent=`${a.agentId} · ${a.kind}`;
+    d.querySelector(".meta").textContent=a.summary + (a.reason?(" — "+a.reason):"");
+    d.querySelectorAll("button").forEach(b=>b.onclick=()=>post("/operator/approval",{ID:a.id,Decision:b.dataset.d}).then(refresh));
+    el.appendChild(d);
+  });
+}
+function renderConflicts(items){
+  const el=$("conflicts"), c=$("cfCount");
+  c.style.display = items&&items.length ? "inline-block":"none"; if(items) c.textContent=items.length;
+  if(!items||items.length===0){ el.innerHTML='<div class="empty">none</div>'; return; }
+  el.innerHTML="";
+  items.forEach(cf=>{
+    const d=document.createElement("div"); d.className="card";
+    d.innerHTML=`<div class="head"></div><div class="meta"></div>
+      <select></select>
+      <div class="acts">
+        <button class="primary" data-d="mine">I'll resolve</button>
+        <button data-d="delegate">Delegate</button>
+      </div>`;
+    d.querySelector(".head").textContent=cf.path;
+    d.querySelector(".meta").textContent=`hub v${cf.hubVersion} · ${cf.source}` + (cf.detail?(" — "+cf.detail):"");
+    const sel=d.querySelector("select"); agentOptions(sel,false);
+    if(agents.size===0){ const o=document.createElement("option"); o.value=""; o.textContent="(broadcast — no agents)"; sel.appendChild(o); }
+    d.querySelectorAll(".acts button").forEach(b=>b.onclick=()=>
+      post("/operator/conflict",{ID:cf.id,Decision:b.dataset.d,Target:b.dataset.d==="delegate"?sel.value:""}).then(refresh));
+    el.appendChild(d);
+  });
+}
+
+async function refresh(){
+  let st; try{ st=await getState(); }catch(e){ return; }
+  (st.roster||[]).forEach(id=>{ if(!agents.has(id)) agents.set(id,"idle"); });
+  renderFleet();
+  renderTasks(st.tasks);
+  renderApprovals(st.approvals);
+  renderConflicts(st.conflicts);
+  agentOptions($("to"), true);
+  if(st.control){
+    const t=$("token");
+    t.textContent="enroll: "+(st.control.token||"").slice(0,10)+"…";
+    t.onclick=()=>navigator.clipboard && navigator.clipboard.writeText(st.control.token);
+  }
+}
+
+// ---- composer ----
+function send(){
+  const ta=$("msg"); const text=ta.value.trim(); if(!text) return;
+  if(text.startsWith("/commit")){ const m=text.slice(7).trim();
+    if(m) post("/operator/commit",{Message:m}).then(()=>sysline("commit requested: "+m));
+    ta.value=""; autoGrow(); return; }
+  post("/operator/inject",{Target:$("to").value, Body:text});
+  ta.value=""; autoGrow();
+}
+function autoGrow(){ const ta=$("msg"); ta.style.height="auto"; ta.style.height=Math.min(ta.scrollHeight,160)+"px"; }
+$("send").onclick=send;
+$("stop").onclick=()=>post("/operator/interrupt",{});
+$("msg").addEventListener("input", autoGrow);
+$("msg").addEventListener("keydown", e=>{ if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); send(); }});
+
+// ---- live stream ----
+function connect(){
+  const es=new EventSource("/operator/stream"+authq);
+  es.onmessage=e=>{ try{ applyRecord(JSON.parse(e.data)); }catch(err){} };
+  es.addEventListener("ready", ()=>{ $("conn").className="dot ok"; $("connTxt").textContent="live"; });
+  es.onopen=()=>{ $("conn").className="dot ok"; $("connTxt").textContent="live"; };
+  es.onerror=()=>{ $("conn").className="dot warn"; $("connTxt").textContent="reconnecting…"; };
+}
+
+connect();
+refresh();
+setInterval(refresh, 2000);
+</script>
+</body>
+</html>

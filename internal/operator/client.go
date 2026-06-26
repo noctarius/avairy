@@ -191,6 +191,7 @@ func (c *Client) Deps() tui.Deps {
 			Warn:         cs.Warn,
 			JoinFile:     cs.JoinFile,
 			OperatorJoin: cs.OperatorJoin,
+			WebURL:       cs.WebURL,
 			CurrentToken: c.currentToken,
 			NewToken:     c.newToken,
 		}

@@ -101,6 +101,7 @@ func (s *Services) Deps() tui.Deps {
 				Warn:         cs.Warn,
 				JoinFile:     cs.JoinFile,
 				OperatorJoin: cs.OperatorJoin,
+				WebURL:       cs.WebURL,
 				CurrentToken: func() string { return s.Control().Token },
 				NewToken:     s.NewToken,
 			}

@@ -35,6 +35,9 @@ func NewServer(svc *Services, token string) *Server {
 // Handler returns the operator routes. Mount it under "/operator/" on the control mux.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	// The web UI (#17) is a second client of this same API: a static page, served unauthenticated
+	// (its data calls carry the token), that consumes the stream/state/actions below in a browser.
+	mux.HandleFunc(PathUI, handleUI)
 	mux.HandleFunc(PathStream, s.auth(s.handleStream))
 	mux.HandleFunc(PathState, s.auth(s.handleState))
 	mux.HandleFunc(PathInject, s.auth(s.handleInject))
@@ -49,7 +52,12 @@ func (s *Server) Handler() http.Handler {
 func (s *Server) auth(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if s.token != "" {
+			// Bearer header (API clients) OR ?token= query param — the browser's EventSource can't
+			// set headers, so the web UI passes the token in the URL.
 			got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+			if got == "" {
+				got = r.URL.Query().Get("token")
+			}
 			if subtle.ConstantTimeCompare([]byte(got), []byte(s.token)) != 1 {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return

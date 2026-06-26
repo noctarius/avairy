@@ -390,15 +390,16 @@ func main() {
 		operatorJoinFile = filepath.Join(".avairy", "operator-join")
 		_ = os.WriteFile(operatorJoinFile, []byte(control.EncodeJoin(control.JoinBundle{Core: ctrlURL, CA: caPEM, Token: opToken})), 0o600)
 		// Feed the operator surface so both the local TUI and remote clients see endpoints/token.
+		webURL := ctrlURL + operator.PathUI + "?token=" + opToken
 		svc.Control = func() *operator.ControlState {
-			return &operator.ControlState{ControlURL: ctrlURL, BusBase: busBase, Warn: warn, Token: curToken(), JoinFile: joinPath, OperatorJoin: operatorJoinFile}
+			return &operator.ControlState{ControlURL: ctrlURL, BusBase: busBase, Warn: warn, Token: curToken(), JoinFile: joinPath, OperatorJoin: operatorJoinFile, WebURL: webURL}
 		}
 		svc.NewToken = newToken
 		// Under the TUI's alt-screen, stdout is hidden — so the token/join is shown in the TUI.
 		// Only print here when there's no TUI (headless serve, or a one-shot -send).
 		if *headless || *send != "" {
-			fmt.Printf("control API:  %s\nMCP bus base: %s\nenroll token: %s\njoin file:    %s\noperator API: %s%s\noperator token: %s\noperator join: %s\n",
-				ctrlURL, busBase, curToken(), joinPath, ctrlURL, operator.PathStream, opToken, operatorJoinFile)
+			fmt.Printf("control API:  %s\nMCP bus base: %s\nenroll token: %s\njoin file:    %s\noperator join: %s\noperator token: %s\nweb console:  %s%s?token=%s\n",
+				ctrlURL, busBase, curToken(), joinPath, operatorJoinFile, opToken, ctrlURL, operator.PathUI, opToken)
 			if warn != "" {
 				fmt.Println("warning:", warn)
 			}

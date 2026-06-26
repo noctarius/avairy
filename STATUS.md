@@ -210,14 +210,21 @@ Ranked roughly by value-to-effort within each group.
     board). Agents and the operator can seed durable context — decisions, repro steps, findings —
     that survives restarts and feeds fresh-look sessions.
 
-17. **Web UI (browser operator console, alongside the TUI).** A browser UI mirroring the TUI's
-    views — fleet/cost, conversation, handovers, task board, **Approvals** — plus the same
-    controls: inject/steer messages, interrupt, allow/deny approvals, `/commit`, enroll-token /
-    join display. It's another view over the same event-sourced state, so the seams already fit:
-    subscribe to `journal` (stream to the browser via SSE/WebSocket), drive `bus` / `board` /
-    `approvals` exactly as `tui.Deps` does. Served by core over the existing HTTP(S) stack (reuse
-    the TLS material). Decisions to make: auth for the web endpoint, and whether it shares the
-    single-operator model (#13) or is the path to multi-operator.
+17. ~~**Web UI (browser operator console, alongside the TUI).**~~ ✅ Done. A single-page browser
+    console, served by core at **`/operator/ui`** off the existing operator API (#18) — so it's a
+    second client of `/operator/*`, not new plumbing. Chat-first layout modelled on common AI web
+    chats (centered conversation with message bubbles, composer pinned at the bottom, human messages
+    right-aligned), with the operator-specific bits in side rails: **Fleet** + **Tasks** (left),
+    **Approvals** + **Conflicts** with action buttons (right). It consumes the SSE journal stream
+    (live transcript + fleet status + cost, mirroring the TUI's `apply`) and polls `/operator/state`
+    (2s) for tasks/approvals/conflicts/roster/control; the composer drives inject (broadcast or an
+    agent), `Stop` (interrupt), and `/commit <msg>`; approvals get allow / allow-session / deny,
+    conflicts get resolve-mine / delegate-to-agent. The page is a static embedded asset
+    (`go:embed`, zero build step / no JS deps). Auth: the operator token via `?token=` (the page is
+    public; its data calls carry it — the bearer-or-query auth accepts both). The web URL (with
+    token) is shown in the attached TUI's control line and printed when headless. Verified
+    end-to-end against the real binary (page served, query-token stream auth, 401 on bad token, JS
+    syntax-checked). Stays single-operator (#13); multi-operator is still out of scope.
 
 18. ~~**Detach the TUI from core (remote operator connection).**~~ ✅ Done. `tui.Deps` no longer
     holds concrete `*bus.Bus`/`*board.Board` pointers — it's all interface-level (a `journal.Log`

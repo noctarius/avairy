@@ -24,6 +24,7 @@ const (
 	PathConflict  = "/operator/conflict"  // POST: resolve/delegate an owner-less conflict
 	PathCommit    = "/operator/commit"    // POST: signed commit of the canonical repo
 	PathToken     = "/operator/token"     // POST: rotate the node-enrollment token
+	PathUI        = "/operator/ui"        // GET: the browser operator console (#17)
 )
 
 // readyEvent is the SSE event name core sends once the journal backfill is fully streamed, so the
@@ -57,6 +58,7 @@ type ControlState struct {
 	Token        string `json:"token"`
 	JoinFile     string `json:"joinFile,omitempty"`
 	OperatorJoin string `json:"operatorJoin,omitempty"`
+	WebURL       string `json:"webUrl,omitempty"` // browser console URL (with token), #17
 }
 
 // State is the snapshot the client polls/refreshes (everything the TUI reads synchronously while
