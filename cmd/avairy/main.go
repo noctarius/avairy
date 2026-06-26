@@ -68,13 +68,18 @@ func main() {
 	flag.Parse()
 
 	// Durable, append-only journal (DESIGN.md §10) under .avairy/; falls back to memory-only.
+	journalPath := filepath.Join(".avairy", "journal.jsonl")
 	var jrnl journal.Log = journal.NewMemory()
-	if jf, err := journal.OpenFile(filepath.Join(".avairy", "journal.jsonl")); err == nil {
+	if jf, err := journal.OpenFile(journalPath); err == nil {
 		jrnl = jf
 		defer jf.Close()
 	}
 	b := bus.New(jrnl)
 	bd := board.New(jrnl)
+	// Resume the task board from the persisted journal so tasks survive a core restart (§10).
+	if recs, err := journal.ReadFile(journalPath); err == nil {
+		bd.Restore(recs)
+	}
 	mcpSrv := mcp.NewServer(b, bd, jrnl)
 
 	// Human-in-the-loop gating broker (DESIGN.md §7): gated actions from any agent (local or

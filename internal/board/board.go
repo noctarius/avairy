@@ -4,10 +4,12 @@
 package board
 
 import (
+	"encoding/json"
 	"errors"
 	"maps"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 
 	"avairy/internal/journal"
@@ -66,6 +68,35 @@ type Board struct {
 // New returns an empty board recording to jrnl.
 func New(jrnl journal.Log) *Board {
 	return &Board{jrnl: jrnl, tasks: make(map[string]*Task)}
+}
+
+// Restore rebuilds board state from a persisted journal (DESIGN.md §10) so tasks survive a core
+// restart. It replays task + handover records in order — each carries the full task, so
+// last-write-wins recovers final state — and advances the id counter past the highest task id.
+// It does NOT re-journal. Call once on startup before serving.
+func (b *Board) Restore(records []journal.PersistedRecord) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, r := range records {
+		if r.Kind != journal.KindTask && r.Kind != journal.KindHandover {
+			continue
+		}
+		var t Task
+		if err := json.Unmarshal(r.Data, &t); err != nil || t.ID == "" {
+			continue
+		}
+		restored := t
+		b.tasks[t.ID] = &restored
+		if n := taskSeq(t.ID); n > b.seq {
+			b.seq = n
+		}
+	}
+}
+
+// taskSeq parses the numeric counter from a "t<N>" task id (0 if malformed).
+func taskSeq(id string) uint64 {
+	n, _ := strconv.ParseUint(strings.TrimPrefix(id, "t"), 10, 64)
+	return n
 }
 
 // Post adds a new open task.
