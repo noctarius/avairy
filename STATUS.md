@@ -132,14 +132,15 @@ Ranked roughly by value-to-effort within each group.
     the agent's blocked cooldown so a genuine later block nudges promptly. *Still open:*
     matchmaking (`neededCap`) is OS-keyword-only — a quality-of-nudge improvement, not a bug.
 
-12. **State-resume from journal — partial.** ✅ The **task board** now resumes: `board.Restore`
-    replays the persisted journal (`journal.ReadFile`) on startup, recovering each task's final
-    state and continuing ids past the highest. *Still open:* (a) `OpenFile` starts a fresh
-    in-memory journal, so the TUI's conversation/handover/fleet **history** isn't replayed (needs
-    typed re-decode of records, which the journal package can't do generically); (b) **token**
-    enrollment state (`bound`/`sessions`) isn't persisted, so token nodes still can't rejoin
-    after a restart — tokens are secrets we don't journal; this needs a separate secret store
-    (mTLS already survives, see #8); (c) agent **session** resume (adapter ResumeID) is untouched.
+12. **State-resume from journal — mostly done.** ✅ The **task board** resumes (`board.Restore`
+    replays the journal, recovering each task's final state + continuing ids). ✅ The **TUI
+    history** resumes too: `cmd` re-decodes the persisted records to their typed forms
+    (`decodeRecords`) and seeds the in-memory log via `journal.Memory.Restore` before the TUI
+    subscribes, so conversation / handovers / fleet / approvals replay on the backfill (seqs
+    renumbered contiguously for stable de-dup). *Still open:* (a) **token** enrollment state
+    (`bound`/`sessions`) isn't persisted, so token nodes can't rejoin after a restart — tokens
+    are secrets we don't journal; needs a separate secret store (mTLS already survives, #8);
+    (b) agent **session** resume (adapter ResumeID) is untouched.
 
 14. **Loop detection only catches a step repeated back-to-back.** `trackLoop` keeps a sliding
     window of the last 3 event signatures and fires only when all 3 are *identical and

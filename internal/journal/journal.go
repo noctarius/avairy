@@ -78,6 +78,20 @@ func (m *Memory) Append(kind Kind, actor string, data any) Record {
 	return rec
 }
 
+// Restore seeds the log with prior records (decoded from a persisted journal) so Records()
+// returns history after a restart — the TUI replays them to rebuild its view. Call once at
+// startup, before any Append or Subscribe; Seq continues past the highest restored entry.
+func (m *Memory) Restore(records []Record) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.records = append(m.records, records...)
+	for _, r := range records {
+		if r.Seq > m.seq {
+			m.seq = r.Seq
+		}
+	}
+}
+
 func (m *Memory) Records() []Record {
 	m.mu.Lock()
 	defer m.mu.Unlock()

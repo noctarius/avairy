@@ -11,6 +11,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"net"
@@ -68,18 +69,18 @@ func main() {
 	flag.Parse()
 
 	// Durable, append-only journal (DESIGN.md §10) under .avairy/; falls back to memory-only.
+	// On restart, replay the persisted log so both the board and the TUI history resume.
 	journalPath := filepath.Join(".avairy", "journal.jsonl")
+	persisted, _ := journal.ReadFile(journalPath) // prior history (nil on first run)
 	var jrnl journal.Log = journal.NewMemory()
 	if jf, err := journal.OpenFile(journalPath); err == nil {
+		jf.Memory.Restore(decodeRecords(persisted)) // seed in-memory history for the TUI's backfill
 		jrnl = jf
 		defer jf.Close()
 	}
 	b := bus.New(jrnl)
 	bd := board.New(jrnl)
-	// Resume the task board from the persisted journal so tasks survive a core restart (§10).
-	if recs, err := journal.ReadFile(journalPath); err == nil {
-		bd.Restore(recs)
-	}
+	bd.Restore(persisted) // rebuild the task board from the same history
 	mcpSrv := mcp.NewServer(b, bd, jrnl)
 
 	// Human-in-the-loop gating broker (DESIGN.md §7): gated actions from any agent (local or
@@ -494,6 +495,43 @@ func mintJoin(argv []string) {
 	fmt.Println(control.EncodeJoin(control.JoinBundle{
 		Core: *coreURL, CA: ca.CertPEM(), NodeID: *id, ClientCert: cert, ClientKey: key,
 	}))
+}
+
+// decodeRecords turns persisted journal records back into typed in-memory records, so the TUI
+// can replay history after a restart. The journal package can't type these itself (it can't
+// import its consumers), so we do it here. Seqs are renumbered contiguously for stable de-dup.
+func decodeRecords(prs []journal.PersistedRecord) []journal.Record {
+	out := make([]journal.Record, 0, len(prs))
+	for _, pr := range prs {
+		var data any
+		switch pr.Kind {
+		case journal.KindMessage:
+			var m bus.Message
+			if json.Unmarshal(pr.Data, &m) == nil {
+				data = m
+			}
+		case journal.KindAgentEvent:
+			var e agent.Event
+			if json.Unmarshal(pr.Data, &e) == nil {
+				data = e
+			}
+		case journal.KindTask, journal.KindHandover:
+			var tk board.Task
+			if json.Unmarshal(pr.Data, &tk) == nil {
+				data = tk
+			}
+		default: // system / approval — map payloads
+			var mm map[string]any
+			if json.Unmarshal(pr.Data, &mm) == nil {
+				data = mm
+			}
+		}
+		if data == nil {
+			continue
+		}
+		out = append(out, journal.Record{Seq: uint64(len(out) + 1), Time: pr.Time, Kind: pr.Kind, Actor: pr.Actor, Data: data})
+	}
+	return out
 }
 
 func startMock(ctx context.Context, id string, b *bus.Bus, jrnl journal.Log) {
