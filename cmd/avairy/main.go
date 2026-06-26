@@ -248,9 +248,9 @@ func startLiveAlice(ctx context.Context, family, model, busURL string, b *bus.Bu
 		cx.Approve = codex.ApproverFromDecider(localGateDecider(approvals, "alice"))
 		ad = cx
 	case "copilot":
-		ad = copilot.New() // ACP; gating via session/request_permission (needs `copilot login`)
+		ad = copilot.New(localGateDecider(approvals, "alice")) // ACP; needs `copilot login`
 	case "grok":
-		ad = grok.New() // ACP; needs xAI auth
+		ad = grok.New(localGateDecider(approvals, "alice")) // ACP; needs xAI auth
 	default: // claude
 		ca := claudecode.New()
 		// Pre-approve the avairy bus tools so headless turns don't stall on permission prompts.

@@ -225,9 +225,9 @@ func buildAdapter(family, gateURL string, dec gating.Decider) (agent.Adapter, er
 		cx.Approve = codex.ApproverFromDecider(dec)
 		return cx, nil
 	case "copilot":
-		return copilot.New(), nil
+		return copilot.New(dec), nil
 	case "grok":
-		return grok.New(), nil
+		return grok.New(dec), nil
 	default:
 		return nil, fmt.Errorf("unknown family %q (want claude|codex|copilot|grok)", family)
 	}

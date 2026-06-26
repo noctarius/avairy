@@ -11,14 +11,18 @@ import (
 	"avairy/internal/gating"
 )
 
-// New returns a Grok adapter. Tool execution is gated by the §7 policy via ACP's
-// session/request_permission (fail-closed when no interactive approver is wired).
-func New() agent.Adapter {
+// New returns a Grok adapter. Tool execution is gated via ACP's session/request_permission by
+// decide: pass a human-routing decider to surface gated actions for approval, or nil to fail
+// closed (§7 policy with no approver → destructive shell/file actions denied).
+func New(decide gating.Decider) agent.Adapter {
+	if decide == nil {
+		decide = gating.Policy{}.Decide
+	}
 	a := acp.New(acp.Profile{
 		Family:  agent.FamilyGrok,
 		Command: "grok",
 		Args:    []string{"agent", "stdio"},
 	})
-	a.Decide = gating.Policy{}.Decide
+	a.Decide = decide
 	return a
 }

@@ -47,10 +47,10 @@ Ranked roughly by value-to-effort within each group.
 
 ### Gating — finish what's started
 
-4. **Copilot & Grok aren't gated to the human.** The ACP engine has a `Decide gating.Decider`
-   field, but `buildAdapter` returns bare `copilot.New()`/`grok.New()` without setting it — so
-   they fail closed and never reach the Approvals tab. One-line fix per call site (wire the
-   same `gateDecider`), parallel to codex. *(cheap)*
+4. ~~**Copilot & Grok aren't gated to the human.**~~ ✅ Done. `copilot.New(decide)` /
+   `grok.New(decide)` now take a decider (nil → fail-closed); the node path passes
+   `gateDecider` and local `-live` passes `localGateDecider`, so ACP
+   `session/request_permission` requests reach the operator's Approvals tab like Claude/Codex.
 
 5. **Local `-live claude` gating.** No local `/gate` endpoint (only the node serves one), so
    local Claude relies on `--allowedTools`, not the broker.
