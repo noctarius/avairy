@@ -30,6 +30,7 @@ import (
 	"avairy/internal/control"
 	"avairy/internal/facilitator"
 	"avairy/internal/gating"
+	"avairy/internal/git"
 	"avairy/internal/journal"
 	"avairy/internal/mcp"
 	"avairy/internal/runner"
@@ -152,6 +153,13 @@ func main() {
 					}
 				}
 			}()
+			// If the operator's workspace is a git repo, expose history reads + gated signed
+			// commits over the bus (DESIGN.md §9: the canonical repo lives only on core).
+			if repo, gerr := git.Open(ctx, *workspaceDir, true); gerr != nil {
+				fmt.Fprintln(os.Stderr, "avairy: git tools disabled:", gerr)
+			} else {
+				mcpSrv.EnableGit(repo, gitApprover(approvals))
+			}
 		}
 		core := control.NewCore(hub, jrnl)
 		core.Approvals = approvals // one broker feeds both node agents and the operator TUI
@@ -258,7 +266,7 @@ func main() {
 
 const aliceRole = "You are 'alice', a backend engineer agent in the avairy multi-agent system. " +
 	"Collaborate ONLY through the avairy MCP tools: post_task, claim_task, list_tasks, " +
-	"send_message, read_inbox, report_status. Be terse and do exactly what you are asked, then stop."
+	"send_message, read_inbox, report_status, git_history, request_commit. Be terse and do exactly what you are asked, then stop."
 
 func startLiveAlice(ctx context.Context, family, model, busURL string, b *bus.Bus, jrnl journal.Log, approvals *control.Approvals) {
 	ws, err := os.MkdirTemp("", "avairy-alice-")
@@ -346,6 +354,18 @@ func startLocalGate(decide gating.Decider) (string, error) {
 	go http.Serve(ln, mux)
 	_, port, _ := net.SplitHostPort(ln.Addr().String())
 	return "http://127.0.0.1:" + port + "/gate", nil
+}
+
+// gitApprover routes a request_commit (a §7 git mutation) to the operator via the shared
+// approvals broker, keyed by the requesting agent — so commits surface in the Approvals tab.
+func gitApprover(approvals *control.Approvals) gating.Decider {
+	return func(ctx context.Context, req gating.Request) (gating.Decision, error) {
+		dec := approvals.Ask(ctx, control.Approval{AgentID: req.AgentID, Kind: string(req.Kind), Summary: req.Summary})
+		if dec == control.DecisionAllow || dec == control.DecisionAllowForSession {
+			return gating.Allow, nil
+		}
+		return gating.Deny, nil
+	}
 }
 
 func startMock(ctx context.Context, id string, b *bus.Bus, jrnl journal.Log) {

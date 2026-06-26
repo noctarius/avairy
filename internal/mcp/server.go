@@ -17,6 +17,8 @@ import (
 
 	"avairy/internal/board"
 	"avairy/internal/bus"
+	"avairy/internal/gating"
+	"avairy/internal/git"
 	"avairy/internal/journal"
 )
 
@@ -31,6 +33,10 @@ type Server struct {
 	bus   *bus.Bus
 	board *board.Board
 	jrnl  journal.Log
+
+	// Canonical git repo on core (DESIGN.md §9), wired by EnableGit. nil until enabled.
+	gitRepo    *git.Repo
+	gitApprove gating.Decider
 
 	// resolve maps an HTTP request to the caller's agent id. The bus stamps sender identity
 	// from this (no spoofing, DESIGN.md §4); the daemon wires real enrollment tokens here.

@@ -38,13 +38,14 @@ Ranked roughly by value-to-effort within each group.
 
 ### Designed but not built (large)
 
-1. **Git integration (§9) — entirely missing.** No code behind this whole section:
-   - `git_history(...)` MCP tool — history reads on any node for root-cause analysis.
-   - `request_commit(paths, message)` MCP tool — gated, executed **core-only with signing**
-     (signing keys never ship to nodes).
-   - disposable scratch worktree for bisect/checkout (read-only history mirror).
-   - TUI commit affordance.
-   - *Today only `.gitignore` parsing touches git.*
+1. **Git integration (§9) — core done, extras pending.** `internal/git` wraps the git CLI on
+   core's canonical repo; two MCP tools are wired (enabled when `-workspace` is a repo):
+   - ✅ `git_history(mode, ref, path, limit)` — log/show/diff/blame, read-only, any agent (for
+     RCA); args validated against flag-injection.
+   - ✅ `request_commit(message, paths)` — **gated** (routes to the operator's Approvals tab via
+     the broker), executed **core-only and signed** (`git -S`; keys never ship to nodes).
+   - ⬜ Disposable scratch worktree for bisect/checkout (read-only history mirror).
+   - ⬜ TUI-initiated commit (human commits directly; today the human approves agent commits).
 
 2. ~~**Hub persistence.**~~ ✅ Done. The hub snapshots to `.avairy/hub.json` (atomic
    temp+rename), restored on startup via `LoadHub`; persisted every 5s if dirty and on clean
