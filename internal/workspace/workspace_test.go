@@ -85,6 +85,48 @@ func TestIgnoreForReadsProjectFiles(t *testing.T) {
 	}
 }
 
+// A conflict resolved via Hub.Resolve converges both nodes (the reconciliation end state).
+func TestConflictResolveConverges(t *testing.T) {
+	h := NewHub()
+	dirA, dirB := t.TempDir(), t.TempDir()
+	write(t, dirA, "f.go", "A\n", 0o644)
+	nvA, nvB := NewNodeView("alice"), NewNodeView("bob")
+
+	// alice publishes v1; bob pulls it.
+	if _, err := nvA.SyncUp(h, dirA, DefaultIgnore()); err != nil {
+		t.Fatal(err)
+	}
+	if err := nvB.SyncDown(h, dirB); err != nil {
+		t.Fatal(err)
+	}
+
+	// Both edit from v1 → bob lands v2, alice's push conflicts.
+	write(t, dirA, "f.go", "A-alice\n", 0o644)
+	write(t, dirB, "f.go", "A-bob\n", 0o644)
+	if _, err := nvB.SyncUp(h, dirB, DefaultIgnore()); err != nil {
+		t.Fatal(err)
+	}
+	conflicts, _ := nvA.SyncUp(h, dirA, DefaultIgnore())
+	if len(conflicts) != 1 || conflicts[0].Path != "f.go" {
+		t.Fatalf("expected alice to conflict, got %+v", conflicts)
+	}
+
+	// alice reconciles (merge of both) → next version, then both converge on SyncDown.
+	h.Resolve("alice", "f.go", []byte("A-alice+A-bob\n"))
+	if err := nvA.SyncDown(h, dirA); err != nil {
+		t.Fatal(err)
+	}
+	if err := nvB.SyncDown(h, dirB); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(t, dirA, "f.go"); got != "A-alice+A-bob\n" {
+		t.Fatalf("alice not converged: %q", got)
+	}
+	if got := read(t, dirB, "f.go"); got != "A-alice+A-bob\n" {
+		t.Fatalf("bob not converged: %q", got)
+	}
+}
+
 // Round-trip a real directory through the hub: alice's tree syncs up, bob's tree syncs down,
 // with .git excluded, LF-normalized, and the executable bit preserved.
 func TestDirectoryRoundTrip(t *testing.T) {

@@ -58,10 +58,14 @@ Ranked roughly by value-to-effort within each group.
    false-deleted (adopts versions only for files still present locally). *Future:* the snapshot
    is one JSON blob (whole-tree rewrite); a git-backed / per-file store would scale better.
 
-3. **Conflict reconciliation routing.** Concurrent divergent edits are detected, journaled,
-   and printed (`CONFLICT … needs reconciliation`), and `Hub.Resolve` exists — but nothing
-   drives a resolution. The "surface" half is done; the "route to an agent/human to reconcile"
-   half is not, so a real conflict sticks.
+3. ~~**Conflict reconciliation routing.**~~ ✅ Done. On a rejected (divergent) push, core
+   routes a CONFLICT to the responsible agent over the bus — carrying **both** sides (hub
+   version + the agent's rejected edit, since the node's SyncDown overwrites the local file
+   with the hub version) — deduped per (agent, path, hub version). The agent merges and calls
+   the `resolve_conflict(path, content)` MCP tool → `Hub.Resolve` lands it as the next version,
+   and both nodes converge on SyncDown. *Note:* the conflicting node's local edit IS overwritten
+   pending resolution, so the bus message is the agent's copy of its own side. Routing an
+   operator/seed conflict to the human (vs an agent) is a follow-up.
 
 ### Gating — finish what's started
 

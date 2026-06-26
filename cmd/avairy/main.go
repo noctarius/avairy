@@ -170,8 +170,19 @@ func main() {
 				}
 			}
 		}
+		// Conflict reconciliation (DESIGN.md §9): agents resolve divergent edits via the bus +
+		// resolve_conflict tool. Only meaningful with a hub (always present here).
+		mcpSrv.EnableConflicts(func(agentID, path string, content []byte) (uint64, error) {
+			return hub.Resolve(agentID, path, content).Version, nil
+		})
+
 		core := control.NewCore(hub, jrnl)
 		core.Approvals = approvals // one broker feeds both node agents and the operator TUI
+		core.OnConflict = func(agentID, path string, hubVersion uint64, hubContent, yourContent []byte) {
+			body := fmt.Sprintf("CONFLICT on %s — another agent changed it (now hub v%d). Merge the two versions below and call resolve_conflict(path=%q, content=<merged>). Your local copy was overwritten with the hub version, so use YOUR EDIT from here.\n--- hub v%d ---\n%s\n--- YOUR EDIT ---\n%s",
+				path, hubVersion, path, hubVersion, truncateForBus(hubContent), truncateForBus(yourContent))
+			b.Publish("avairy", bus.Agent(agentID), body, agent.DeliverySteer)
+		}
 		// When a node enrolls, register its agent on the bus (identity, caps, inbox); deliver
 		// that agent's inbound bus messages back over the control channel.
 		core.OnEnroll = func(nodeID string, caps map[string]string) {
@@ -276,7 +287,7 @@ func main() {
 
 const aliceRole = "You are 'alice', a backend engineer agent in the avairy multi-agent system. " +
 	"Collaborate ONLY through the avairy MCP tools: post_task, claim_task, list_tasks, " +
-	"send_message, read_inbox, report_status, git_history, request_commit, scratch_worktree. Be terse and do exactly what you are asked, then stop."
+	"send_message, read_inbox, report_status, git_history, request_commit, scratch_worktree, resolve_conflict. Be terse and do exactly what you are asked, then stop."
 
 func startLiveAlice(ctx context.Context, family, model, busURL string, b *bus.Bus, jrnl journal.Log, approvals *control.Approvals) {
 	ws, err := os.MkdirTemp("", "avairy-alice-")
@@ -376,6 +387,16 @@ func gitApprover(approvals *control.Approvals) gating.Decider {
 		}
 		return gating.Deny, nil
 	}
+}
+
+// truncateForBus bounds hub content embedded in a conflict notification (huge/binary files
+// would bloat the message); the agent has its own side locally and can read more if needed.
+func truncateForBus(b []byte) string {
+	const max = 4000
+	if len(b) <= max {
+		return string(b)
+	}
+	return string(b[:max]) + "\n… (truncated)"
 }
 
 func startMock(ctx context.Context, id string, b *bus.Bus, jrnl journal.Log) {

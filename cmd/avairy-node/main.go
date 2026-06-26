@@ -154,7 +154,7 @@ func main() {
 }
 
 const defaultRole = "You are an avairy agent. Collaborate ONLY through the avairy MCP tools " +
-	"(send_message, read_inbox, post_task, claim_task, list_tasks, report_status, git_history, request_commit, scratch_worktree). Be terse."
+	"(send_message, read_inbox, post_task, claim_task, list_tasks, report_status, git_history, request_commit, scratch_worktree, resolve_conflict). Be terse."
 
 // spawnAgent starts an agent on this node wired to the local MCP proxy, ships its events to
 // the core journal, and injects inbound bus messages (pulled from core) into its session.

@@ -42,12 +42,19 @@ type Core struct {
 	// LivenessTimeout is how long a node may go without contact before it's marked offline.
 	// Must exceed the node's heartbeat interval (default 2s); NewCore defaults it to 15s.
 	LivenessTimeout time.Duration
+	// OnConflict, if set, routes a rejected (divergent) push to the responsible agent for
+	// reconciliation (DESIGN.md §9). It carries BOTH sides — the hub's current content and the
+	// agent's rejected edit — because the node's SyncDown will overwrite the local file with the
+	// hub version before the agent acts, so the message is the agent's only copy of its own edit.
+	// Deduped per (agent, path, hub version) so re-pushing a stale edit doesn't re-notify each tick.
+	OnConflict func(agentID, path string, hubVersion uint64, hubContent, yourContent []byte)
 
-	mu       sync.Mutex
-	pending  string            // current operator-facing token (hand to the next node)
-	bound    map[string]string // enrollment token -> node id it's bound to (reusable for rejoin)
-	sessions map[string]string // sessionToken -> nodeID
-	nodes    map[string]*NodeInfo
+	mu        sync.Mutex
+	conflicts map[string]uint64 // agent\x00path -> last-notified hub version
+	pending   string            // current operator-facing token (hand to the next node)
+	bound     map[string]string // enrollment token -> node id it's bound to (reusable for rejoin)
+	sessions  map[string]string // sessionToken -> nodeID
+	nodes     map[string]*NodeInfo
 }
 
 // NewCore returns a Core backed by hub, journaling lifecycle events to jrnl.
@@ -60,6 +67,7 @@ func NewCore(hub *workspace.Hub, jrnl journal.Log) *Core {
 		bound:           make(map[string]string),
 		sessions:        make(map[string]string),
 		nodes:           make(map[string]*NodeInfo),
+		conflicts:       make(map[string]uint64),
 	}
 }
 
@@ -226,6 +234,10 @@ func (c *Core) handlePush(nodeID string, w http.ResponseWriter, r *http.Request)
 			sr.HubVersion = res.Conflict.Hub.Version
 			sr.HubContent = res.Conflict.Hub.Content
 			c.jrnl.Append(journal.KindSystem, nodeID, map[string]any{"event": "sync_conflict", "path": ch.Path})
+			// Route to the agent for reconciliation — once per hub version, not every tick.
+			if c.OnConflict != nil && c.newConflict(nodeID, ch.Path, res.Conflict.Hub.Version) {
+				c.OnConflict(nodeID, ch.Path, res.Conflict.Hub.Version, res.Conflict.Hub.Content, res.Conflict.Incoming.Content)
+			}
 		}
 		results = append(results, sr)
 	}
@@ -264,6 +276,19 @@ func (c *Core) auth(h func(nodeID string, w http.ResponseWriter, r *http.Request
 		}
 		h(nodeID, w, r)
 	})
+}
+
+// newConflict reports whether (agent, path) hasn't already been notified at this hub version,
+// recording it so repeated pushes of the same stale edit don't re-notify until the hub moves.
+func (c *Core) newConflict(agentID, path string, hubVersion uint64) bool {
+	key := agentID + "\x00" + path
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.conflicts[key] == hubVersion {
+		return false
+	}
+	c.conflicts[key] = hubVersion
+	return true
 }
 
 func (c *Core) touch(nodeID string) {

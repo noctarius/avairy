@@ -38,6 +38,9 @@ type Server struct {
 	gitRepo    *git.Repo
 	gitApprove gating.Decider
 
+	// resolveConflict applies an agent's reconciled file as the next hub version (EnableConflicts).
+	resolveConflict ConflictResolver
+
 	// resolve maps an HTTP request to the caller's agent id. The bus stamps sender identity
 	// from this (no spoofing, DESIGN.md §4); the daemon wires real enrollment tokens here.
 	resolve func(*http.Request) string
