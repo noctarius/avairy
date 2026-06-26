@@ -174,6 +174,19 @@ Ranked roughly by value-to-effort within each group.
     (same intent, different words) — the LLM-`Nudger` seam (`facilitator.go`), e.g. periodically
     asking "is this agent making progress?".
 
+### Usability / driving work
+
+15. **Per-edit (and per-session) human approval of file edits.** Today `ActionFileWrite` is a
+    *free* action (`gating.Gated` returns false — "local edits are free"), so agent Edit/Write
+    runs and syncs with no review; the human's only acceptance gate is at the **commit**
+    (`request_commit`) boundary. Add an **opt-in** mode that gates file edits too — routed to the
+    Approvals tab like everything else (the broker already supports allow / deny / **allow-for-
+    session**, which is the fatigue mitigation: approve "edits by this agent" once per session
+    rather than every diff). Off by default (gating every edit is noisy); a flag (e.g.
+    `-gate-edits`) flips `ActionFileWrite` to gated. The plumbing exists — it's mostly the policy
+    toggle + the per-session grant keyed to file edits. (The deferred half of the edits-acceptance
+    discussion.)
+
 ### Single operator
 
 13. The TUI is single-operator by design (v1). Multi-operator is out of scope for now.
