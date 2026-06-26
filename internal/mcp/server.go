@@ -40,6 +40,8 @@ type Server struct {
 
 	// resolveConflict applies an agent's reconciled file as the next hub version (EnableConflicts).
 	resolveConflict ConflictResolver
+	// freshLook runs a question through an ephemeral clean-context session (EnableFreshLook).
+	freshLook FreshLookFunc
 
 	// resolve maps an HTTP request to the caller's agent id. The bus stamps sender identity
 	// from this (no spoofing, DESIGN.md §4); the daemon wires real enrollment tokens here.

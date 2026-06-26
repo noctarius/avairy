@@ -97,7 +97,7 @@ func (a *Adapter) Start(ctx context.Context, cfg agent.SessionConfig) (agent.Ses
 	// Resume a prior session by id (both Copilot and Grok advertise loadSession). session/load
 	// replays history via session/update — suppressed (already in our journal). Fall back to a
 	// fresh session if the id can't be loaded, so respawn never hard-fails.
-	if cfg.ResumeID != "" {
+	if cfg.ResumeID != "" && cfg.Mode != agent.SessionEphemeral {
 		s.loading.Store(true)
 		_, lerr := s.call(hctx, "session/load", sessionLoadParams{
 			SessionID:  cfg.ResumeID,

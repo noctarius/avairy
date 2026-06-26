@@ -104,7 +104,7 @@ func (a *Adapter) Start(ctx context.Context, cfg agent.SessionConfig) (agent.Ses
 	}
 	approval, sandbox := orDefault(a.ApprovalPolicy, "never"), orDefault(a.Sandbox, "workspace-write")
 	var tsRes json.RawMessage
-	if cfg.ResumeID != "" {
+	if cfg.ResumeID != "" && cfg.Mode != agent.SessionEphemeral {
 		// Resume the prior thread by id; fall back to a fresh thread if it can't be loaded
 		// (e.g. the app-server's store was cleared), so respawn never hard-fails.
 		tsRes, err = s.call(hctx, "thread/resume", threadResumeParams{

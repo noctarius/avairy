@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"avairy/internal/adapter/claudecode"
@@ -82,6 +83,8 @@ func main() {
 	bd := board.New(jrnl)
 	bd.Restore(persisted) // rebuild the task board from the same history
 	mcpSrv := mcp.NewServer(b, bd, jrnl)
+	// fresh_look: any agent can request a clean-context second opinion (DESIGN.md §8).
+	mcpSrv.EnableFreshLook(makeFreshLook(*family, *model, bd))
 
 	// Human-in-the-loop gating broker (DESIGN.md §7): gated actions from any agent (local or
 	// via a node) block here until the operator allows/denies them in the TUI. Journaling the
@@ -360,7 +363,7 @@ func main() {
 
 const aliceRole = "You are 'alice', a backend engineer agent in the avairy multi-agent system. " +
 	"Collaborate ONLY through the avairy MCP tools: post_task, claim_task, list_tasks, " +
-	"send_message, read_inbox, report_status, git_history, request_commit, scratch_worktree, resolve_conflict. Be terse and do exactly what you are asked, then stop."
+	"send_message, read_inbox, report_status, git_history, request_commit, scratch_worktree, resolve_conflict, fresh_look. Be terse and do exactly what you are asked, then stop."
 
 func startLiveAlice(ctx context.Context, family, model, busURL string, b *bus.Bus, jrnl journal.Log, approvals *control.Approvals) {
 	ws, err := os.MkdirTemp("", "avairy-alice-")
@@ -448,6 +451,102 @@ func startLocalGate(decide gating.Decider) (string, error) {
 	go http.Serve(ln, mux)
 	_, port, _ := net.SplitHostPort(ln.Addr().String())
 	return "http://127.0.0.1:" + port + "/gate", nil
+}
+
+const freshLookRole = "You are a fresh pair of eyes with NO prior conversation context. Reason " +
+	"independently from the facts you are given and answer concisely. You have no tools — just think and reply."
+
+// makeFreshLook returns a fresh_look runner: each call spins up an ephemeral, clean-context
+// session (same family/model as the live agent), seeds it with the current task board + the
+// question, returns the answer, and tears the session down (DESIGN.md §8). Tools are denied so
+// it stays a pure thinker.
+func makeFreshLook(family, model string, bd *board.Board) mcp.FreshLookFunc {
+	return func(ctx context.Context, question string) (string, error) {
+		ws, err := os.MkdirTemp("", "avairy-fresh-")
+		if err != nil {
+			return "", err
+		}
+		defer os.RemoveAll(ws)
+		prompt := "Current task board:\n" + boardSummary(bd) + "\n\nQuestion: " + question +
+			"\n\nGive your independent analysis."
+		return oneShot(ctx, freshLookAdapter(family), freshLookRole, model, ws, prompt)
+	}
+}
+
+// denyAll gates every action closed — the fresh-look session is a pure thinker; any tool attempt
+// is denied fast (not left pending), so a one-shot turn can't hang on a permission prompt.
+func denyAll(context.Context, gating.Request) (gating.Decision, error) { return gating.Deny, nil }
+
+// freshLookAdapter builds a plain, bus-less, tool-denied adapter for one-shot thinking.
+func freshLookAdapter(family string) agent.Adapter {
+	switch family {
+	case "codex":
+		cx := codex.New()
+		cx.Approve = codex.ApproverFromDecider(denyAll)
+		return cx
+	case "copilot":
+		return copilot.New(denyAll)
+	case "grok":
+		return grok.New(denyAll)
+	default: // claude
+		ca := claudecode.New()
+		ca.ExtraArgs = []string{"--allowedTools", ""} // no tools — pure reasoning
+		return ca
+	}
+}
+
+// oneShot runs one ephemeral turn: start a fresh session, send prompt, collect assistant text
+// until the turn completes, then close. Bounded so it can't hang. It deliberately persists
+// NOTHING (no session id, throwaway workspace) — a fresh look must not touch the agent's real
+// persistent session.
+func oneShot(ctx context.Context, ad agent.Adapter, role, model, workspace, prompt string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	sess, err := ad.Start(ctx, agent.SessionConfig{
+		AgentID:   "fresh-look",
+		Role:      role,
+		Mode:      agent.SessionEphemeral,
+		Model:     model,
+		Workspace: workspace,
+	})
+	if err != nil {
+		return "", err
+	}
+	defer sess.Close()
+	if err := sess.Send(ctx, prompt, agent.DeliverySteer); err != nil {
+		return "", err
+	}
+	var sb strings.Builder
+	for {
+		select {
+		case <-ctx.Done():
+			return strings.TrimSpace(sb.String()), ctx.Err()
+		case ev, ok := <-sess.Events():
+			if !ok {
+				return strings.TrimSpace(sb.String()), nil
+			}
+			switch ev.Type {
+			case agent.EventText:
+				sb.WriteString(ev.Text)
+			case agent.EventError:
+				return strings.TrimSpace(sb.String()), fmt.Errorf("%s", ev.Text)
+			case agent.EventTurnDone:
+				return strings.TrimSpace(sb.String()), nil
+			}
+		}
+	}
+}
+
+func boardSummary(bd *board.Board) string {
+	tasks := bd.List()
+	if len(tasks) == 0 {
+		return "(no tasks)"
+	}
+	var sb strings.Builder
+	for _, t := range tasks {
+		sb.WriteString(fmt.Sprintf("- %s [%s] %q\n", t.ID, t.State, t.Title))
+	}
+	return sb.String()
 }
 
 // gitApprover routes a request_commit (a §7 git mutation) to the operator via the shared

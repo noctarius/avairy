@@ -61,8 +61,8 @@ func (a *Adapter) Start(ctx context.Context, cfg agent.SessionConfig) (agent.Ses
 	if cfg.Role != "" {
 		args = append(args, "--append-system-prompt", cfg.Role)
 	}
-	if cfg.ResumeID != "" {
-		args = append(args, "--resume", cfg.ResumeID)
+	if cfg.ResumeID != "" && cfg.Mode != agent.SessionEphemeral {
+		args = append(args, "--resume", cfg.ResumeID) // ephemeral = a deliberate fresh look, no resume
 	}
 	if cfg.Model != "" {
 		args = append(args, "--model", cfg.Model)

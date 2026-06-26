@@ -233,7 +233,7 @@ func main() {
 }
 
 const defaultRole = "You are an avairy agent. Collaborate ONLY through the avairy MCP tools " +
-	"(send_message, read_inbox, post_task, claim_task, list_tasks, report_status, git_history, request_commit, scratch_worktree, resolve_conflict). Be terse."
+	"(send_message, read_inbox, post_task, claim_task, list_tasks, report_status, git_history, request_commit, scratch_worktree, resolve_conflict, fresh_look). Be terse."
 
 // readSession reads a persisted agent session id (empty if absent/unreadable).
 func readSession(path string) string {
@@ -309,8 +309,11 @@ func spawnAgent(ctx context.Context, n *control.Node, family, agentID, role, mod
 	// Resume the agent's prior conversation across a node restart (DESIGN.md §8): the session id
 	// is persisted under the sync-excluded .avairy dir and passed back as ResumeID. Only for
 	// families that actually honor it (claude --resume, codex thread/resume).
+	// Persist/resume only for a persistent session — never an ephemeral one (a one-shot fresh
+	// look must not overwrite the agent's real session). The node only spawns persistent agents
+	// today; the Mode guard keeps the invariant if that ever changes.
 	var sessionFile string
-	if ws != "" && ad.Capabilities().SupportsResume {
+	if ws != "" && ad.Capabilities().SupportsResume && cfg.Mode != agent.SessionEphemeral {
 		sessionFile = filepath.Join(ws, ".avairy", "session")
 		if prev := readSession(sessionFile); prev != "" {
 			cfg.ResumeID = prev

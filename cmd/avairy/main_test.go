@@ -1,14 +1,28 @@
 package main
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 
+	"avairy/internal/adapter/mock"
 	"avairy/internal/agent"
 	"avairy/internal/board"
 	"avairy/internal/bus"
 	"avairy/internal/journal"
 )
+
+// oneShot runs an ephemeral turn and returns the assistant text — exercised here with the mock
+// (which echoes the prompt) so it's deterministic and credit-free.
+func TestOneShotEphemeral(t *testing.T) {
+	got, err := oneShot(context.Background(), mock.New(), "role", "", t.TempDir(), "ping")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "ping" {
+		t.Fatalf("oneShot = %q, want echoed prompt", got)
+	}
+}
 
 // decodeRecords round-trips each journaled kind back to its typed form (so the TUI can replay
 // history after a restart). This also guards that bus.Message / agent.Event survive JSON.
