@@ -39,6 +39,7 @@ import (
 	"avairy/internal/git"
 	"avairy/internal/journal"
 	"avairy/internal/mcp"
+	"avairy/internal/operator"
 	"avairy/internal/runner"
 	"avairy/internal/tui"
 	"avairy/internal/workspace"
@@ -72,6 +73,7 @@ func main() {
 	tlsKey := flag.String("tls-key", "", "PEM private key file for -tls-cert")
 	tlsAuto := flag.Bool("tls-auto", false, "self-manage a CA under .avairy and serve the control channel over TLS (the CA travels to nodes in the join bundle; enables mTLS)")
 	gateEdits := flag.Bool("gate-edits", false, "also require operator approval for file edits (per-edit gating; allow-for-session avoids per-diff prompts)")
+	operatorToken := flag.String("operator-token", "", "bearer token for the remote operator API (#18); default: random, shown in the TUI / printed when headless")
 	flag.Parse()
 
 	// Durable, append-only journal (DESIGN.md §10) under .avairy/; falls back to memory-only.
@@ -114,6 +116,28 @@ func main() {
 	conflictBroker.OnResolve = func(oc control.OperatorConflict, decision string) {
 		jrnl.Append(journal.KindSystem, "core", map[string]any{"event": "conflict_resolved", "id": oc.ID, "path": oc.Path, "decision": decision})
 	}
+
+	roster := func() []string {
+		metas := mcpSrv.AgentList()
+		ids := make([]string, 0, len(metas))
+		for _, mm := range metas {
+			ids = append(ids, mm.ID)
+		}
+		return ids
+	}
+	// The single operator surface (#18): it yields both the in-process TUI deps (svc.Deps) and the
+	// remote operator API (operator.NewServer below, mounted on the control listener). Commit /
+	// Control / NewToken are func fields filled in once the control API + git are set up; they're
+	// read at request time, so a remote client that connects later sees them.
+	svc := &operator.Services{
+		Journal: jrnl, Roster: roster, Tasks: bd.List,
+		Approvals: approvals, Conflicts: conflictBroker, Bus: b,
+	}
+	opToken := *operatorToken
+	if opToken == "" {
+		opToken = operator.RandomToken()
+	}
+	var operatorJoinFile string // path to the .avairy/operator-join bundle (set when serving)
 
 	// Self-managed TLS material (DESIGN.md §4), shared by the MCP bus and the control channel:
 	// build the CA + one server cert (SANs cover the advertised control + mcp hosts and loopback)
@@ -170,7 +194,6 @@ func main() {
 	defer cancel()
 
 	// Optionally serve the node control API so remote avairy-node daemons can enroll and sync.
-	var ctrlInfo *tui.ControlInfo
 	var commitFn func(string) (string, error)                    // operator-initiated /commit; nil unless git is enabled
 	var bundleFn func(context.Context, []string) ([]byte, error) // repo bundle for node mirrors; nil unless git is enabled
 	if *controlAddr != "" {
@@ -271,6 +294,7 @@ func main() {
 				bundleFn = repo.Bundle
 			}
 		}
+		svc.Commit = commitFn // operator /commit over the API/TUI (nil when no git repo)
 		// Conflict reconciliation (DESIGN.md §9): agents resolve divergent edits via the bus +
 		// resolve_conflict tool. Only meaningful with a hub (always present here).
 		mcpSrv.EnableConflicts(func(agentID, path string, content []byte) (uint64, error) {
@@ -297,16 +321,24 @@ func main() {
 			}
 			return out
 		}
+		// Serve the operator API (#18) alongside the node control API on one listener (shared TLS):
+		// /operator/* → remote TUI/web clients; everything else → the node channel.
+		rootHandler := func() http.Handler {
+			mux := http.NewServeMux()
+			mux.Handle("/operator/", operator.NewServer(svc, opToken).Handler())
+			mux.Handle("/", core.Handler())
+			return mux
+		}
 		ctrlScheme := "http"
 		serve := func() error {
-			return http.ListenAndServe(*controlAddr, core.Handler())
+			return http.ListenAndServe(*controlAddr, rootHandler())
 		}
 		switch {
 		case *tlsAuto:
 			ctrlScheme = "https"
 			srv := &http.Server{
 				Addr:    *controlAddr,
-				Handler: core.Handler(),
+				Handler: rootHandler(),
 				TLSConfig: &tls.Config{
 					Certificates: []tls.Certificate{serverCert}, // shared self-CA cert (built above)
 					ClientAuth:   tls.VerifyClientCertIfGiven,   // token OR client-cert auth
@@ -319,7 +351,7 @@ func main() {
 		case *tlsCert != "" && *tlsKey != "":
 			ctrlScheme = "https"
 			serve = func() error {
-				return http.ListenAndServeTLS(*controlAddr, *tlsCert, *tlsKey, core.Handler())
+				return http.ListenAndServeTLS(*controlAddr, *tlsCert, *tlsKey, rootHandler())
 			}
 		}
 		go func() {
@@ -352,11 +384,21 @@ func main() {
 			writeJoin(t)
 			return t
 		}
-		ctrlInfo = &tui.ControlInfo{ControlURL: ctrlURL, BusBase: busBase, Warn: warn, CurrentToken: curToken, NewToken: newToken, JoinFile: joinPath}
+		// A remote operator (#18) attaches the same TUI from another machine. Bundle core URL + CA +
+		// the operator token into one .avairy/operator-join string (reusing the node join machinery),
+		// so `avairy-tui -join-file .avairy/operator-join` is a single argument.
+		operatorJoinFile = filepath.Join(".avairy", "operator-join")
+		_ = os.WriteFile(operatorJoinFile, []byte(control.EncodeJoin(control.JoinBundle{Core: ctrlURL, CA: caPEM, Token: opToken})), 0o600)
+		// Feed the operator surface so both the local TUI and remote clients see endpoints/token.
+		svc.Control = func() *operator.ControlState {
+			return &operator.ControlState{ControlURL: ctrlURL, BusBase: busBase, Warn: warn, Token: curToken(), JoinFile: joinPath, OperatorJoin: operatorJoinFile}
+		}
+		svc.NewToken = newToken
 		// Under the TUI's alt-screen, stdout is hidden — so the token/join is shown in the TUI.
 		// Only print here when there's no TUI (headless serve, or a one-shot -send).
 		if *headless || *send != "" {
-			fmt.Printf("control API:  %s\nMCP bus base: %s\nenroll token: %s\njoin file:    %s\n", ctrlURL, busBase, curToken(), joinPath)
+			fmt.Printf("control API:  %s\nMCP bus base: %s\nenroll token: %s\njoin file:    %s\noperator API: %s%s\noperator token: %s\noperator join: %s\n",
+				ctrlURL, busBase, curToken(), joinPath, ctrlURL, operator.PathStream, opToken, operatorJoinFile)
 			if warn != "" {
 				fmt.Println("warning:", warn)
 			}
@@ -419,48 +461,8 @@ func main() {
 		fmt.Println("avairy: shutting down")
 		return
 	}
-	roster := func() []string {
-		metas := mcpSrv.AgentList()
-		ids := make([]string, 0, len(metas))
-		for _, mm := range metas {
-			ids = append(ids, mm.ID)
-		}
-		return ids
-	}
-	deps := tui.Deps{
-		Bus: b, Board: bd, Journal: jrnl, Control: ctrlInfo, Roster: roster,
-		PendingApprovals: func() []tui.ApprovalItem {
-			ps := approvals.Pending()
-			out := make([]tui.ApprovalItem, 0, len(ps))
-			for _, p := range ps {
-				out = append(out, tui.ApprovalItem{ID: p.ID, AgentID: p.AgentID, Kind: p.Kind, Summary: p.Summary, Reason: p.Reason})
-			}
-			return out
-		},
-		ResolveApproval: func(id, decision string) { approvals.Resolve(id, decision) },
-		PendingConflicts: func() []tui.ConflictItem {
-			cs := conflictBroker.Pending()
-			out := make([]tui.ConflictItem, 0, len(cs))
-			for _, c := range cs {
-				out = append(out, tui.ConflictItem{ID: c.ID, Path: c.Path, HubVersion: c.HubVersion, Source: c.Source, Detail: c.Detail})
-			}
-			return out
-		},
-		ResolveConflict: func(id, decision, target string) {
-			oc, ok := conflictBroker.Resolve(id, decision)
-			if !ok || decision != control.ConflictDelegate {
-				return // "mine": the operator edits the marked file; the next seed sync picks it up
-			}
-			body := fmt.Sprintf("Please resolve the conflict in %s (hub v%d). The file has git-style conflict markers (<<<<<<< / ======= / >>>>>>>); edit it to merge both sides and remove the markers, then call resolve_conflict (or just save it marker-free).", oc.Path, oc.HubVersion)
-			to := bus.Broadcast()
-			if target != "" && target != "broadcast" {
-				to = bus.Agent(target)
-			}
-			b.Publish("human", to, body, agent.DeliverySteer)
-		},
-		Commit: commitFn,
-	}
-	if err := tui.Run(deps); err != nil {
+	// The attached TUI runs in-process against the same operator surface a remote client uses.
+	if err := tui.Run(svc.Deps()); err != nil {
 		fail("tui", err)
 	}
 }

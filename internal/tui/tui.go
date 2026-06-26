@@ -19,13 +19,22 @@ import (
 	"avairy/internal/journal"
 )
 
-// Deps are the live core services the TUI observes and drives.
+// Deps are the services the TUI observes and drives. They're all interface-level (functions + the
+// journal Log), never concrete bus/board pointers, so the same TUI runs either in-process (closures
+// over the live services) or remotely (closures over an operator-API client) — DESIGN.md §3, #18.
 type Deps struct {
-	Bus     *bus.Bus
-	Board   *board.Board
+	// Journal feeds the event-sourced views (backfill via Records, live via Subscribe). The remote
+	// client supplies a Log fed by the operator stream, so the TUI can't tell local from remote.
 	Journal journal.Log
 	Control *ControlInfo    // non-nil when serving the node control API
 	Roster  func() []string // current agent ids, so agents appear before their first message
+
+	// Inject publishes a human message onto the bus: target "" broadcasts, else it's an agent id.
+	// Interrupt stops whatever agents are running (broadcast interrupt). Both nil-safe via guards.
+	Inject    func(target, body string)
+	Interrupt func()
+	// Tasks returns the current task board (the Tasks view). Nil → empty.
+	Tasks func() []board.Task
 
 	// PendingApprovals/ResolveApproval drive the human-in-the-loop gating view (DESIGN.md §7):
 	// agents block on a gated action, the operator allows/denies it here. Nil disables the view.
@@ -80,6 +89,7 @@ type ControlInfo struct {
 	CurrentToken func() string // the operator-facing token for the next node (auto-regenerates on use)
 	NewToken     func() string // rotate to a fresh token (ctrl+e)
 	JoinFile     string        // path to the one-string join bundle (core URL + CA + token) for a new node
+	OperatorJoin string        // path to the operator-join bundle (for a remote TUI to attach, #18)
 }
 
 const (
@@ -255,7 +265,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch s {
 		case "esc":
-			m.deps.Bus.Interrupt("human", bus.Broadcast()) // stop whatever agents are running
+			if m.deps.Interrupt != nil {
+				m.deps.Interrupt() // stop whatever agents are running
+			}
 			return m, nil
 		case "tab":
 			m.tab = (m.tab + 1) % numTabs
@@ -294,11 +306,14 @@ func (m *Model) submit() tea.Cmd {
 	if rest, ok := strings.CutPrefix(text, "/commit"); ok {
 		return m.commitCmd(strings.TrimSpace(rest))
 	}
-	if mention, body := splitMention(text); mention != "" && body != "" {
-		m.deps.Bus.Publish("human", bus.Agent(mention), body, agent.DeliverySteer)
+	if m.deps.Inject == nil {
 		return nil
 	}
-	m.deps.Bus.Publish("human", bus.Broadcast(), text, agent.DeliverySteer)
+	if mention, body := splitMention(text); mention != "" && body != "" {
+		m.deps.Inject(mention, body)
+		return nil
+	}
+	m.deps.Inject("", text)
 	return nil
 }
 
@@ -605,6 +620,9 @@ func (m *Model) render() string {
 		if m.control.JoinFile != "" {
 			line += " · join: " + m.control.JoinFile
 		}
+		if m.control.OperatorJoin != "" {
+			line += " · op-join: " + m.control.OperatorJoin
+		}
 		b.WriteString(ctrlStyle.Render(truncate(line, m.width)) + "\n")
 		controlLines++
 		if m.control.Warn != "" {
@@ -749,7 +767,10 @@ func (m *Model) bodyLines() []string {
 		}
 		return out
 	case tabTasks:
-		tasks := m.deps.Board.List()
+		var tasks []board.Task
+		if m.deps.Tasks != nil {
+			tasks = m.deps.Tasks()
+		}
 		if len(tasks) == 0 {
 			return []string{helpStyle.Render("(no tasks yet)")}
 		}

@@ -219,22 +219,28 @@ Ranked roughly by value-to-effort within each group.
     the TLS material). Decisions to make: auth for the web endpoint, and whether it shares the
     single-operator model (#13) or is the path to multi-operator.
 
-18. **Detach the TUI from core (remote operator connection).** Today the TUI runs **in-process**:
-    `tui.Deps` holds direct pointers (`*bus.Bus`, `*board.Board`, `journal.Log`,
-    `*control.Approvals`), so the operator must be on the core machine. Two run modes wanted:
-    - **(a) core + attached TUI** — as today (in-process).
-    - **(b) core serving, no local TUI** — ✅ `-headless` now runs core as a service (bus/control
-      up, prints token/join, blocks until interrupted). What's still missing is the **operator
-      API** + a TUI/web client to **attach from remote** (`avairy-tui -core https://…`); today
-      `-headless` serves but has no live operator view.
+18. ~~**Detach the TUI from core (remote operator connection).**~~ ✅ Done. `tui.Deps` no longer
+    holds concrete `*bus.Bus`/`*board.Board` pointers — it's all interface-level (a `journal.Log`
+    plus `Inject`/`Interrupt`/`Tasks`/`Resolve*` func fields), so the same TUI runs either
+    in-process or attached from another machine.
+    - **(a) core + attached TUI** — as today; `avairy` builds `operator.Services` and runs
+      `tui.Run(svc.Deps())` in-process.
+    - **(b) core serving + remote TUI** — `avairy -control-addr … -headless` serves the **operator
+      API** (`/operator/*`) on the control listener, sharing its TLS. `avairy-tui -join-file
+      .avairy/operator-join` (or `-core/-token/-ca`) attaches and renders the identical UI.
 
-    So: add the operator API on core — the journal stream + operator actions (inject/steer,
-    interrupt, allow/deny approvals, `/commit`, token/join, fleet) — and a TUI client implementing
-    `tui.Deps` against it. **Same API the web UI (#17) needs** (it's remote by definition) → build
-    once, serve both; reuse the control channel's TLS + auth (token/mTLS/join). `Deps` already
-    isolates the views from the transport, so TUI rendering shouldn't change. *Naming:* the new
-    "serve without a local TUI" mode needs its own flag (e.g. `-serve` / `-no-tui`) — `-headless`
-    is already taken (one-shot: send a message, print the journal, exit).
+    New `internal/operator` package: `Services` (the live surface — journal + bus/board/approvals/
+    conflicts actions) yields both `Deps()` (in-process) and `NewServer()` (HTTP). The API is a
+    journal **SSE stream** (`/operator/stream`: backfill then live, with a `ready` sentinel) + a
+    `/operator/state` snapshot (tasks/approvals/conflicts/roster/control) + action POSTs (inject,
+    interrupt, approval, conflict, commit, token). `Client` dials it, keeps a local journal fed by
+    the stream + a state cache refreshed on relevant records, and exposes a matching `Deps()`. Auth
+    is a bearer **operator token** (`-operator-token`, else random, shown in the TUI / printed when
+    headless), bundled with the core URL + CA into `.avairy/operator-join` (the node join machinery
+    reused). Verified end-to-end against the real binaries (curl + `avairy-tui` connect).
+
+    **Same API the web UI (#17) needs** — it's a second client of `/operator/*`, so #17 is now a
+    rendering layer over an existing transport, not new plumbing.
 
 19. ~~**Route operator/seed (and git) conflicts to the human.**~~ ✅ Done (seed conflicts). Some
     conflicts have no owning agent to hand to. The operator's **seed workspace** diverging from a

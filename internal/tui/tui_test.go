@@ -16,7 +16,24 @@ func newTestModel() (*Model, *bus.Bus, journal.Log) {
 	j := journal.NewMemory()
 	b := bus.New(j)
 	bd := board.New(j)
-	return NewModel(Deps{Bus: b, Board: bd, Journal: j}), b, j
+	return NewModel(depsFor(b, bd, j)), b, j
+}
+
+// depsFor wires the interface-level Deps to a live bus+board, the same way the in-process operator
+// services do (kept here so the tui package's tests don't import operator, which imports tui).
+func depsFor(b *bus.Bus, bd *board.Board, j journal.Log) Deps {
+	return Deps{
+		Journal: j,
+		Tasks:   bd.List,
+		Inject: func(target, body string) {
+			to := bus.Broadcast()
+			if target != "" && target != "broadcast" {
+				to = bus.Agent(target)
+			}
+			b.Publish("human", to, body, agent.DeliverySteer)
+		},
+		Interrupt: func() { b.Interrupt("human", bus.Broadcast()) },
+	}
 }
 
 // Records fold into the conversation view and the fleet, and View renders them.
@@ -45,21 +62,20 @@ func TestApprovalsViewAndResolve(t *testing.T) {
 	j := journal.NewMemory()
 	b := bus.New(j)
 	bd := board.New(j)
-	m := NewModel(Deps{
-		Bus: b, Board: bd, Journal: j,
-		PendingApprovals: func() []ApprovalItem { return pending },
-		ResolveApproval: func(id, decision string) {
-			resolved = [2]string{id, decision}
-			// drop the resolved item so the list shrinks like the real broker
-			out := pending[:0]
-			for _, p := range pending {
-				if p.ID != id {
-					out = append(out, p)
-				}
+	d := depsFor(b, bd, j)
+	d.PendingApprovals = func() []ApprovalItem { return pending }
+	d.ResolveApproval = func(id, decision string) {
+		resolved = [2]string{id, decision}
+		// drop the resolved item so the list shrinks like the real broker
+		out := pending[:0]
+		for _, p := range pending {
+			if p.ID != id {
+				out = append(out, p)
 			}
-			pending = out
-		},
-	})
+		}
+		pending = out
+	}
+	m := NewModel(d)
 	// The pending count badges in the tab bar from any tab (inactive tab → unstyled text).
 	if v := m.render(); !strings.Contains(v, "Approvals (2)") {
 		t.Fatalf("tab bar missing pending badge:\n%s", v)
@@ -92,10 +108,9 @@ func TestSlashCommit(t *testing.T) {
 	b := bus.New(j)
 	bd := board.New(j)
 	var gotMsg string
-	m := NewModel(Deps{
-		Bus: b, Board: bd, Journal: j,
-		Commit: func(message string) (string, error) { gotMsg = message; return "abc1234", nil },
-	})
+	d := depsFor(b, bd, j)
+	d.Commit = func(message string) (string, error) { gotMsg = message; return "abc1234", nil }
+	m := NewModel(d)
 
 	m.input.SetValue("/commit fix the panic")
 	cmd := m.submit()
@@ -260,8 +275,9 @@ func TestRecipientSelector(t *testing.T) {
 // Roster agents appear in the fleet at startup, before any message.
 func TestRosterPopulatesFleet(t *testing.T) {
 	j := journal.NewMemory()
-	m := NewModel(Deps{Bus: bus.New(j), Board: board.New(j), Journal: j,
-		Roster: func() []string { return []string{"alice", "bob"} }})
+	d := depsFor(bus.New(j), board.New(j), j)
+	d.Roster = func() []string { return []string{"alice", "bob"} }
+	m := NewModel(d)
 	if m.agents["alice"] == nil || m.agents["bob"] == nil {
 		t.Fatalf("roster agents should populate the fleet at startup: %v", m.agentOrder)
 	}
