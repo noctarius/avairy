@@ -196,6 +196,15 @@ Ranked roughly by value-to-effort within each group.
     relevant notes, and **`fresh_look`** can curate its clean context from the blackboard (its
     prompt is hardcoded to the task board today). Journal-backed, so it resumes like the board.
 
+17. **Web UI (browser operator console, alongside the TUI).** A browser UI mirroring the TUI's
+    views — fleet/cost, conversation, handovers, task board, **Approvals** — plus the same
+    controls: inject/steer messages, interrupt, allow/deny approvals, `/commit`, enroll-token /
+    join display. It's another view over the same event-sourced state, so the seams already fit:
+    subscribe to `journal` (stream to the browser via SSE/WebSocket), drive `bus` / `board` /
+    `approvals` exactly as `tui.Deps` does. Served by core over the existing HTTP(S) stack (reuse
+    the TLS material). Decisions to make: auth for the web endpoint, and whether it shares the
+    single-operator model (#13) or is the path to multi-operator.
+
 ### Single operator
 
 13. The TUI is single-operator by design (v1). Multi-operator is out of scope for now.
