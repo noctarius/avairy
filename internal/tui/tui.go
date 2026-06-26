@@ -117,6 +117,7 @@ var (
 	workingDot = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Render("●")
 	idleDot    = lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Render("○")
 	blockedDot = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Render("●")
+	offlineDot = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("⊘")
 	helpStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
 	sepStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
 	ctrlStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("13"))
@@ -430,6 +431,16 @@ func (m *Model) apply(rec journal.Record) {
 			if m.control != nil && m.control.CurrentToken != nil {
 				m.token = m.control.CurrentToken()
 			}
+		case "node_offline":
+			// Heartbeats lapsed (node id == agent id). Mark an existing fleet entry offline;
+			// don't create one (avoid a phantom for a node that never had an agent).
+			if a := m.agents[rec.Actor]; a != nil {
+				a.status = "offline"
+			}
+		case "node_online":
+			if a := m.agents[rec.Actor]; a != nil && a.status == "offline" {
+				a.status = "idle" // back in contact; real status follows on its next event
+			}
 		}
 	}
 }
@@ -559,6 +570,8 @@ func (m *Model) fleetLine() string {
 			dot = workingDot
 		case "blocked":
 			dot = blockedDot
+		case "offline":
+			dot = offlineDot
 		}
 		parts = append(parts, fmt.Sprintf("%s %s[%s]", dot, id, a.status))
 	}

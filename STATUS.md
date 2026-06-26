@@ -66,8 +66,11 @@ Ranked roughly by value-to-effort within each group.
 8. **Channel TLS.** node↔core is plain HTTP; enrollment tokens and full file contents cross
    the wire in cleartext. Production flips to TLS (node→core outbound, NAT-friendly).
 
-9. **Dead-node detection.** Nodes carry `LastSeen` but nothing marks them offline or evicts
-   them; the TUI fleet won't show a crashed remote node as gone. *(cheap)*
+9. ~~**Dead-node detection.**~~ ✅ Done. `Core.RunLiveness` marks a node offline when its
+   heartbeats lapse past `LivenessTimeout` (15s) and online again on return, journaling each
+   transition; the TUI fleet shows offline agents with a `⊘` dot. Built on the existing
+   node→core heartbeat (no new keep-alive). *Still open:* core doesn't know a node's heartbeat
+   interval, so `LivenessTimeout` must exceed it (fine at the 2s default).
 
 10. **fsnotify.** Sync is poll-based. Pattern: fsnotify as the trigger (kills latency + idle
     CPU) + a coarse fallback poll for the new-subdir race / dropped events / network FS.

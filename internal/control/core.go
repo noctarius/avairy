@@ -1,6 +1,7 @@
 package control
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -21,6 +22,7 @@ type NodeInfo struct {
 	OS       string
 	Caps     map[string]string
 	LastSeen time.Time
+	Live     bool // false once heartbeats lapse past LivenessTimeout (see RunLiveness)
 }
 
 // Core is the server side of the node↔core channel: enrollment, node registry, and
@@ -37,6 +39,9 @@ type Core struct {
 	// Approvals routes a node agent's gated actions to the operator (DESIGN.md §7). NewCore
 	// installs a default broker; share one across local agents + the TUI by replacing it.
 	Approvals *Approvals
+	// LivenessTimeout is how long a node may go without contact before it's marked offline.
+	// Must exceed the node's heartbeat interval (default 2s); NewCore defaults it to 15s.
+	LivenessTimeout time.Duration
 
 	mu       sync.Mutex
 	pending  string            // current operator-facing token (hand to the next node)
@@ -48,12 +53,13 @@ type Core struct {
 // NewCore returns a Core backed by hub, journaling lifecycle events to jrnl.
 func NewCore(hub *workspace.Hub, jrnl journal.Log) *Core {
 	return &Core{
-		hub:       hub,
-		jrnl:      jrnl,
-		Approvals: NewApprovals(0),
-		bound:     make(map[string]string),
-		sessions:  make(map[string]string),
-		nodes:     make(map[string]*NodeInfo),
+		hub:             hub,
+		jrnl:            jrnl,
+		Approvals:       NewApprovals(0),
+		LivenessTimeout: 15 * time.Second,
+		bound:           make(map[string]string),
+		sessions:        make(map[string]string),
+		nodes:           make(map[string]*NodeInfo),
 	}
 }
 
@@ -143,7 +149,7 @@ func (c *Core) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	session := randToken()
 	if accepted {
 		c.sessions[session] = req.NodeID
-		c.nodes[req.NodeID] = &NodeInfo{ID: req.NodeID, OS: req.OS, Caps: req.Caps, LastSeen: time.Now()}
+		c.nodes[req.NodeID] = &NodeInfo{ID: req.NodeID, OS: req.OS, Caps: req.Caps, LastSeen: time.Now(), Live: true}
 	}
 	c.mu.Unlock()
 	if !accepted {
@@ -266,6 +272,53 @@ func (c *Core) touch(nodeID string) {
 		n.LastSeen = time.Now()
 	}
 	c.mu.Unlock()
+}
+
+// RunLiveness marks nodes offline when their heartbeats lapse (and online again when they
+// return), journaling each transition so the operator TUI reflects it. Blocks until ctx is
+// cancelled. Node id == agent id, so an offline node shows its agent as offline in the fleet.
+func (c *Core) RunLiveness(ctx context.Context) {
+	tick := c.LivenessTimeout / 3
+	if tick < time.Second {
+		tick = time.Second
+	}
+	t := time.NewTicker(tick)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			c.sweepLiveness()
+		}
+	}
+}
+
+// sweepLiveness flips each node's Live flag based on LastSeen and returns the transitions to
+// journal (done outside the lock so journal subscribers can't deadlock on c.mu).
+func (c *Core) sweepLiveness() {
+	now := time.Now()
+	type change struct {
+		id   string
+		live bool
+	}
+	var changes []change
+	c.mu.Lock()
+	for id, n := range c.nodes {
+		live := now.Sub(n.LastSeen) < c.LivenessTimeout
+		if live != n.Live {
+			n.Live = live
+			changes = append(changes, change{id, live})
+		}
+	}
+	c.mu.Unlock()
+	for _, ch := range changes {
+		event := "node_offline"
+		if ch.live {
+			event = "node_online"
+		}
+		c.jrnl.Append(journal.KindSystem, ch.id, map[string]any{"event": event})
+	}
 }
 
 func randToken() string {

@@ -130,6 +130,7 @@ func main() {
 				fmt.Fprintln(os.Stderr, "control server:", err)
 			}
 		}()
+		go core.RunLiveness(ctx) // mark nodes offline when heartbeats lapse
 		ctrlURL := "http://" + advertised(*advertise, *controlAddr)
 		busBase := "http://" + advertised(*advertise, ln.Addr().String())
 		warn := ""
