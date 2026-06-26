@@ -102,6 +102,27 @@ Ranked roughly by value-to-effort within each group.
 12. **State-resume from journal.** The TUI backfills its view, but a restarted core/agent
     doesn't reconstruct task-board / session state from the journal.
 
+14. **Loop detection only catches a step repeated back-to-back.** `trackLoop` keeps a sliding
+    window of the last 3 event signatures and fires only when all 3 are *identical and
+    consecutive* (`signature` = `tool:<ToolSummary>` or `text:<exact text>`). What it misses:
+
+    - **A↔B oscillation** (e.g. ping-ponging between two mutually-exclusive fixes): the stream
+      is `A, B, A, B…`, never 3-in-a-row equal → not detected.
+    - **Thought loops** (going back and forth between ideas): alternating *and* exact-string
+      matched, so "let me try X" vs "I'll try X again" don't even match → not detected.
+    - **Interleaved retries**: agents emit reasoning between attempts (`A, text, A, text, A`),
+      so the window `[A, text, A]` isn't all-equal — even simple retry loops often slip through.
+
+    Improvements, by feasibility:
+    - *Deterministic (high value):* longer window, filter to action signatures (ignore
+      interleaved text), detect a recurring **period / k-cycle** repeating ≥M times → catches
+      A↔B and interleaved retries.
+    - *Deterministic:* flag **revisiting already-seen states with no new state** for a while
+      (circling without net progress), even when not a clean cycle.
+    - *Needs judgment (LLM):* **semantic** loops (same intent, different words) can't be caught
+      by string matching — this is the pluggable LLM `Nudger` seam the design anticipates
+      (`facilitator.go:4`), e.g. periodically asking "is this agent making progress?".
+
 ### Single operator
 
 13. The TUI is single-operator by design (v1). Multi-operator is out of scope for now.
