@@ -59,8 +59,11 @@ Live agents launch lean (temp workspace, cheap model) to keep cost down. A one-s
 non-interactive run that prints the event log and exits:
 
 ```sh
-go run ./cmd/avairy -live -headless "create a task titled ping that requires os=linux"
+go run ./cmd/avairy -live -send "create a task titled ping that requires os=linux"
 ```
+
+`-headless` is a different thing: run core **without the TUI** (serve the bus/control and block),
+for a host that nodes connect to with no local operator console.
 
 Everything that happens is appended to an event-sourced journal at `.avairy/journal.jsonl`.
 

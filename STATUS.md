@@ -209,8 +209,10 @@ Ranked roughly by value-to-effort within each group.
     `tui.Deps` holds direct pointers (`*bus.Bus`, `*board.Board`, `journal.Log`,
     `*control.Approvals`), so the operator must be on the core machine. Two run modes wanted:
     - **(a) core + attached TUI** — as today (in-process).
-    - **(b) core serving, no local TUI** — runs as a service exposing an **operator API**, and one
-      or more TUI/web clients **attach from remote** (`avairy-tui -core https://…`).
+    - **(b) core serving, no local TUI** — ✅ `-headless` now runs core as a service (bus/control
+      up, prints token/join, blocks until interrupted). What's still missing is the **operator
+      API** + a TUI/web client to **attach from remote** (`avairy-tui -core https://…`); today
+      `-headless` serves but has no live operator view.
 
     So: add the operator API on core — the journal stream + operator actions (inject/steer,
     interrupt, allow/deny approvals, `/commit`, token/join, fleet) — and a TUI client implementing

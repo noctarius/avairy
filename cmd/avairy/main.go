@@ -4,7 +4,8 @@
 //	go run ./cmd/avairy -demo           # TUI with mock agents alice+bob (zero credits)
 //	go run ./cmd/avairy -live           # alice is a real Claude Code agent on the MCP bus
 //	go run ./cmd/avairy -live -family grok
-//	go run ./cmd/avairy -live -headless "create a task titled ping"
+//	go run ./cmd/avairy -control-addr :7700 -headless   # serve, no TUI (nodes enroll; ctrl+c to stop)
+//	go run ./cmd/avairy -live -send "create a task titled ping"
 //	                                    # one real turn, print the journal, exit (for verification)
 package main
 
@@ -17,9 +18,11 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	"avairy/internal/adapter/claudecode"
@@ -58,7 +61,8 @@ func main() {
 	demo := flag.Bool("demo", false, "spawn mock agents (alice, bob) for trying the loop / tests — off by default")
 	live := flag.Bool("live", false, "run 'alice' as a real agent on the MCP bus")
 	family := flag.String("family", "claude", "live agent family: claude | codex | copilot | grok")
-	headless := flag.String("headless", "", "send this message to alice, print the journal, and exit (no TUI)")
+	headless := flag.Bool("headless", false, "run without the TUI: serve the bus/control and block until interrupted (for remote operators / nodes)")
+	send := flag.String("send", "", "one-shot (dev/verification): send this message to a local 'alice', wait for her turn, print the journal, and exit")
 	model := flag.String("model", "haiku", "model for the live agent (kept cheap by default; ignored for codex unless set)")
 	controlAddr := flag.String("control-addr", "", "if set, serve the node control API here (enrollment/sync) and print an enroll token")
 	mcpAddr := flag.String("mcp-addr", "127.0.0.1:0", "MCP bus listen address (use 0.0.0.0:PORT to allow remote nodes)")
@@ -313,8 +317,8 @@ func main() {
 		}
 		ctrlInfo = &tui.ControlInfo{ControlURL: ctrlURL, BusBase: busBase, Warn: warn, CurrentToken: curToken, NewToken: newToken, JoinFile: joinPath}
 		// Under the TUI's alt-screen, stdout is hidden — so the token/join is shown in the TUI.
-		// Only print here when there's no TUI (headless).
-		if *headless != "" {
+		// Only print here when there's no TUI (headless serve, or a one-shot -send).
+		if *headless || *send != "" {
 			fmt.Printf("control API:  %s\nMCP bus base: %s\nenroll token: %s\njoin file:    %s\n", ctrlURL, busBase, curToken(), joinPath)
 			if warn != "" {
 				fmt.Println("warning:", warn)
@@ -342,12 +346,12 @@ func main() {
 	caps := map[string]string{"os": runtime.GOOS}
 
 	// Local agents are opt-in: none by default (bring agents via avairy-node). -live runs one
-	// real 'alice'; -demo spawns mock alice+bob for the playground/tests; -headless needs an
+	// real 'alice'; -demo spawns mock alice+bob for the playground/tests; -send needs a local
 	// 'alice' to talk to, so default it to a mock when neither -live nor -demo is set.
 	runLiveAlice := *live
 	runMockAlice := *demo && !*live
 	runMockBob := *demo
-	if *headless != "" && !runLiveAlice && !runMockAlice {
+	if *send != "" && !runLiveAlice && !runMockAlice {
 		runMockAlice = true
 	}
 
@@ -364,8 +368,18 @@ func main() {
 		startMock(ctx, "bob", b, jrnl)
 	}
 
-	if *headless != "" {
-		runHeadless(b, jrnl, *headless)
+	if *send != "" {
+		runOnce(b, jrnl, *send)
+		return
+	}
+	if *headless {
+		// Serve without a TUI: nodes enroll/sync and agents work; block until interrupted. (A
+		// remote operator UI attaching here is backlog #18.)
+		fmt.Println("avairy: serving headless (no TUI) — ctrl+c to stop")
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+		<-sig
+		fmt.Println("avairy: shutting down")
 		return
 	}
 	roster := func() []string {
@@ -674,8 +688,8 @@ func startMock(ctx context.Context, id string, b *bus.Bus, jrnl journal.Log) {
 	go runner.New(runner.Agent{ID: id, Roles: []string{"backend"}}, sess, b, jrnl).Run(ctx)
 }
 
-// runHeadless sends one message to alice, waits for her turn to complete, and prints the journal.
-func runHeadless(b *bus.Bus, jrnl journal.Log, msg string) {
+// runOnce sends one message to a local alice, waits for her turn to complete, and prints the journal.
+func runOnce(b *bus.Bus, jrnl journal.Log, msg string) {
 	sub, cancelSub := jrnl.Subscribe()
 	defer cancelSub()
 
