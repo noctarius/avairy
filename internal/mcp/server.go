@@ -29,10 +29,11 @@ const agentKey ctxKey = 0
 
 // Server wraps the mcp-go server with avairy bus/board/journal dependencies.
 type Server struct {
-	mcp   *mcpserver.MCPServer
-	bus   *bus.Bus
-	board *board.Board
-	jrnl  journal.Log
+	mcp        *mcpserver.MCPServer
+	bus        *bus.Bus
+	board      *board.Board
+	blackboard *board.Blackboard
+	jrnl       journal.Log
 
 	// Canonical git repo on core (DESIGN.md §9), wired by EnableGit. nil until enabled.
 	gitRepo    *git.Repo
@@ -70,20 +71,27 @@ type inboxMessage struct {
 // NewServer builds the MCP bus server backed by b/bd/j and registers all tools.
 func NewServer(b *bus.Bus, bd *board.Board, j journal.Log) *Server {
 	s := &Server{
-		mcp:     mcpserver.NewMCPServer("avairy", "0.1.0"),
-		bus:     b,
-		board:   bd,
-		jrnl:    j,
-		agents:  make(map[string]*registered),
-		resolve: func(r *http.Request) string { return r.Header.Get("X-Avairy-Agent") },
+		mcp:        mcpserver.NewMCPServer("avairy", "0.1.0"),
+		bus:        b,
+		board:      bd,
+		blackboard: board.NewBlackboard(j),
+		jrnl:       j,
+		agents:     make(map[string]*registered),
+		resolve:    func(r *http.Request) string { return r.Header.Get("X-Avairy-Agent") },
 	}
 	s.registerTools()
 	return s
 }
 
+// Blackboard returns the shared blackboard (for the operator to restore it from the journal on
+// startup, and for fresh_look to curate context from).
+func (s *Server) Blackboard() *board.Blackboard { return s.blackboard }
+
 func (s *Server) registerTools() {
 	s.registerSendMessage()
 	s.registerReadInbox()
+	s.registerNote()
+	s.registerReadNotes()
 	s.registerPostTask()
 	s.registerClaimTask()
 	s.registerListTasks()

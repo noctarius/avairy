@@ -21,6 +21,7 @@ const (
 	KindTask       Kind = "task"        // task posted / claimed / state change
 	KindHandover   Kind = "handover"    // work changed hands (TUI handover timeline)
 	KindApproval   Kind = "approval"    // gated-action decision
+	KindNote       Kind = "note"        // blackboard entry (durable shared memory)
 	KindSystem     Kind = "system"      // lifecycle / diagnostic
 )
 

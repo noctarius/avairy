@@ -88,8 +88,9 @@ func main() {
 	bd := board.New(jrnl)
 	bd.Restore(persisted) // rebuild the task board from the same history
 	mcpSrv := mcp.NewServer(b, bd, jrnl)
+	mcpSrv.Blackboard().Restore(persisted) // resume durable shared memory across restart (§4/§8)
 	// fresh_look: any agent can request a clean-context second opinion (DESIGN.md §8).
-	mcpSrv.EnableFreshLook(makeFreshLook(*family, *model, bd))
+	mcpSrv.EnableFreshLook(makeFreshLook(*family, *model, bd, mcpSrv.Blackboard()))
 
 	// Human-in-the-loop gating broker (DESIGN.md §7): gated actions from any agent (local or
 	// via a node) block here until the operator allows/denies them in the TUI. Journaling the
@@ -339,7 +340,7 @@ func main() {
 	// Let the facilitator run a fresh look on a detected loop — but only with a real agent in
 	// play (a -demo mock loop must not spawn a credit-spending session).
 	if *live || *controlAddr != "" {
-		fac.FreshLook = makeFreshLook(*family, *model, bd)
+		fac.FreshLook = makeFreshLook(*family, *model, bd, mcpSrv.Blackboard())
 	}
 	facSub, _ := jrnl.Subscribe()
 	go fac.Run(ctx, facSub)
@@ -411,7 +412,7 @@ func main() {
 
 const aliceRole = "You are 'alice', a backend engineer agent in the avairy multi-agent system. " +
 	"Collaborate ONLY through the avairy MCP tools: post_task, claim_task, list_tasks, " +
-	"send_message, read_inbox, report_status, git_history, request_commit, scratch_worktree, resolve_conflict, fresh_look. Be terse and do exactly what you are asked, then stop."
+	"send_message, read_inbox, report_status, git_history, request_commit, scratch_worktree, resolve_conflict, fresh_look, note, read_notes. Be terse and do exactly what you are asked, then stop."
 
 func startLiveAlice(ctx context.Context, family, model, busURL string, b *bus.Bus, jrnl journal.Log, approvals *control.Approvals, gateEdits bool) {
 	ws, err := os.MkdirTemp("", "avairy-alice-")
@@ -508,17 +509,30 @@ const freshLookRole = "You are a fresh pair of eyes with NO prior conversation c
 // session (same family/model as the live agent), seeds it with the current task board + the
 // question, returns the answer, and tears the session down (DESIGN.md §8). Tools are denied so
 // it stays a pure thinker.
-func makeFreshLook(family, model string, bd *board.Board) mcp.FreshLookFunc {
+func makeFreshLook(family, model string, bd *board.Board, bb *board.Blackboard) mcp.FreshLookFunc {
 	return func(ctx context.Context, question string) (string, error) {
 		ws, err := os.MkdirTemp("", "avairy-fresh-")
 		if err != nil {
 			return "", err
 		}
 		defer os.RemoveAll(ws)
-		prompt := "Current task board:\n" + boardSummary(bd) + "\n\nQuestion: " + question +
-			"\n\nGive your independent analysis."
+		prompt := "Current task board:\n" + boardSummary(bd) +
+			"\n\nShared notes (blackboard):\n" + notesSummary(bb) +
+			"\n\nQuestion: " + question + "\n\nGive your independent analysis."
 		return oneShot(ctx, freshLookAdapter(family), freshLookRole, model, ws, prompt)
 	}
+}
+
+func notesSummary(bb *board.Blackboard) string {
+	notes := bb.Read("")
+	if len(notes) == 0 {
+		return "(none)"
+	}
+	var sb strings.Builder
+	for _, n := range notes {
+		fmt.Fprintf(&sb, "- [%s] %s\n", n.Key, n.Text)
+	}
+	return sb.String()
 }
 
 // denyAll gates every action closed — the fresh-look session is a pure thinker; any tool attempt

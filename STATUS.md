@@ -203,14 +203,12 @@ Ranked roughly by value-to-effort within each group.
     as file writes), so reads now map to a new never-gated `ActionRead` — `-gate-edits` gates real
     edits, not reads.
 
-16. **Blackboard — durable shared memory (§4/§8).** The design calls the blackboard + task board
-    "the durable shared memory feeding both," but only the **task board** exists; there's no
-    free-form shared memory. A `board.Task` has no context/brief field, so a task carries no
-    initial context beyond its title — context today comes only from the synced workspace + bus
-    messages. Add a blackboard: keyed, journaled entries with MCP tools (e.g. `note(key, text)` /
-    `read_notes(prefix?)`), so the human or an agent can seed durable context, a task can point at
-    relevant notes, and **`fresh_look`** can curate its clean context from the blackboard (its
-    prompt is hardcoded to the task board today). Journal-backed, so it resumes like the board.
+16. ~~**Blackboard — durable shared memory (§4/§8).**~~ ✅ Done. `board.Blackboard` is keyed,
+    latest-wins, journal-backed shared memory (`KindNote`), exposed over MCP as `note(key, text)`
+    and `read_notes(prefix?)`. It restores from the journal on startup like the task board, and
+    `fresh_look` now curates its clean context from a notes summary (was hardcoded to the task
+    board). Agents and the operator can seed durable context — decisions, repro steps, findings —
+    that survives restarts and feeds fresh-look sessions.
 
 17. **Web UI (browser operator console, alongside the TUI).** A browser UI mirroring the TUI's
     views — fleet/cost, conversation, handovers, task board, **Approvals** — plus the same
