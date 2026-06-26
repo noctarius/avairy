@@ -128,8 +128,8 @@ func TestBundleMirrorWorktree(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Core bundles the repo; node builds a mirror from the bundle bytes.
-	bundle, err := r.Bundle(ctx)
+	// Core bundles the repo (full — node has nothing); node builds a mirror from the bytes.
+	bundle, err := r.Bundle(ctx, nil)
 	if err != nil || len(bundle) == 0 {
 		t.Fatalf("bundle: len=%d err=%v", len(bundle), err)
 	}
@@ -150,6 +150,53 @@ func TestBundleMirrorWorktree(t *testing.T) {
 	// Refresh is idempotent (re-applying the same bundle succeeds).
 	if err := UpdateMirror(ctx, mirror, bundle); err != nil {
 		t.Fatalf("refresh mirror: %v", err)
+	}
+}
+
+// Incremental bundles: once a node has a mirror, core ships only new commits, and reports
+// "nothing new" when the node is current.
+func TestIncrementalBundle(t *testing.T) {
+	dir, ctx := initRepo(t)
+	r, _ := Open(ctx, dir, false)
+	commit := func(s, msg string) {
+		if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte(s), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := r.Commit(ctx, nil, msg); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	commit("1\n", "c1")
+	full, err := r.Bundle(ctx, nil)
+	if err != nil || len(full) == 0 {
+		t.Fatalf("full bundle: len=%d err=%v", len(full), err)
+	}
+	mirror := filepath.Join(t.TempDir(), "mirror.git")
+	if err := UpdateMirror(ctx, mirror, full); err != nil {
+		t.Fatal(err)
+	}
+	have, err := MirrorRefs(ctx, mirror)
+	if err != nil || len(have) == 0 {
+		t.Fatalf("mirror refs: %v err=%v", have, err)
+	}
+
+	// Node is current → nothing new.
+	if b, err := r.Bundle(ctx, have); err != nil || b != nil {
+		t.Fatalf("expected nil (nothing new), got len=%d err=%v", len(b), err)
+	}
+
+	// New commit → an incremental bundle that brings the mirror up to date.
+	commit("2\n", "c2")
+	inc, err := r.Bundle(ctx, have)
+	if err != nil || len(inc) == 0 {
+		t.Fatalf("incremental bundle: len=%d err=%v", len(inc), err)
+	}
+	if err := UpdateMirror(ctx, mirror, inc); err != nil {
+		t.Fatalf("apply incremental: %v", err)
+	}
+	if out, _ := runGit(ctx, mirror, "log", "--oneline"); !strings.Contains(out, "c2") {
+		t.Fatalf("mirror missing c2 after incremental update:\n%s", out)
 	}
 }
 

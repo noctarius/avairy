@@ -55,8 +55,10 @@ Ranked roughly by value-to-effort within each group.
      (`/repo/bundle`); the node maintains a **read-only mirror** under `.avairy/mirror.git`
      (refreshed every 5 min) and the agent's role tells it to `git --git-dir=<mirror> worktree
      add` past commits into `.avairy/scratch/`, build/bisect there, and commit via
-     `request_commit` (no push rights to the mirror). *Future:* incremental bundles (today each
-     refresh ships the full bundle).
+     `request_commit` (no push rights to the mirror). Bundles are **incremental** — the node
+     sends the shas it has and core ships only newer objects (`--all --not <have>`), or 204 when
+     current. *Limitation:* fetch adds/advances refs but doesn't prune, so branch deletions /
+     force-rewinds on core leave stale refs in the mirror (harmless for read-only RCA).
 
 2. ~~**Hub persistence.**~~ ✅ Done. The hub snapshots to `.avairy/hub.json` (atomic
    temp+rename), restored on startup via `LoadHub`; persisted every 5s if dirty and on clean

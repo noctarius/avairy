@@ -182,9 +182,13 @@ const defaultRole = "You are an avairy agent. Collaborate ONLY through the avair
 // refreshMirror pulls a fresh repo bundle from core and (re)builds the node's read-only mirror.
 // Best-effort: a missing repo on core or a transient error just leaves the mirror as-is.
 func refreshMirror(ctx context.Context, n *control.Node, mirrorDir string) {
-	b, err := n.PullBundle(ctx)
+	have, _ := git.MirrorRefs(ctx, mirrorDir) // what we already have → incremental bundle
+	b, err := n.PullBundle(ctx, have)
 	if err != nil {
 		return // core may have no repo, or be briefly unreachable; try again next tick
+	}
+	if len(b) == 0 {
+		return // already current (nothing new)
 	}
 	if err := git.UpdateMirror(ctx, mirrorDir, b); err != nil {
 		fmt.Fprintln(os.Stderr, "avairy-node: mirror update:", err)

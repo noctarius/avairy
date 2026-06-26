@@ -155,10 +155,12 @@ func runGit(ctx context.Context, dir string, args ...string) (string, error) {
 	return stdout.String(), nil
 }
 
-// Bundle packs the entire repo history into a git bundle (a single transportable file). Core
-// serves this to nodes, which build a read-only mirror from it (see UpdateMirror) — the basis
-// for on-node, cross-OS bisect/build/repro (DESIGN.md §9). Errors on an empty repo (no commits).
-func (r *Repo) Bundle(ctx context.Context) ([]byte, error) {
+// Bundle packs repo history into a git bundle (a single transportable file) for nodes to build
+// a read-only mirror from (DESIGN.md §9). It is incremental: have is the commit shas the node
+// already holds, excluded from the bundle so only new objects ship (the node supplies them as
+// prerequisites on fetch). Empty have → a full bundle. Returns (nil, nil) when the node is
+// already current (nothing new) or the repo has no commits.
+func (r *Repo) Bundle(ctx context.Context, have []string) ([]byte, error) {
 	f, err := os.CreateTemp("", "avairy-bundle-*.bundle")
 	if err != nil {
 		return nil, err
@@ -166,10 +168,26 @@ func (r *Repo) Bundle(ctx context.Context) ([]byte, error) {
 	path := f.Name()
 	f.Close()
 	defer os.Remove(path)
-	if _, err := r.run(ctx, "bundle", "create", path, "--all"); err != nil {
+
+	args := []string{"bundle", "create", path, "--all"}
+	for _, h := range have {
+		if safeArg("have", h) == nil && r.hasCommit(ctx, h) { // skip unknown/garbage shas
+			args = append(args, "--not", h)
+		}
+	}
+	if _, err := r.run(ctx, args...); err != nil {
+		if strings.Contains(err.Error(), "empty bundle") {
+			return nil, nil // node already has everything (or repo is empty)
+		}
 		return nil, err
 	}
 	return os.ReadFile(path)
+}
+
+// hasCommit reports whether sha resolves to a commit in this repo.
+func (r *Repo) hasCommit(ctx context.Context, sha string) bool {
+	_, err := r.run(ctx, "cat-file", "-e", sha+"^{commit}")
+	return err == nil
 }
 
 // safeArg rejects empty-allowed values that would be read as flags (a leading '-'), so an agent

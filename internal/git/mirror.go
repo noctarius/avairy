@@ -4,7 +4,28 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 )
+
+// MirrorRefs returns the commit shas at the mirror's ref tips — what the node already has, sent
+// to core so it can build an incremental bundle. A not-yet-created mirror returns nil (→ core
+// sends a full bundle).
+func MirrorRefs(ctx context.Context, mirrorDir string) ([]string, error) {
+	if _, err := os.Stat(filepath.Join(mirrorDir, "HEAD")); err != nil {
+		return nil, nil
+	}
+	out, err := runGit(ctx, mirrorDir, "show-ref", "--hash")
+	if err != nil {
+		return nil, err
+	}
+	var shas []string
+	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
+		if line != "" {
+			shas = append(shas, line)
+		}
+	}
+	return shas, nil
+}
 
 // UpdateMirror creates or refreshes a bare, read-only mirror of the canonical repo at mirrorDir
 // from a bundle produced by Repo.Bundle (DESIGN.md §9). A node keeps such a mirror so its agent

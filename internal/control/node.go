@@ -173,13 +173,19 @@ func (n *Node) RequestApproval(ctx context.Context, req ApprovalRequest) (string
 	return resp.Decision, nil
 }
 
-// PullBundle fetches a git bundle of the canonical repo from core (raw bytes) for the node's
-// read-only mirror. Returns an error if core has no repo (404) or the call fails.
-func (n *Node) PullBundle(ctx context.Context) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, n.CoreURL+PathBundle, nil)
+// PullBundle fetches an incremental git bundle of the canonical repo (raw bytes) for the node's
+// read-only mirror, telling core which commit shas it already has. Returns (nil, nil) when the
+// node is already current (HTTP 204), or an error if core has no repo (404) / the call fails.
+func (n *Node) PullBundle(ctx context.Context, have []string) ([]byte, error) {
+	body, err := json.Marshal(BundleRequest{Have: have})
 	if err != nil {
 		return nil, err
 	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, n.CoreURL+PathBundle, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
 	if s := n.sess(); s != "" {
 		req.Header.Set("Authorization", "Bearer "+s)
 	}
@@ -188,11 +194,15 @@ func (n *Node) PullBundle(ctx context.Context) ([]byte, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return io.ReadAll(resp.Body)
+	case http.StatusNoContent:
+		return nil, nil // already current
+	default:
 		msg, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("control %s: %s: %s", PathBundle, resp.Status, strings.TrimSpace(string(msg)))
 	}
-	return io.ReadAll(resp.Body)
 }
 
 // PostEvents ships an agent's stream events to the core journal (so they show in the TUI).

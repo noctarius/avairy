@@ -96,8 +96,8 @@ func main() {
 
 	// Optionally serve the node control API so remote avairy-node daemons can enroll and sync.
 	var ctrlInfo *tui.ControlInfo
-	var commitFn func(string) (string, error)          // operator-initiated /commit; nil unless git is enabled
-	var bundleFn func(context.Context) ([]byte, error) // repo bundle for node mirrors; nil unless git is enabled
+	var commitFn func(string) (string, error)                    // operator-initiated /commit; nil unless git is enabled
+	var bundleFn func(context.Context, []string) ([]byte, error) // repo bundle for node mirrors; nil unless git is enabled
 	if *controlAddr != "" {
 		// Restore the canonical hub from disk so a core restart doesn't lose state (DESIGN.md
 		// §9); persist it periodically and on clean shutdown.

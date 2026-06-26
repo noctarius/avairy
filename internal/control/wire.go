@@ -30,6 +30,12 @@ type ApprovalResponse struct {
 	Decision string `json:"decision"`
 }
 
+// BundleRequest asks core for a repo bundle, listing the commit shas the node already has so
+// core can ship an incremental bundle (DESIGN.md §9). Empty Have → a full bundle.
+type BundleRequest struct {
+	Have []string `json:"have,omitempty"`
+}
+
 // EnrollRequest is sent by a node to join, authenticated by a one-time enrollment token
 // (SSH bootstrap seeds it, or the operator pastes it for manual/Windows provisioning). A node
 // is 1:1 with the agent it hosts, so NodeID is also the agent's bus identity (run multiple

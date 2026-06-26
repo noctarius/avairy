@@ -48,9 +48,10 @@ type Core struct {
 	// hub version before the agent acts, so the message is the agent's only copy of its own edit.
 	// Deduped per (agent, path, hub version) so re-pushing a stale edit doesn't re-notify each tick.
 	OnConflict func(agentID, path string, hubVersion uint64, hubContent, yourContent []byte)
-	// Bundle, if set, returns a git bundle of the canonical repo (DESIGN.md §9). Nodes pull it
-	// to build a local read-only mirror for on-node bisect/build. nil → /repo/bundle 404s.
-	Bundle func(ctx context.Context) ([]byte, error)
+	// Bundle, if set, returns a git bundle of the canonical repo excluding the commit shas the
+	// node already has (incremental; DESIGN.md §9). (nil, nil) means the node is already current.
+	// Nodes pull this to build a local read-only mirror. nil field → /repo/bundle 404s.
+	Bundle func(ctx context.Context, have []string) ([]byte, error)
 
 	mu        sync.Mutex
 	conflicts map[string]uint64 // agent\x00path -> last-notified hub version
@@ -119,17 +120,25 @@ func (c *Core) Handler() http.Handler {
 	return mux
 }
 
-// handleBundle streams a git bundle of the canonical repo to an enrolled node (raw bytes, not
-// JSON). The node builds/refreshes its read-only mirror from it.
+// handleBundle streams an (incremental) git bundle of the canonical repo to an enrolled node as
+// raw bytes. The request body lists the shas the node already has; 204 means nothing new.
 func (c *Core) handleBundle(nodeID string, w http.ResponseWriter, r *http.Request) {
+	var req BundleRequest
+	if !readJSON(w, r, &req) {
+		return
+	}
 	c.touch(nodeID)
 	if c.Bundle == nil {
 		http.Error(w, "no canonical repo on core", http.StatusNotFound)
 		return
 	}
-	b, err := c.Bundle(r.Context())
+	b, err := c.Bundle(r.Context(), req.Have)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if len(b) == 0 {
+		w.WriteHeader(http.StatusNoContent) // node already current
 		return
 	}
 	w.Header().Set("Content-Type", "application/octet-stream")

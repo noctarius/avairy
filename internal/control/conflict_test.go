@@ -14,23 +14,39 @@ func TestPullBundleOverWire(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	ctx := context.Background()
+
 	// No Bundle provider → 404.
-	if _, err := n.PullBundle(context.Background()); err == nil {
+	if _, err := n.PullBundle(ctx, nil); err == nil {
 		t.Fatal("expected error when core has no repo")
 	}
 
-	core.Bundle = func(context.Context) ([]byte, error) {
+	// The node's "have" shas reach core (for incremental bundling), and bytes come back.
+	var gotHave []string
+	core.Bundle = func(_ context.Context, have []string) ([]byte, error) {
+		gotHave = have
 		return []byte("BUNDLE-BYTES"), nil
 	}
-	got, err := n.PullBundle(context.Background())
+	got, err := n.PullBundle(ctx, []string{"abc123"})
 	if err != nil || string(got) != "BUNDLE-BYTES" {
 		t.Fatalf("pull bundle: got %q err=%v", got, err)
 	}
+	if len(gotHave) != 1 || gotHave[0] != "abc123" {
+		t.Fatalf("have not forwarded to core: %v", gotHave)
+	}
 
-	core.Bundle = func(context.Context) ([]byte, error) {
+	// Nothing new → 204 → (nil, nil), no error.
+	core.Bundle = func(_ context.Context, _ []string) ([]byte, error) {
+		return nil, nil
+	}
+	if b, err := n.PullBundle(ctx, nil); err != nil || b != nil {
+		t.Fatalf("expected (nil,nil) on 204, got %q err=%v", b, err)
+	}
+
+	core.Bundle = func(_ context.Context, _ []string) ([]byte, error) {
 		return nil, errors.New("boom")
 	}
-	if _, err := n.PullBundle(context.Background()); err == nil {
+	if _, err := n.PullBundle(ctx, nil); err == nil {
 		t.Fatal("bundle provider error should surface")
 	}
 }
