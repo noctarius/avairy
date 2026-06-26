@@ -82,7 +82,9 @@ func TestObserve_DebouncesRepeatedBlocked(t *testing.T) {
 	var n int
 	f := New(bus.New(journal.NewMemory()), RosterFunc(func() []Agent { return roster }), countNudger{&n})
 	clock := time.Unix(1000, 0)
-	f.now = func() time.Time { return clock }
+	f.now = func() time.Time {
+		return clock
+	}
 
 	blocked := journal.Record{Kind: journal.KindSystem, Actor: "linbot",
 		Data: map[string]any{"event": "report_status", "status": "blocked", "detail": "stuck"}}

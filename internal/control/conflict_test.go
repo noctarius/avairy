@@ -19,13 +19,17 @@ func TestPullBundleOverWire(t *testing.T) {
 		t.Fatal("expected error when core has no repo")
 	}
 
-	core.Bundle = func(context.Context) ([]byte, error) { return []byte("BUNDLE-BYTES"), nil }
+	core.Bundle = func(context.Context) ([]byte, error) {
+		return []byte("BUNDLE-BYTES"), nil
+	}
 	got, err := n.PullBundle(context.Background())
 	if err != nil || string(got) != "BUNDLE-BYTES" {
 		t.Fatalf("pull bundle: got %q err=%v", got, err)
 	}
 
-	core.Bundle = func(context.Context) ([]byte, error) { return nil, errors.New("boom") }
+	core.Bundle = func(context.Context) ([]byte, error) {
+		return nil, errors.New("boom")
+	}
 	if _, err := n.PullBundle(context.Background()); err == nil {
 		t.Fatal("bundle provider error should surface")
 	}

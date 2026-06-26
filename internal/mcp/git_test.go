@@ -19,7 +19,9 @@ func TestScratchWorktreeTool(t *testing.T) {
 	s.RegisterAgent("alice", nil, nil)
 	repo := gitRepoForTest(t)
 	repo.WorktreeBase = filepath.Join(t.TempDir(), "wt")
-	s.EnableGit(repo, func(_ context.Context, _ gating.Request) (gating.Decision, error) { return gating.Allow, nil })
+	s.EnableGit(repo, func(_ context.Context, _ gating.Request) (gating.Decision, error) {
+		return gating.Allow, nil
+	})
 	if _, err := repo.Commit(context.Background(), nil, "seed"); err != nil {
 		t.Fatal(err)
 	}
