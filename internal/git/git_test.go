@@ -64,6 +64,51 @@ func TestCommitAndHistory(t *testing.T) {
 	}
 }
 
+func TestScratchWorktree(t *testing.T) {
+	dir, ctx := initRepo(t)
+	write := func(s string) {
+		if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte(s), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r, _ := Open(ctx, dir, false)
+	r.WorktreeBase = filepath.Join(t.TempDir(), "wt") // isolated, off the canonical tree
+
+	write("v1\n")
+	if _, err := r.Commit(ctx, nil, "v1"); err != nil {
+		t.Fatal(err)
+	}
+	write("v2\n")
+	if _, err := r.Commit(ctx, nil, "v2"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Check out the previous commit in a disposable worktree, isolated from the live tree.
+	wt, err := r.AddWorktree(ctx, "HEAD~1")
+	if err != nil {
+		t.Fatalf("add worktree: %v", err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(wt.Path, "a.txt")); string(got) != "v1\n" {
+		t.Fatalf("scratch checkout has %q, want old version v1", got)
+	}
+	// The canonical tree is untouched.
+	if got, _ := os.ReadFile(filepath.Join(dir, "a.txt")); string(got) != "v2\n" {
+		t.Fatalf("canonical tree was disturbed: %q", got)
+	}
+	if len(r.ListWorktrees()) != 1 {
+		t.Fatalf("expected 1 live worktree, got %d", len(r.ListWorktrees()))
+	}
+
+	// Disposable: prune removes it from disk and tracking.
+	r.PruneWorktrees(ctx)
+	if _, err := os.Stat(wt.Path); !os.IsNotExist(err) {
+		t.Fatal("pruned worktree dir should be gone")
+	}
+	if len(r.ListWorktrees()) != 0 {
+		t.Fatal("prune should clear tracking")
+	}
+}
+
 func TestHistoryRejectsFlagInjection(t *testing.T) {
 	dir, ctx := initRepo(t)
 	r, _ := Open(ctx, dir, false)

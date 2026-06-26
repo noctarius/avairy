@@ -159,6 +159,7 @@ func main() {
 				fmt.Fprintln(os.Stderr, "avairy: git tools disabled:", gerr)
 			} else {
 				mcpSrv.EnableGit(repo, gitApprover(approvals))
+				defer repo.PruneWorktrees(context.Background()) // disposable: clean up scratch checkouts on exit
 			}
 		}
 		core := control.NewCore(hub, jrnl)
@@ -266,7 +267,7 @@ func main() {
 
 const aliceRole = "You are 'alice', a backend engineer agent in the avairy multi-agent system. " +
 	"Collaborate ONLY through the avairy MCP tools: post_task, claim_task, list_tasks, " +
-	"send_message, read_inbox, report_status, git_history, request_commit. Be terse and do exactly what you are asked, then stop."
+	"send_message, read_inbox, report_status, git_history, request_commit, scratch_worktree. Be terse and do exactly what you are asked, then stop."
 
 func startLiveAlice(ctx context.Context, family, model, busURL string, b *bus.Bus, jrnl journal.Log, approvals *control.Approvals) {
 	ws, err := os.MkdirTemp("", "avairy-alice-")

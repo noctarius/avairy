@@ -12,14 +12,21 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // Repo is the canonical repository at Dir. Sign requires commits to be cryptographically
 // signed (git -S); it is true in production (the design mandates signed history) and may be
-// disabled in tests where no signing key is configured.
+// disabled in tests where no signing key is configured. WorktreeBase is where disposable
+// scratch worktrees are checked out (default: a temp dir) — kept off the synced canonical tree.
 type Repo struct {
-	Dir  string
-	Sign bool
+	Dir          string
+	Sign         bool
+	WorktreeBase string
+
+	wmu       sync.Mutex
+	wseq      int
+	worktrees map[string]Worktree
 }
 
 // Open returns a Repo for dir, verifying dir is inside a git work tree.

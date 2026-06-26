@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 
@@ -19,6 +20,7 @@ func (s *Server) EnableGit(repo *git.Repo, approve gating.Decider) {
 	s.gitApprove = approve
 	s.registerGitHistory()
 	s.registerRequestCommit()
+	s.registerWorktree()
 }
 
 func (s *Server) registerGitHistory() {
@@ -87,4 +89,50 @@ func (s *Server) handleRequestCommit(ctx context.Context, req mcpgo.CallToolRequ
 	}
 	s.jrnl.Append(journal.KindSystem, from, map[string]any{"event": "git_commit", "hash": hash, "message": message})
 	return mcpgo.NewToolResultText("committed " + hash), nil
+}
+
+func (s *Server) registerWorktree() {
+	s.mcp.AddTool(mcpgo.NewTool("scratch_worktree",
+		mcpgo.WithDescription("Manage a disposable checkout of the canonical repo at some ref, isolated from the live tree — for bisect / build / reproduce. Read-only w.r.t. history."),
+		mcpgo.WithString("action", mcpgo.Required(), mcpgo.Description("create | list | remove")),
+		mcpgo.WithString("ref", mcpgo.Description("commit/branch to check out (create; default HEAD)")),
+		mcpgo.WithString("id", mcpgo.Description("worktree id to remove")),
+	), s.handleWorktree)
+}
+
+func (s *Server) handleWorktree(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	if s.gitRepo == nil {
+		return mcpgo.NewToolResultError("scratch_worktree: no canonical repo on core"), nil
+	}
+	switch req.GetString("action", "") {
+	case "create":
+		wt, err := s.gitRepo.AddWorktree(ctx, req.GetString("ref", ""))
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		s.jrnl.Append(journal.KindSystem, agentFromContext(ctx), map[string]any{"event": "worktree_create", "id": wt.ID, "ref": wt.Ref})
+		return jsonResult(wt)
+	case "list":
+		return jsonResult(s.gitRepo.ListWorktrees())
+	case "remove":
+		id := req.GetString("id", "")
+		if id == "" {
+			return mcpgo.NewToolResultError("scratch_worktree: 'id' is required to remove"), nil
+		}
+		if err := s.gitRepo.RemoveWorktree(ctx, id); err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		s.jrnl.Append(journal.KindSystem, agentFromContext(ctx), map[string]any{"event": "worktree_remove", "id": id})
+		return mcpgo.NewToolResultText("removed " + id), nil
+	default:
+		return mcpgo.NewToolResultError("scratch_worktree: 'action' must be create|list|remove"), nil
+	}
+}
+
+func jsonResult(v any) (*mcpgo.CallToolResult, error) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return mcpgo.NewToolResultError(err.Error()), nil
+	}
+	return mcpgo.NewToolResultText(string(b)), nil
 }

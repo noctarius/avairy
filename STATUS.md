@@ -44,7 +44,10 @@ Ranked roughly by value-to-effort within each group.
      RCA); args validated against flag-injection.
    - ✅ `request_commit(message, paths)` — **gated** (routes to the operator's Approvals tab via
      the broker), executed **core-only and signed** (`git -S`; keys never ship to nodes).
-   - ⬜ Disposable scratch worktree for bisect/checkout (read-only history mirror).
+   - ✅ `scratch_worktree(create|list|remove)` — disposable detached checkout of any ref, rooted
+     off the synced tree (so bisect/build/repro doesn't disturb the canonical tree), tracked and
+     pruned on shutdown. *Note:* the checkout lives on core; materializing it onto a node for
+     on-node cross-OS build/repro is a further step.
    - ⬜ TUI-initiated commit (human commits directly; today the human approves agent commits).
 
 2. ~~**Hub persistence.**~~ ✅ Done. The hub snapshots to `.avairy/hub.json` (atomic

@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +12,45 @@ import (
 	"avairy/internal/gating"
 	"avairy/internal/git"
 )
+
+// scratch_worktree create → list → remove over the MCP tool.
+func TestScratchWorktreeTool(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.RegisterAgent("alice", nil, nil)
+	repo := gitRepoForTest(t)
+	repo.WorktreeBase = filepath.Join(t.TempDir(), "wt")
+	s.EnableGit(repo, func(_ context.Context, _ gating.Request) (gating.Decision, error) { return gating.Allow, nil })
+	if _, err := repo.Commit(context.Background(), nil, "seed"); err != nil {
+		t.Fatal(err)
+	}
+
+	created, err := s.handleWorktree(asAgent("alice"), call(map[string]any{"action": "create"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wt git.Worktree
+	if jerr := json.Unmarshal([]byte(resultText(created)), &wt); jerr != nil || wt.ID == "" {
+		t.Fatalf("create result = %q (err %v)", resultText(created), jerr)
+	}
+	if _, serr := os.Stat(wt.Path); serr != nil {
+		t.Fatalf("worktree dir not created: %v", serr)
+	}
+
+	listed, err := s.handleWorktree(asAgent("alice"), call(map[string]any{"action": "list"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(resultText(listed), wt.ID) {
+		t.Fatalf("list missing %s: %s", wt.ID, resultText(listed))
+	}
+
+	if _, err := s.handleWorktree(asAgent("alice"), call(map[string]any{"action": "remove", "id": wt.ID})); err != nil {
+		t.Fatal(err)
+	}
+	if _, serr := os.Stat(wt.Path); !os.IsNotExist(serr) {
+		t.Fatal("removed worktree dir should be gone")
+	}
+}
 
 func gitRepoForTest(t *testing.T) *git.Repo {
 	t.Helper()
