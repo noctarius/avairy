@@ -25,12 +25,21 @@ type Node struct {
 	CoreURL string
 	HTTP    *http.Client
 	ID      string
+	// ReenrollOnExpiry makes the node re-enroll automatically on a 401 (e.g. after a core
+	// restart drops its session). Enable only for mTLS nodes: cert auth is stateless on core
+	// (needs just the persisted CA), so re-enroll succeeds without the lost bound-token map.
+	ReenrollOnExpiry bool
 
-	mu      sync.Mutex
-	session string
-	base    map[string]uint64
-	stamps  workspace.Stamps // last-synced file stamps, to skip unchanged files
-	ignore  workspace.Ignore
+	mu          sync.Mutex
+	session     string
+	enrollOS    string
+	enrollToken string
+	enrollCaps  map[string]string
+	base        map[string]uint64
+	stamps      workspace.Stamps // last-synced file stamps, to skip unchanged files
+	ignore      workspace.Ignore
+
+	reMu sync.Mutex // serializes re-enrollment so concurrent 401s don't stampede
 }
 
 // NewNode returns a node client for the core control API at coreURL.
@@ -45,11 +54,24 @@ func NewNode(coreURL, id string) *Node {
 	}
 }
 
-// Enroll joins the core using a one-time token and stores the session token. The node id
-// (n.ID) is also the agent's bus identity.
+// Enroll joins the core (one-time token, or an mTLS client cert presented by n.HTTP) and stores
+// the session token. The credentials are remembered so the node can re-enroll later. The node
+// id (n.ID) is also the agent's bus identity.
 func (n *Node) Enroll(token, os string, caps map[string]string) error {
+	n.mu.Lock()
+	n.enrollToken, n.enrollOS, n.enrollCaps = token, os, caps
+	n.mu.Unlock()
+	return n.enroll(context.Background())
+}
+
+// enroll performs (or repeats) enrollment with the remembered credentials. It calls doPost
+// directly so a 401 here doesn't recurse into re-enrollment.
+func (n *Node) enroll(ctx context.Context) error {
+	n.mu.Lock()
+	req := EnrollRequest{Token: n.enrollToken, NodeID: n.ID, OS: n.enrollOS, Caps: n.enrollCaps}
+	n.mu.Unlock()
 	var resp EnrollResponse
-	if err := n.post(PathEnroll, "", EnrollRequest{Token: token, NodeID: n.ID, OS: os, Caps: caps}, &resp); err != nil {
+	if _, err := n.doPost(ctx, PathEnroll, "", req, &resp); err != nil {
 		return err
 	}
 	if resp.SessionToken == "" {
@@ -241,14 +263,36 @@ func (n *Node) post(path, session string, body, out any) error {
 	return n.postCtx(context.Background(), path, session, body, out)
 }
 
+// postCtx posts to core and, on a 401 for an mTLS node (ReenrollOnExpiry), re-enrolls once and
+// retries with the fresh session — so a core restart that dropped the session recovers without
+// restarting the node. Enrollment itself never triggers this (guarded), so there's no loop.
 func (n *Node) postCtx(ctx context.Context, path, session string, body, out any) error {
+	status, err := n.doPost(ctx, path, session, body, out)
+	if status == http.StatusUnauthorized && n.ReenrollOnExpiry && path != PathEnroll {
+		if rerr := n.reenroll(ctx); rerr == nil {
+			_, err = n.doPost(ctx, path, n.sess(), body, out)
+		}
+	}
+	return err
+}
+
+// reenroll re-runs enrollment with the remembered credentials, serialized so concurrent 401s
+// (heartbeat + sync) don't stampede core with redundant enrollments.
+func (n *Node) reenroll(ctx context.Context) error {
+	n.reMu.Lock()
+	defer n.reMu.Unlock()
+	return n.enroll(ctx)
+}
+
+// doPost performs one POST and returns the HTTP status alongside any error.
+func (n *Node) doPost(ctx context.Context, path, session string, body, out any) (int, error) {
 	b, err := json.Marshal(body)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, n.CoreURL+path, bytes.NewReader(b))
 	if err != nil {
-		return err
+		return 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if session != "" {
@@ -256,15 +300,15 @@ func (n *Node) postCtx(ctx context.Context, path, session string, body, out any)
 	}
 	resp, err := n.HTTP.Do(req)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("control %s: %s: %s", path, resp.Status, strings.TrimSpace(string(msg)))
+		return resp.StatusCode, fmt.Errorf("control %s: %s: %s", path, resp.Status, strings.TrimSpace(string(msg)))
 	}
 	if out != nil {
-		return json.NewDecoder(resp.Body).Decode(out)
+		return resp.StatusCode, json.NewDecoder(resp.Body).Decode(out)
 	}
-	return nil
+	return resp.StatusCode, nil
 }

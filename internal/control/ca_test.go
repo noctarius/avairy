@@ -99,6 +99,57 @@ func TestEnrollByClientCert(t *testing.T) {
 	}
 }
 
+// After core drops the session (e.g. a restart), an mTLS node with ReenrollOnExpiry transparently
+// re-enrolls on the next 401 and the call succeeds; a node without it just gets the 401.
+func TestAutoReenrollOnSessionLoss(t *testing.T) {
+	dir := t.TempDir()
+	ca, err := EnsureCA(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := NewCore(workspace.NewHub(), journal.NewMemory())
+	serverCert, err := ca.ServerTLS([]string{"127.0.0.1", "localhost"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewUnstartedServer(c.Handler())
+	srv.TLS = &tls.Config{Certificates: []tls.Certificate{serverCert}, ClientAuth: tls.VerifyClientCertIfGiven, ClientCAs: ca.Pool()}
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+
+	certPEM, keyPEM, _ := ca.ClientTLS("linbot")
+	client, _ := TLSClientPEM(ca.CertPEM(), false, certPEM, keyPEM)
+
+	n := NewNode(srv.URL, "linbot")
+	n.HTTP = client
+	n.ReenrollOnExpiry = true
+	if err := n.Enroll("", "linux", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.Heartbeat(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate a core restart: it forgets all sessions.
+	c.mu.Lock()
+	c.sessions = map[string]string{}
+	c.mu.Unlock()
+
+	// Heartbeat now 401s, but the node re-enrolls (by cert) and retries → succeeds.
+	if err := n.Heartbeat(); err != nil {
+		t.Fatalf("mTLS node should auto-reenroll and recover, got %v", err)
+	}
+
+	// Without auto-reenroll, the same situation surfaces the 401.
+	c.mu.Lock()
+	c.sessions = map[string]string{}
+	c.mu.Unlock()
+	n.ReenrollOnExpiry = false
+	if err := n.Heartbeat(); err == nil {
+		t.Fatal("without ReenrollOnExpiry, a dropped session should surface a 401")
+	}
+}
+
 func TestJoinEncodeDecode(t *testing.T) {
 	in := JoinBundle{Core: "https://core:7700", CA: []byte("CA-PEM"), Token: "tok", NodeID: "linbot"}
 	out, err := DecodeJoin(EncodeJoin(in))

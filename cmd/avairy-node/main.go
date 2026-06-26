@@ -112,6 +112,9 @@ func main() {
 			os.Exit(1)
 		}
 		n.HTTP = client
+		// mTLS auth is stateless on core, so the node can transparently re-enroll if core
+		// restarts and forgets its session (a token node couldn't — its binding is gone).
+		n.ReenrollOnExpiry = mtls
 	case *caFile != "" || *insecure:
 		client, err := control.TLSClient(*caFile, *insecure)
 		if err != nil {
