@@ -54,6 +54,26 @@ func TestSessionUpdate_ToolInput(t *testing.T) {
 	}
 }
 
+// While a session/load replays history, emitted events are suppressed (already in our journal);
+// once loading clears, events flow normally.
+func TestLoadingSuppressesReplayedEvents(t *testing.T) {
+	s := newTestSession()
+	s.loading.Store(true)
+	s.handleNotification("session/update", json.RawMessage(`{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"old"}}}`))
+	s.handleNotification("session/update", json.RawMessage(`{"update":{"sessionUpdate":"tool_call","toolCallId":"t1","title":"Bash","kind":"execute"}}`))
+	select {
+	case ev := <-s.events:
+		t.Fatalf("event emitted during load replay: %+v", ev)
+	default:
+	}
+
+	s.loading.Store(false)
+	s.handleNotification("session/update", json.RawMessage(`{"update":{"sessionUpdate":"tool_call","toolCallId":"t2","title":"Read","kind":"read"}}`))
+	if ev := <-s.events; ev.Type != agent.EventToolUse {
+		t.Fatalf("after load, events should flow; got %+v", ev)
+	}
+}
+
 func TestSessionUpdate_ToolResult(t *testing.T) {
 	s := newTestSession()
 	s.handleNotification("session/update", json.RawMessage(`{"update":{"sessionUpdate":"tool_call_update","toolCallId":"t1","status":"completed"}}`))

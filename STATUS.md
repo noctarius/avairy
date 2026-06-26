@@ -144,8 +144,11 @@ Ranked roughly by value-to-effort within each group.
     `.avairy/session` and passes it back as `ResumeID` on respawn, so a restarted agent continues
     its conversation — wired for **Claude** (`--resume`) and **Codex** (`thread/resume` by
     threadId, verified against the app-server schema; falls back to a fresh thread if the id
-    can't be loaded). *Still open:* ACP (Copilot/Grok) — the protocol has `session/load` but it's
-    not wired and I haven't verified those agents implement it (their `SupportsResume` is `false`).
+    can't be loaded) and **Copilot/Grok** (ACP `session/load` — both advertise `loadSession:true`
+    and recognize the method, verified live; the replayed history is suppressed since it's
+    already journaled, and it falls back to `session/new` if the id can't be loaded). All four
+    families now resume. *(Not yet exercised: a full create→load round-trip with real history —
+    rests on the capability + graceful not-found behavior.)*
 
 14. **Loop detection only catches a step repeated back-to-back.** `trackLoop` keeps a sliding
     window of the last 3 event signatures and fires only when all 3 are *identical and

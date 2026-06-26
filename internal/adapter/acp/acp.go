@@ -50,7 +50,7 @@ func (a *Adapter) Capabilities() agent.Capabilities {
 	return agent.Capabilities{
 		SupportsInterrupt: true,  // session/cancel
 		SupportsSteer:     false, // no native mid-turn inject; a new prompt starts after the turn
-		SupportsResume:    false, // protocol has session/load, but Start doesn't honor ResumeID yet
+		SupportsResume:    true,  // session/load by id (Copilot & Grok both advertise loadSession)
 		MCPClient:         true,  // mcpServers in session/new (http verified)
 		Enforcement:       agent.EnforcementHooked,
 	}
@@ -93,6 +93,22 @@ func (a *Adapter) Start(ctx context.Context, cfg agent.SessionConfig) (agent.Ses
 	}); err != nil {
 		_ = s.Close()
 		return nil, fmt.Errorf("acp: initialize: %w", err)
+	}
+	// Resume a prior session by id (both Copilot and Grok advertise loadSession). session/load
+	// replays history via session/update — suppressed (already in our journal). Fall back to a
+	// fresh session if the id can't be loaded, so respawn never hard-fails.
+	if cfg.ResumeID != "" {
+		s.loading.Store(true)
+		_, lerr := s.call(hctx, "session/load", sessionLoadParams{
+			SessionID:  cfg.ResumeID,
+			Cwd:        cfg.Workspace,
+			McpServers: mcpServers(cfg.MCP),
+		})
+		s.loading.Store(false)
+		if lerr == nil {
+			s.id = cfg.ResumeID
+			return s, nil
+		}
 	}
 	nsRes, err := s.call(hctx, "session/new", sessionNewParams{
 		Cwd:        cfg.Workspace,
@@ -153,7 +169,8 @@ type session struct {
 	events chan agent.Event
 	done   chan struct{}
 
-	id string
+	id      string
+	loading atomic.Bool // true while session/load replays history — suppress those as live events
 
 	encMu    sync.Mutex
 	promptMu sync.Mutex // serializes session/prompt turns
@@ -282,6 +299,13 @@ type clientCapabilities struct {
 type fsCapabilities struct {
 	ReadTextFile  bool `json:"readTextFile"`
 	WriteTextFile bool `json:"writeTextFile"`
+}
+
+// sessionLoadParams resumes a previously-created session by id (ACP loadSession capability).
+type sessionLoadParams struct {
+	SessionID  string      `json:"sessionId"`
+	Cwd        string      `json:"cwd"`
+	McpServers []mcpServer `json:"mcpServers"`
 }
 
 type sessionNewParams struct {

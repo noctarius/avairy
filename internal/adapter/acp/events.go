@@ -173,6 +173,9 @@ func (s *session) flushText() {
 }
 
 func (s *session) emit(ev agent.Event) {
+	if s.loading.Load() {
+		return // history replayed during session/load — already in our journal, don't re-emit
+	}
 	select {
 	case s.events <- ev:
 	case <-s.done:
