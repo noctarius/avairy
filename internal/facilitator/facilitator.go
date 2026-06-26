@@ -193,21 +193,49 @@ func (f *Facilitator) detect(rec journal.Record) (Trigger, bool) {
 	return Trigger{}, false
 }
 
-// trackLoop records an activity signature and fires a loop trigger after loopN identical
-// consecutive steps (then resets, to avoid repeat-firing on the same loop).
+// loopMaxPeriod is the largest repeating cycle length trackLoop looks for.
+const loopMaxPeriod = 4
+
+// trackLoop records an agent's action signatures and fires a loop trigger when the recent
+// history ends in a repeating cycle — the same block of 1..loopMaxPeriod actions repeated loopN
+// times. Period 1 is the classic "same step over and over"; period ≥2 catches A↔B oscillation
+// (ping-ponging between two fixes). Interleaved reasoning is already filtered out (signature
+// only tracks tool actions), so retries with thinking in between still register. Resets on a
+// hit to avoid re-firing on the same loop.
 func (f *Facilitator) trackLoop(agentID, sig string) (Trigger, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	r := append(f.recent[agentID], sig)
-	if len(r) > f.loopN {
-		r = r[len(r)-f.loopN:]
+	w := append(f.recent[agentID], sig)
+	if maxLen := loopMaxPeriod * f.loopN; len(w) > maxLen {
+		w = w[len(w)-maxLen:]
 	}
-	f.recent[agentID] = r
-	if len(r) == f.loopN && allEqual(r) {
-		f.recent[agentID] = nil
-		return Trigger{Kind: TriggerLoop, Agent: agentID, Detail: sig}, true
+	f.recent[agentID] = w
+	for p := 1; p <= loopMaxPeriod && p*f.loopN <= len(w); p++ {
+		if isCycle(w[len(w)-p*f.loopN:], p) {
+			f.recent[agentID] = nil
+			return Trigger{Kind: TriggerLoop, Agent: agentID, Detail: cycleDetail(w[len(w)-p:])}, true
+		}
 	}
 	return Trigger{}, false
+}
+
+// isCycle reports whether tail is a single block of length p repeated (tail[i] == tail[i-p]).
+func isCycle(tail []string, p int) bool {
+	for i := p; i < len(tail); i++ {
+		if tail[i] != tail[i-p] {
+			return false
+		}
+	}
+	return true
+}
+
+// cycleDetail renders the repeating block for the trigger ("Bash: make → Bash: test").
+func cycleDetail(block []string) string {
+	parts := make([]string, len(block))
+	for i, s := range block {
+		parts[i] = strings.TrimPrefix(s, "tool:")
+	}
+	return strings.Join(parts, " → ")
 }
 
 func (f *Facilitator) publish(n Nudge) {
@@ -245,25 +273,12 @@ func (f *Facilitator) clearCooldown(agentID string, k TriggerKind) {
 	delete(f.lastNudge, nudgeKey(agentID, k))
 }
 
+// signature is the per-step key for loop detection: only tool actions count (interleaved
+// reasoning is ignored), keyed on the full action — tool + identifying arg — so reading 100
+// different files is 100 distinct steps, not a loop. Returns "" for events that don't count.
 func signature(ev agent.Event) string {
-	switch ev.Type {
-	case agent.EventToolUse:
-		if ev.Tool != nil {
-			// Key on the full action (tool + identifying arg), so reading 100 different files
-			// is 100 distinct steps, not a loop — only the *same* action repeated counts.
-			return "tool:" + agent.ToolSummary(ev.Tool)
-		}
-	case agent.EventText:
-		return "text:" + ev.Text
+	if ev.Type == agent.EventToolUse && ev.Tool != nil {
+		return "tool:" + agent.ToolSummary(ev.Tool)
 	}
 	return ""
-}
-
-func allEqual(s []string) bool {
-	for i := 1; i < len(s); i++ {
-		if s[i] != s[0] {
-			return false
-		}
-	}
-	return len(s) > 0
 }

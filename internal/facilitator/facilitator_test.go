@@ -127,6 +127,42 @@ func TestObserve_DifferentFilesAreNotALoop(t *testing.T) {
 	}
 }
 
+// loopFires reports how many loop triggers a sequence of agent events produces (via a counting
+// nudger; cooldown dedups repeats, so a single detected loop is 1).
+func loopFires(events []agent.Event) int {
+	var n int
+	f := New(bus.New(journal.NewMemory()), RosterFunc(func() []Agent { return roster }), countNudger{&n})
+	for _, ev := range events {
+		f.Observe(journal.Record{Kind: journal.KindAgentEvent, Actor: "linbot", Data: ev})
+	}
+	return n
+}
+
+func toolEv(cmd string) agent.Event {
+	return agent.Event{Type: agent.EventToolUse, Tool: &agent.ToolCall{Name: "Bash", Input: map[string]any{"command": cmd}}}
+}
+
+// Cycle detection: A↔B oscillation and interleaved-reasoning retries are loops; two rounds are not.
+func TestLoop_CycleDetection(t *testing.T) {
+	a, bb, text := toolEv("make"), toolEv("test"), agent.Event{Type: agent.EventText, Text: "thinking…"}
+
+	if n := loopFires([]agent.Event{a, bb, a, bb, a, bb}); n != 1 { // A↔B ×3
+		t.Fatalf("A↔B oscillation should be a loop, fired %d", n)
+	}
+	if n := loopFires([]agent.Event{a, text, a, text, a}); n != 1 { // retries with reasoning between
+		t.Fatalf("interleaved retries should be a loop, fired %d", n)
+	}
+	if n := loopFires([]agent.Event{a, a, a}); n != 1 { // classic back-to-back
+		t.Fatalf("repeated step should be a loop, fired %d", n)
+	}
+	if n := loopFires([]agent.Event{a, bb, a, bb}); n != 0 { // only two rounds — normal iteration
+		t.Fatalf("two edit/test rounds should NOT be a loop, fired %d", n)
+	}
+	if n := loopFires([]agent.Event{toolEv("a"), toolEv("b"), toolEv("c"), toolEv("d")}); n != 0 {
+		t.Fatalf("distinct actions should not be a loop, fired %d", n)
+	}
+}
+
 // On a detected loop, the facilitator runs a fresh look and delivers its answer to the agent.
 func TestObserve_LoopRunsFreshLook(t *testing.T) {
 	j := journal.NewMemory()

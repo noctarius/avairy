@@ -161,26 +161,16 @@ Ranked roughly by value-to-effort within each group.
     families now resume. *(Not yet exercised: a full create→load round-trip with real history —
     rests on the capability + graceful not-found behavior.)*
 
-14. **Loop detection only catches a step repeated back-to-back.** `trackLoop` keeps a sliding
-    window of the last 3 event signatures and fires only when all 3 are *identical and
-    consecutive* (`signature` = `tool:<ToolSummary>` or `text:<exact text>`). What it misses:
-
-    - **A↔B oscillation** (e.g. ping-ponging between two mutually-exclusive fixes): the stream
-      is `A, B, A, B…`, never 3-in-a-row equal → not detected.
-    - **Thought loops** (going back and forth between ideas): alternating *and* exact-string
-      matched, so "let me try X" vs "I'll try X again" don't even match → not detected.
-    - **Interleaved retries**: agents emit reasoning between attempts (`A, text, A, text, A`),
-      so the window `[A, text, A]` isn't all-equal — even simple retry loops often slip through.
-
-    Improvements, by feasibility:
-    - *Deterministic (high value):* longer window, filter to action signatures (ignore
-      interleaved text), detect a recurring **period / k-cycle** repeating ≥M times → catches
-      A↔B and interleaved retries.
-    - *Deterministic:* flag **revisiting already-seen states with no new state** for a while
-      (circling without net progress), even when not a clean cycle.
-    - *Needs judgment (LLM):* **semantic** loops (same intent, different words) can't be caught
-      by string matching — this is the pluggable LLM `Nudger` seam the design anticipates
-      (`facilitator.go:4`), e.g. periodically asking "is this agent making progress?".
+14. **Loop detection — cycle-aware.** ✅ `trackLoop` now does **period/k-cycle detection**: it
+    keeps a window of recent *action* signatures (tool calls only — interleaved reasoning is
+    filtered out) and fires when the tail is a block of 1..4 actions repeated `loopN` (3) times.
+    So it catches the classic back-to-back repeat (period 1), **A↔B oscillation** (period 2,
+    e.g. ping-ponging between two fixes), and **interleaved retries** (reasoning between attempts
+    no longer hides the repeat); two rounds of edit/test are *not* flagged (normal iteration).
+    On a hit the facilitator auto-runs a fresh look (#0). *Still open:* (a) flag **revisiting
+    seen states with no new state** (circling without a clean cycle); (b) **semantic** loops
+    (same intent, different words) — the LLM-`Nudger` seam (`facilitator.go`), e.g. periodically
+    asking "is this agent making progress?".
 
 ### Single operator
 
