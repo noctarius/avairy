@@ -9,7 +9,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"net"
@@ -33,7 +32,7 @@ func main() {
 	// `avairy-node hook -gate <url>` is the PreToolUse hook shim Claude invokes per tool call;
 	// it must run before flag parsing (its args are its own).
 	if len(os.Args) > 1 && os.Args[1] == "hook" {
-		runHook(os.Args[2:])
+		gating.RunHookShim(os.Args[2:])
 		return
 	}
 
@@ -214,7 +213,7 @@ func buildAdapter(family, gateURL string, dec gating.Decider) (agent.Adapter, er
 		// PreToolUse hook must decide every tool call: it returns allow for free actions
 		// (no prompt) and deny for gated ones (DESIGN.md §7). With the hook governing all
 		// tools we don't bypass permissions — the hook *is* the permission system.
-		settings, err := claudeGateSettings(gateURL)
+		settings, err := gating.ClaudeHookSettings(gateURL)
 		if err != nil {
 			return nil, err
 		}
@@ -258,31 +257,4 @@ func gateDecider(n *control.Node, agentID string) gating.Decider {
 		}
 		return d, err
 	}
-}
-
-// claudeGateSettings builds the --settings JSON that registers our PreToolUse hook for every
-// tool call. The hook command is this same binary's `hook` subcommand, pointed at the node's
-// local /gate endpoint.
-func claudeGateSettings(gateURL string) (string, error) {
-	exe, err := os.Executable()
-	if err != nil {
-		return "", fmt.Errorf("locate self for hook: %w", err)
-	}
-	command := fmt.Sprintf("%q hook -gate %q", exe, gateURL)
-	settings := map[string]any{
-		"hooks": map[string]any{
-			"PreToolUse": []any{
-				map[string]any{
-					"matcher": "*",
-					"hooks": []any{
-						// 300s so a human has time to rule on a gated action in the TUI (broker
-						// waits 280s; the hook shim client 290s — all just under this ceiling).
-						map[string]any{"type": "command", "command": command, "timeout": 300},
-					},
-				},
-			},
-		},
-	}
-	b, err := json.Marshal(settings)
-	return string(b), err
 }

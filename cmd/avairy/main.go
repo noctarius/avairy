@@ -38,6 +38,13 @@ import (
 )
 
 func main() {
+	// `avairy hook -gate <url>` is the PreToolUse hook shim a locally-spawned Claude invokes
+	// per tool call; it must run before flag parsing (its args are its own).
+	if len(os.Args) > 1 && os.Args[1] == "hook" {
+		gating.RunHookShim(os.Args[2:])
+		return
+	}
+
 	demo := flag.Bool("demo", false, "spawn mock agents (alice, bob) for trying the loop / tests — off by default")
 	live := flag.Bool("live", false, "run 'alice' as a real agent on the MCP bus")
 	family := flag.String("family", "claude", "live agent family: claude | codex | copilot | grok")
@@ -280,10 +287,18 @@ func startLiveAlice(ctx context.Context, family, model, busURL string, b *bus.Bu
 		ad = grok.New(localGateDecider(approvals, "alice")) // ACP; needs xAI auth
 	default: // claude
 		ca := claudecode.New()
-		// Pre-approve the avairy bus tools so headless turns don't stall on permission prompts.
-		ca.ExtraArgs = []string{
-			"--allowedTools", "mcp__avairy__post_task,mcp__avairy__claim_task,mcp__avairy__list_tasks,mcp__avairy__send_message,mcp__avairy__read_inbox,mcp__avairy__report_status",
+		// Real gating, same as a node: serve a local /gate and register a PreToolUse hook for
+		// every tool call (free actions allowed without a prompt, gated ones routed to the
+		// operator's Approvals tab). The hook is the permission system — no --allowedTools.
+		gateURL, err := startLocalGate(localGateDecider(approvals, "alice"))
+		if err != nil {
+			fail("local gate", err)
 		}
+		settings, err := gating.ClaudeHookSettings(gateURL)
+		if err != nil {
+			fail("hook settings", err)
+		}
+		ca.ExtraArgs = []string{"--settings", settings}
 		ad = ca
 	}
 
@@ -308,6 +323,21 @@ func localGateDecider(approvals *control.Approvals, agentID string) gating.Decid
 		return gating.Deny, nil
 	}}
 	return policy.Decide
+}
+
+// startLocalGate serves the PreToolUse gate endpoint on a loopback port for a locally-spawned
+// Claude and returns its URL. Tool calls POSTed here are ruled on by decide (free → allow,
+// gated → the operator's Approvals tab). The listener lives for the process lifetime.
+func startLocalGate(decide gating.Decider) (string, error) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return "", err
+	}
+	mux := http.NewServeMux()
+	mux.Handle("/gate", gating.HookHandler(decide))
+	go http.Serve(ln, mux)
+	_, port, _ := net.SplitHostPort(ln.Addr().String())
+	return "http://127.0.0.1:" + port + "/gate", nil
 }
 
 func startMock(ctx context.Context, id string, b *bus.Bus, jrnl journal.Log) {

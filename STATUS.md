@@ -54,8 +54,10 @@ Ranked roughly by value-to-effort within each group.
    `gateDecider` and local `-live` passes `localGateDecider`, so ACP
    `session/request_permission` requests reach the operator's Approvals tab like Claude/Codex.
 
-5. **Local `-live claude` gating.** No local `/gate` endpoint (only the node serves one), so
-   local Claude relies on `--allowedTools`, not the broker.
+5. ~~**Local `-live claude` gating.**~~ ✅ Done. The hook shim + `--settings` builder moved to
+   `internal/gating` (shared by both binaries; `avairy` gained a `hook` subcommand).
+   `cmd/avairy` now serves a loopback `/gate` and registers the PreToolUse hook for local
+   Claude — same broker path as a node, no more `--allowedTools`.
 
 6. **`AllowForSession`.** The decision constant exists but the TUI only offers allow/deny, so
    the human re-approves identical actions every time. No "allow this kind for the session."
