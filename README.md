@@ -100,9 +100,10 @@ avairy-node \
 The daemon enrolls (node→core, NAT-friendly), continuously syncs `./repo` to/from the
 canonical workspace on core, heartbeats, and serves a local MCP endpoint at
 `http://127.0.0.1:7800/mcp` — the agent only ever sees localhost. For remote nodes, serve the
-control channel over TLS: start core with `-tls-cert`/`-tls-key` and point the node at the
-`https://` URL with `-ca <core-cert.pem>` (or `-insecure` for dev). (The MCP bus is still plain
-HTTP today.)
+channels over TLS: start core with `-tls-auto` (self-signed CA, written into the join bundle so
+the node trusts it automatically) or `-tls-cert`/`-tls-key`. With `-tls-auto` both the control
+channel and the remote-facing MCP bus are encrypted, and a node can authenticate by mTLS client
+cert (`avairy mint-join`) instead of a token. Local agents always use a plain loopback bus.
 
 With **`-family claude`** (or `codex`, `copilot`, `grok`) the daemon **spawns and drives the agent for you**:
 core registers it on the bus at enrollment, inbound messages are pulled from core and fed to

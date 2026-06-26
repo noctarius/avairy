@@ -98,17 +98,56 @@ func main() {
 		jrnl.Append(journal.KindSystem, a.AgentID, map[string]any{"event": "approval_resolved", "id": a.ID, "kind": a.Kind, "summary": a.Summary, "decision": decision})
 	}
 
-	// Serve the MCP bus on a loopback port; agents connect here (the daemon will tunnel
-	// this for remote nodes — DESIGN.md §4).
+	// Self-managed TLS material (DESIGN.md §4), shared by the MCP bus and the control channel:
+	// build the CA + one server cert (SANs cover the advertised control + mcp hosts and loopback)
+	// once, so both encrypted listeners use it and the CA travels to nodes in the join bundle.
+	var ca *control.CA
+	var serverCert tls.Certificate
+	var caPEM []byte
+	if *tlsAuto {
+		c, cerr := control.EnsureCA(".avairy")
+		if cerr != nil {
+			fail("ca", cerr)
+		}
+		cert, cerr := c.ServerTLS([]string{
+			hostOf(advertised(*advertise, *mcpAddr)),
+			hostOf(advertised(*advertise, *controlAddr)),
+			"127.0.0.1", "localhost", "::1",
+		})
+		if cerr != nil {
+			fail("server cert", cerr)
+		}
+		ca, serverCert, caPEM = c, cert, c.CertPEM()
+	}
+
+	// Local agents on this machine always reach the bus via a PLAIN loopback listener — they
+	// never need TLS, even when the remote-facing bus is encrypted.
+	lnLocal, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		fail("listen local bus", err)
+	}
+	go http.Serve(lnLocal, mcpSrv.HTTPHandler())
+	_, localPort, _ := net.SplitHostPort(lnLocal.Addr().String())
+	busURL := "http://127.0.0.1:" + localPort + mcp.EndpointPath
+
+	// Remote-facing bus on -mcp-addr: TLS when configured (a node's MCP proxy trusts the CA),
+	// else plain. Carries inter-agent messages, which would otherwise cross the wire in cleartext.
 	ln, err := net.Listen("tcp", *mcpAddr)
 	if err != nil {
 		fail("listen", err)
 	}
-	go http.Serve(ln, mcpSrv.HTTPHandler())
-	// Local agents (alice/bob on this machine) always reach the bus via loopback, regardless
-	// of the bind/advertise host used for remote nodes.
-	_, mcpPort, _ := net.SplitHostPort(ln.Addr().String())
-	busURL := "http://127.0.0.1:" + mcpPort + mcp.EndpointPath
+	busScheme := "http"
+	switch {
+	case *tlsAuto:
+		busScheme = "https"
+		srv := &http.Server{Handler: mcpSrv.HTTPHandler(), TLSConfig: &tls.Config{Certificates: []tls.Certificate{serverCert}}}
+		go srv.ServeTLS(ln, "", "")
+	case *tlsCert != "" && *tlsKey != "":
+		busScheme = "https"
+		go http.ServeTLS(ln, mcpSrv.HTTPHandler(), *tlsCert, *tlsKey)
+	default:
+		go http.Serve(ln, mcpSrv.HTTPHandler())
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -221,26 +260,15 @@ func main() {
 		serve := func() error {
 			return http.ListenAndServe(*controlAddr, core.Handler())
 		}
-		var caPEM []byte
-		ctrlHost := hostOf(advertised(*advertise, *controlAddr))
 		switch {
 		case *tlsAuto:
-			ca, cerr := control.EnsureCA(".avairy")
-			if cerr != nil {
-				fail("ca", cerr)
-			}
-			cert, cerr := ca.ServerTLS([]string{ctrlHost, "127.0.0.1", "localhost", "::1"})
-			if cerr != nil {
-				fail("server cert", cerr)
-			}
-			caPEM = ca.CertPEM()
 			ctrlScheme = "https"
 			srv := &http.Server{
 				Addr:    *controlAddr,
 				Handler: core.Handler(),
 				TLSConfig: &tls.Config{
-					Certificates: []tls.Certificate{cert},
-					ClientAuth:   tls.VerifyClientCertIfGiven, // token OR client-cert auth
+					Certificates: []tls.Certificate{serverCert}, // shared self-CA cert (built above)
+					ClientAuth:   tls.VerifyClientCertIfGiven,   // token OR client-cert auth
 					ClientCAs:    ca.Pool(),
 				},
 			}
@@ -261,7 +289,7 @@ func main() {
 		go core.RunLiveness(ctx) // mark nodes offline when heartbeats lapse
 
 		ctrlURL := ctrlScheme + "://" + advertised(*advertise, *controlAddr)
-		busBase := "http://" + advertised(*advertise, ln.Addr().String())
+		busBase := busScheme + "://" + advertised(*advertise, ln.Addr().String())
 		warn := ""
 		if unreachableHost(hostOf(advertised(*advertise, ln.Addr().String()))) {
 			warn = "host not reachable from other machines — pass -advertise <ip/host> and bind -control-addr/-mcp-addr to 0.0.0.0:PORT"

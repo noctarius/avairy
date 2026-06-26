@@ -250,6 +250,11 @@ func (n *Node) MCPProxy(coreBaseURL, agentID string) (http.Handler, error) {
 			pr.Out.Header.Set("X-Avairy-Agent", agentID)
 		},
 	}
+	// Reuse the node's TLS-trusting transport so an https core bus is verified against the same
+	// CA as the control channel (from the join / -ca). nil transport → default (plain http).
+	if n.HTTP != nil {
+		rp.Transport = n.HTTP.Transport
+	}
 	return rp, nil
 }
 
