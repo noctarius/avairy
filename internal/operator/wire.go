@@ -68,6 +68,7 @@ type ControlState struct {
 // rendering — the journal stream carries the rest).
 type State struct {
 	Tasks     []board.Task   `json:"tasks"`
+	Notes     []board.Note   `json:"notes"` // blackboard — durable shared memory (#27)
 	Approvals []ApprovalItem `json:"approvals"`
 	Conflicts []ConflictItem `json:"conflicts"`
 	Roster    []string       `json:"roster"`

@@ -88,9 +88,12 @@ func TestOperatorServerClientRoundTrip(t *testing.T) {
 	conflicts.Raise(control.OperatorConflict{Path: "f.go", HubVersion: 3, Source: "seed"})
 	time.Sleep(20 * time.Millisecond) // let the async Ask register
 
+	bb := board.NewBlackboard(j)
+	bb.Write("alice", "repro/linux", "panics only on linux")
 	svc := &operator.Services{
 		Journal: j, Bus: b, Approvals: approvals, Conflicts: conflicts,
 		Tasks:  bd.List,
+		Notes:  func() []board.Note { return bb.Read("") },
 		Roster: func() []string { return []string{"alice", "linbot"} },
 	}
 	ts := httptest.NewServer(operator.NewServer(svc, "sekret", true).Handler())
@@ -117,6 +120,9 @@ func TestOperatorServerClientRoundTrip(t *testing.T) {
 	}
 	if got := deps.PendingConflicts(); len(got) != 1 || got[0].Path != "f.go" {
 		t.Fatalf("conflicts = %+v", got)
+	}
+	if got := deps.Notes(); len(got) != 1 || got[0].Key != "repro/linux" || got[0].Text != "panics only on linux" {
+		t.Fatalf("notes = %+v", got)
 	}
 	if got := deps.Roster(); len(got) != 2 {
 		t.Fatalf("roster = %+v", got)

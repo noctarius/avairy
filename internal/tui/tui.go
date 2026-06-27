@@ -36,6 +36,8 @@ type Deps struct {
 	Interrupt func()
 	// Tasks returns the current task board (the Tasks view). Nil → empty.
 	Tasks func() []board.Task
+	// Notes returns the shared blackboard (the Notes view, #27). Nil → empty.
+	Notes func() []board.Note
 
 	// PendingApprovals/ResolveApproval drive the human-in-the-loop gating view (DESIGN.md §7):
 	// agents block on a gated action, the operator allows/denies it here. Nil disables the view.
@@ -110,12 +112,13 @@ const (
 	tabConversation = iota
 	tabHandovers
 	tabTasks
+	tabNotes
 	tabApprovals
 	tabConflicts
 	numTabs
 )
 
-var tabNames = []string{"Conversation", "Handovers", "Tasks", "Approvals", "Conflicts"}
+var tabNames = []string{"Conversation", "Handovers", "Tasks", "Notes", "Approvals", "Conflicts"}
 
 // inputHeight is the number of rows the multi-line command input occupies.
 const inputHeight = 3
@@ -963,6 +966,20 @@ func (m *Model) bodyLines() []string {
 				claim = "-"
 			}
 			out = append(out, fmt.Sprintf("%s [%s] %q  requires=%v  claimant=%s", t.ID, t.State, t.Title, t.Requires, claim))
+		}
+		return out
+	case tabNotes:
+		var notes []board.Note
+		if m.deps.Notes != nil {
+			notes = m.deps.Notes()
+		}
+		if len(notes) == 0 {
+			return []string{helpStyle.Render("(blackboard empty — agents write durable shared memory here via note(key, text))")}
+		}
+		out := make([]string, 0, len(notes)*2)
+		for _, n := range notes {
+			out = append(out, fmt.Sprintf("%s %s", titleStyle.Render(n.Key), helpStyle.Render("· "+n.Author)))
+			out = append(out, "  "+n.Text)
 		}
 		return out
 	default:

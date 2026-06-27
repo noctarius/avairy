@@ -135,6 +135,8 @@
     <div id="fleet"><div class="empty">no agents yet</div></div>
     <h3>Tasks</h3>
     <div id="tasks"><div class="empty">no tasks</div></div>
+    <h3>Notes</h3>
+    <div id="notes"><div class="empty">blackboard empty</div></div>
   </aside>
 
   <main>
@@ -297,6 +299,18 @@ function renderTasks(tasks){
     d.querySelector(".t").textContent=t.Title; el.appendChild(d);
   });
 }
+function renderNotes(notes){
+  const el=$("notes");
+  if(!notes||notes.length===0){ el.innerHTML='<div class="empty">blackboard empty</div>'; return; }
+  el.innerHTML="";
+  notes.forEach(n=>{
+    const d=document.createElement("div"); d.className="task";
+    d.innerHTML=`<div class="t"></div><div class="meta"></div>`;
+    d.querySelector(".t").textContent=n.Key;
+    d.querySelector(".meta").textContent=(n.Author?n.Author+" · ":"")+n.Text;
+    el.appendChild(d);
+  });
+}
 function agentOptions(sel, includeBroadcast){
   const cur=sel.value;
   sel.innerHTML="";
@@ -359,7 +373,7 @@ function renderConflicts(items){
 async function refresh(){
   let st; try{ st=await getState(); }catch(e){ return; }
   (st.roster||[]).forEach(id=>{ if(!agents.has(id)) agents.set(id,"idle"); });
-  renderFleet(); renderTasks(st.tasks); renderApprovals(st.approvals); renderConflicts(st.conflicts);
+  renderFleet(); renderTasks(st.tasks); renderNotes(st.notes); renderApprovals(st.approvals); renderConflicts(st.conflicts);
   agentOptions($("to"), true);
   const t=$("token");
   if(st.control && st.control.token){

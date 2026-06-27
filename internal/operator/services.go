@@ -18,6 +18,7 @@ type Services struct {
 	Journal   journal.Log
 	Roster    func() []string
 	Tasks     func() []board.Task
+	Notes     func() []board.Note // blackboard read view (#27); nil → empty
 	Approvals *control.Approvals
 	Conflicts *control.Conflicts
 	Bus       *bus.Bus
@@ -71,6 +72,9 @@ func (s *Services) state() State {
 	if s.Tasks != nil {
 		st.Tasks = s.Tasks()
 	}
+	if s.Notes != nil {
+		st.Notes = s.Notes()
+	}
 	for _, p := range s.Approvals.Pending() {
 		st.Approvals = append(st.Approvals, ApprovalItem{ID: p.ID, AgentID: p.AgentID, Kind: p.Kind, Summary: p.Summary, Reason: p.Reason})
 	}
@@ -89,6 +93,7 @@ func (s *Services) Deps() tui.Deps {
 		Journal:         s.Journal,
 		Roster:          s.Roster,
 		Tasks:           s.Tasks,
+		Notes:           s.Notes,
 		Inject:          s.Inject,
 		Interrupt:       s.Interrupt,
 		ResolveApproval: s.ResolveApproval,

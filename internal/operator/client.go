@@ -173,6 +173,7 @@ func (c *Client) Deps() tui.Deps {
 		Journal:          c.jrnl,
 		Roster:           c.roster,
 		Tasks:            c.tasks,
+		Notes:            c.notes,
 		Inject:           c.inject,
 		Interrupt:        c.interrupt,
 		PendingApprovals: c.pendingApprovals,
@@ -212,6 +213,12 @@ func (c *Client) tasks() []board.Task {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return append([]board.Task(nil), c.state.Tasks...)
+}
+
+func (c *Client) notes() []board.Note {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]board.Note(nil), c.state.Notes...)
 }
 
 func (c *Client) pendingApprovals() []tui.ApprovalItem {

@@ -370,10 +370,11 @@ Ranked roughly by value-to-effort within each group.
     can see, and an optional per-agent/total **budget cap** that pauses/stops an agent (with a
     warning) at a threshold — insurance against a fan-out racking up spend.
 
-27. **Blackboard view in the operator console.** The blackboard (`note`/`read_notes`) is durable
-    shared memory, but the operator can't see it — there's no Notes tab/panel (TUI has
-    Conversation/Handovers/Tasks/Approvals/Conflicts, not blackboard). Add a read view over
-    `board.Blackboard` (TUI tab + web panel) — pure visibility, reuses existing machinery.
+27. ~~**Blackboard view in the operator console.**~~ ✅ Done. A read view over `board.Blackboard`:
+    a **Notes** tab in the TUI (key · author + text, sorted by key) and a **Notes** panel in the web
+    left rail. Threaded `operator.Services.Notes` → `State.Notes` → client cache → `tui.Deps.Notes`
+    (so it works in-process and remote, polled with the rest of the state). Test: round-trip asserts
+    notes reach the client. (Read-only — agents still write via the `note` MCP tool.)
 
 28. **Idle teardown / lazy worker spawn.** Agents are resident-but-idle, holding context/credits
     with nothing to do. Tear an idle agent down to a **"sleeping"** state (fleet shows it) and

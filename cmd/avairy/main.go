@@ -147,6 +147,7 @@ func main() {
 	// read at request time, so a remote client that connects later sees them.
 	svc := &operator.Services{
 		Journal: jrnl, Roster: roster, Tasks: bd.List,
+		Notes:     func() []board.Note { return mcpSrv.Blackboard().Read("") }, // blackboard view (#27)
 		Approvals: approvals, Conflicts: conflictBroker, Bus: b,
 	}
 	opToken := *operatorToken
