@@ -194,6 +194,22 @@ function sysline(text){
   row.appendChild(p); logwrap.appendChild(row); if(stick) toBottom();
 }
 function addrStr(to){ if(!to) return ""; return to.Kind==="broadcast" ? "all" : to.Kind+":"+to.Value; }
+// Mirror of agent.ToolSummary: tool name + its identifying arg (command / file / pattern …), so
+// the transcript shows "Bash: go test ./…" rather than a bare "Bash".
+function toolSummary(t){
+  if(!t) return "tool";
+  const inp = t.Input || {};
+  for(const k of ["command","cmd","file_path","filePath","path","pattern","query","url"]){
+    const v = inp[k];
+    if(typeof v==="string" && v){
+      let s = v; const nl = v.indexOf("\n");
+      if(nl>=0) s = v.slice(0,nl).trim()+" …";
+      if(s.length>120) s = s.slice(0,120)+"…";
+      return t.Name+": "+s;
+    }
+  }
+  return t.Name || "tool";
+}
 function setStatus(id, st){ if(!id||id==="human") return; agents.set(id, st); renderFleet(); }
 
 function applyRecord(rec){
@@ -204,7 +220,7 @@ function applyRecord(rec){
       bubble(d.From, addrStr(d.To), d.Body); break;
     case "agent_event":
       if(d.Type==="text"){ setStatus(rec.actor,"working"); bubble(rec.actor, null, d.Text); }
-      else if(d.Type==="tool_use"){ setStatus(rec.actor,"working"); bubble(rec.actor, null, "⚙ "+(d.Tool?d.Tool.Name:"tool"), "tool"); }
+      else if(d.Type==="tool_use"){ setStatus(rec.actor,"working"); bubble(rec.actor, null, "⚙ "+toolSummary(d.Tool), "tool"); }
       else if(d.Type==="turn_done"){ setStatus(rec.actor,"idle"); if(d.Usage){ cost += d.Usage.CostUSD||0; $("cost").textContent="$"+cost.toFixed(2); } }
       else if(d.Type==="error"){ bubble(rec.actor, null, "⚠ "+d.Text, "err"); }
       break;
