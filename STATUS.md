@@ -105,8 +105,11 @@ Ranked roughly by value-to-effort within each group.
    agent for the session"; the broker remembers `(agentID, kind)` grants and auto-allows
    matching requests with no re-prompt (centralized, so local + node paths both benefit).
 
-7. **Live `--settings` hook validation.** The shim + policy + broker are tested, but a live
-   `claude` run actually parsing the injected `--settings` and calling the hook is unverified.
+7. ~~**Live `--settings` hook validation.**~~ ✅ Done. Verified end-to-end against real `claude`
+   2.1.181: a live run parses the injected `--settings`, fires the PreToolUse hook on a tool call,
+   the shim relays it to `/gate`, and `HookHandler`'s decision governs — the gate saw the correctly
+   mapped action (`command echo avairy-hook-ok`). Covered by `TestLiveClaudeHook` (gated behind
+   `AVAIRY_CLAUDE_HOOK_LIVE=1`; spends ≈one cheap haiku turn, so it's skipped in normal/CI runs).
 
 ### Robustness / operational
 
