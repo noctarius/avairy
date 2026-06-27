@@ -12,6 +12,7 @@ import (
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/glamour"
 
 	"avairy/internal/agent"
 	"avairy/internal/board"
@@ -149,7 +150,29 @@ type Model struct {
 	conflictExp map[string]bool // node-startup conflicts whose overview is expanded
 	quitArmed   bool            // first ctrl+c arms; second (in succession) quits
 
+	md      *glamour.TermRenderer // markdown renderer for agent text (#23); rebuilt on width change
+	mdWidth int
+
 	seen map[uint64]bool
+}
+
+// markdown renders agent text (which is markdown — headers, lists, fenced code) to styled terminal
+// output, wrapped to the current width. The renderer is cached and rebuilt only when the width
+// changes; on any failure it falls back to the raw text, so rendering never loses content.
+func (m *Model) markdown(s string) string {
+	w := max(m.width-4, 20)
+	if m.md == nil || m.mdWidth != w {
+		r, err := glamour.NewTermRenderer(glamour.WithAutoStyle(), glamour.WithWordWrap(w))
+		if err != nil {
+			return s
+		}
+		m.md, m.mdWidth = r, w
+	}
+	out, err := m.md.Render(s)
+	if err != nil {
+		return s
+	}
+	return strings.Trim(out, "\n")
 }
 
 // recordMsg carries a journal record into the Bubble Tea update loop.
@@ -546,7 +569,7 @@ func (m *Model) apply(rec journal.Record) {
 			switch ev.Type {
 			case agent.EventText:
 				a.status = "working"
-				m.addConv(fmt.Sprintf("%s: %s", rec.Actor, ev.Text))
+				m.addConv(rec.Actor + ":\n" + m.markdown(ev.Text)) // agents emit markdown — render it (#23)
 			case agent.EventToolUse:
 				a.status = "working"
 				m.addConv(fmt.Sprintf("%s ⚙ %s", rec.Actor, agent.ToolSummary(ev.Tool)))
