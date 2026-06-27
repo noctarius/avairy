@@ -235,6 +235,13 @@ func main() {
 			if err := n.Heartbeat(); err != nil {
 				fmt.Fprintln(os.Stderr, "heartbeat:", err)
 			}
+			// The operator's verdict on a held startup conflict (#21) rides back on the heartbeat.
+			if d := n.TakeDirective(); d != "" && *ws != "" {
+				fmt.Printf("operator chose %q for held startup conflicts\n", d)
+				if err := n.ApplyDirective(*ws, d); err != nil {
+					fmt.Fprintln(os.Stderr, "apply directive:", err)
+				}
+			}
 			syncUp()
 			if *ws != "" {
 				if err := n.SyncDown(*ws); err != nil {

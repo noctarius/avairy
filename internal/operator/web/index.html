@@ -279,6 +279,21 @@ function renderConflicts(items){
   el.innerHTML="";
   items.forEach(cf=>{
     const d=document.createElement("div"); d.className="card";
+    if(cf.source==="node-startup"){
+      // Per-node startup conflict: full resync / resolve, with an overview toggle.
+      d.innerHTML=`<div class="head"></div><div class="meta">startup conflict — local diverged while offline</div>
+        <pre class="ov" style="display:none;white-space:pre-wrap;font-size:11.5px;color:var(--muted);margin:0 0 7px;font-family:ui-monospace,Menlo,monospace"></pre>
+        <div class="acts"><button class="yes" data-d="resync">Resync</button>
+          <button class="alt" data-d="resolve">Resolve</button>
+          <button class="no" data-d="overview">Overview</button></div>`;
+      d.querySelector(".head").textContent="node "+cf.path;
+      d.querySelector(".ov").textContent=cf.detail||"";
+      d.querySelectorAll(".acts button").forEach(b=>b.onclick=()=>{
+        if(b.dataset.d==="overview"){ const ov=d.querySelector(".ov"); ov.style.display=ov.style.display==="none"?"block":"none"; return; }
+        post("/operator/conflict",{ID:cf.id,Decision:b.dataset.d,Target:""}).then(refresh);
+      });
+      el.appendChild(d); return;
+    }
     d.innerHTML=`<div class="head"></div><div class="meta"></div><select></select>
       <div class="acts"><button class="yes" data-d="mine">I'll resolve</button>
         <button class="alt" data-d="delegate">Delegate</button></div>`;

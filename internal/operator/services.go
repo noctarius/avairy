@@ -24,6 +24,9 @@ type Services struct {
 	Commit    func(string) (string, error) // nil when core has no git repo
 	Control   func() *ControlState         // nil when not serving the control API
 	NewToken  func() string                // rotate the enrollment token; nil when no control API
+	// NodeDirective delivers the operator's verdict on a node's held startup conflict (#21) back to
+	// that node (resync/resolve). nil when there's no control API.
+	NodeDirective func(nodeID, decision string)
 }
 
 // Inject publishes a human message: target "" broadcasts, else it's an agent id.
@@ -41,8 +44,18 @@ func (s *Services) ResolveApproval(id, decision string) { s.Approvals.Resolve(id
 // the markers (target "" / "broadcast" → broadcast the request).
 func (s *Services) ResolveConflict(id, decision, target string) {
 	oc, ok := s.Conflicts.Resolve(id, decision)
-	if !ok || decision != control.ConflictDelegate {
-		return // "mine": the operator edits the marked file; the next seed sync picks it up
+	if !ok {
+		return
+	}
+	// Node startup conflict (#21): the verdict (resync/resolve) goes back to the node, not the bus.
+	if oc.Source == "node-startup" {
+		if s.NodeDirective != nil {
+			s.NodeDirective(oc.Path, decision) // oc.Path carries the node id
+		}
+		return
+	}
+	if decision != control.ConflictDelegate {
+		return // seed "mine": the operator edits the marked file; the next seed sync picks it up
 	}
 	s.Bus.Publish("human", addrOf(target), delegateBody(oc), agent.DeliverySteer)
 }

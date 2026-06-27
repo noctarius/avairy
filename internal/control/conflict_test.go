@@ -72,7 +72,6 @@ func conflictedNodeB(t *testing.T) (*Core, *Node, *Node, string) {
 	core, srv := newCoreServer(t)
 	dirA, dirB := t.TempDir(), t.TempDir()
 	writeFile(t, dirA, "f.go", "A")
-	writeFile(t, dirB, "f.go", "B")
 
 	nodeA := NewNode(srv.URL, "a")
 	nodeA.Enroll(core.CurrentToken(), "linux", nil)
@@ -80,7 +79,9 @@ func conflictedNodeB(t *testing.T) (*Core, *Node, *Node, string) {
 
 	nodeB := NewNode(srv.URL, "b")
 	nodeB.Enroll(core.CurrentToken(), "linux", nil)
-	if c, _ := nodeB.SyncUp(dirB); len(c) != 1 { // push "B" from base 0 → conflict @v1
+	nodeB.SyncUp(dirB)             // empty first sync → past the startup-hold, so the next conflict is MARKED
+	writeFile(t, dirB, "f.go", "B") // divergent edit (base 0 vs hub v1) → mid-run conflict
+	if c, _ := nodeB.SyncUp(dirB); len(c) != 1 {
 		t.Fatalf("expected conflict, got %+v", c)
 	}
 	marked := read(t, dirB, "f.go")
@@ -209,6 +210,77 @@ func TestResyncReconcilesAgainstManifest(t *testing.T) {
 	// Base is in lockstep now: a no-op sync neither conflicts nor changes anything.
 	if c, _ := node.SyncUp(dir); len(c) != 0 {
 		t.Fatalf("post-resync sync should be clean, got %+v", c)
+	}
+}
+
+// startupConflict sets up a node whose first sync conflicts: it has a divergent local file while
+// the hub moved on. Returns the wired core, the held node, and its dir; OnNodeConflict captures the
+// raise. The node holds the conflict (no markers) awaiting the operator's verdict.
+func startupConflict(t *testing.T) (*Core, *Node, string, *string) {
+	t.Helper()
+	core, srv := newCoreServer(t)
+	t.Cleanup(srv.Close)
+	raised := new(string)
+	core.OnNodeConflict = func(nodeID, summary string, paths []string) { *raised = nodeID }
+
+	dirSeed := t.TempDir()
+	writeFile(t, dirSeed, "f.go", "base")
+	seed := NewNode(srv.URL, "seed")
+	seed.Enroll(core.CurrentToken(), "linux", nil)
+	seed.SyncUp(dirSeed) // f.go -> v1
+
+	dir := t.TempDir()
+	writeFile(t, dir, "f.go", "macos-local") // pre-existing divergent copy
+	node := NewNode(srv.URL, "macos")
+	node.Enroll(core.CurrentToken(), "darwin", nil)
+	node.ResumeFromHub(dir) // adopt base v1 for f.go
+
+	writeFile(t, dirSeed, "f.go", "base2") // hub moves to v2 while the node was "offline"
+	seed.SyncUp(dirSeed)
+
+	c, err := node.SyncUp(dir) // first sync → conflict, held + raised (not marked)
+	if err != nil || len(c) != 1 {
+		t.Fatalf("expected 1 startup conflict, got %+v err=%v", c, err)
+	}
+	if *raised != "macos" {
+		t.Fatalf("OnNodeConflict should raise for macos, got %q", *raised)
+	}
+	if got := read(t, dir, "f.go"); got != "macos-local" || workspace.HasConflictMarkers([]byte(got)) {
+		t.Fatalf("held file must be untouched (no markers), got %q", got)
+	}
+	return core, node, dir, raised
+}
+
+// Operator chooses resync: the directive rides the heartbeat, the node reconciles against canonical,
+// and its local divergence is discarded.
+func TestNodeStartupConflictResync(t *testing.T) {
+	core, node, dir, _ := startupConflict(t)
+	core.SetNodeDirective("macos", ConflictResync)
+	if err := node.Heartbeat(); err != nil {
+		t.Fatal(err)
+	}
+	if d := node.TakeDirective(); d != ConflictResync {
+		t.Fatalf("directive = %q, want resync", d)
+	} else if err := node.ApplyDirective(dir, d); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(t, dir, "f.go"); got != "base2" {
+		t.Fatalf("after resync f.go = %q, want canonical base2", got)
+	}
+	if c, _ := node.SyncUp(dir); len(c) != 0 {
+		t.Fatalf("post-resync sync should be clean, got %+v", c)
+	}
+}
+
+// Operator chooses resolve: the held file gets 3-way markers for the agent to reconcile.
+func TestNodeStartupConflictResolve(t *testing.T) {
+	core, node, dir, _ := startupConflict(t)
+	core.SetNodeDirective("macos", ConflictResolve)
+	node.Heartbeat()
+	node.ApplyDirective(dir, node.TakeDirective())
+	got := read(t, dir, "f.go")
+	if !workspace.HasConflictMarkers([]byte(got)) || !strings.Contains(got, "macos-local") || !strings.Contains(got, "base2") {
+		t.Fatalf("resolve should write 3-way markers with both sides, got:\n%s", got)
 	}
 }
 

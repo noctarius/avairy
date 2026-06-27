@@ -273,30 +273,27 @@ Ranked roughly by value-to-effort within each group.
     wheel), auto-following the tail unless the operator has scrolled up. Applies to Conversation
     and, ideally, the Handovers/Tasks/Approvals/Conflicts lists too.
 
-21. **Operator choice on startup conflicts (full resync vs. resolve).** A node that finds conflicts
-    on its first sync (genuine divergence: it was offline, made local edits, and the hub moved on)
-    currently just writes git-style markers and proceeds — the mid-run #3 flow. At startup a clean
-    discard is often the right call, so the node should hold the conflicted paths and surface the
-    choice to the **operator** (human) rather than auto-marking. Decisions locked: the **operator
-    decides** (via the existing Conflicts surface — TUI tab + web, extended), and the options are:
-    - **Full resync (checksum-manifest reconcile, NOT a wipe)** — the hub serves a manifest of every
-      path with its content checksum (+ version + age); the node compares it against its local tree
-      and applies only the delta: fetch added/changed files, delete paths the hub no longer has,
-      skip everything whose checksum already matches. For a large repo this transfers only what
-      actually differs instead of re-downloading the whole tree. The node's base is rebuilt from the
-      manifest so it's back in lockstep with canonical, local divergence discarded.
-    - **Resolve** — markers + reconcile, as today (may delegate to the agent, per #19).
-    - **Overview** — list the conflicted paths with local-vs-hub versions/checksums and a diff, plus
-      how old each side is, so the operator can choose between the former two.
+21. ~~**Operator choice on startup conflicts (full resync vs. resolve).**~~ ✅ Done. A node that hits
+    conflicts on its **first** sync (genuine divergence: offline, local edits, hub moved on) now
+    holds those paths (`startupHeld` — frozen, no markers, not pushed/clobbered) and routes the
+    choice to the **operator** instead of auto-marking. Wire: `PushRequest.FirstSync`; core raises
+    one per-node entry via `OnNodeConflict` (Source `node-startup`, with an overview summary —
+    paths + hub version + age from the new timestamp); the operator's verdict is stored
+    (`SetNodeDirective`) and rides back on the node's heartbeat (`HeartbeatResponse.Directive`),
+    which the node applies via `ApplyDirective`. Options, on the **operator** (Conflicts tab + web,
+    extended): the node keeps running (agent works non-conflicted files) until the verdict lands.
+    - **Resync** (`r` in the TUI / "Resync" in the web) — a **checksum-manifest reconcile, not a
+      wipe**: `Hub.Manifest()` (served at `/sync/manifest`) gives every path's checksum + version +
+      age; `Node.Resync` keeps files whose checksum already matches, overwrites diverged ones,
+      deletes paths the hub dropped, fetches the rest, and rebuilds base — only the delta crosses
+      the wire (scales to large repos). Local divergence discarded.
+    - **Resolve** (`x` / "Resolve") — write the 3-way markers and reconcile as today (#19).
+    - **Overview** (`o` / "Overview") — expand the entry to the per-path summary (hub version + age)
+      so the operator can choose between the former two.
 
-    Needs: startup-conflict detection that holds (doesn't auto-mark) + raises to the operator; a
-    **hub manifest endpoint** (path → checksum + version + timestamp; checksums are cheap — the hub
-    already content-hashes); the node-side delta apply (add/update/delete vs. local hashes, which
-    the node already keeps in `stamps`); an overview payload; and a **per-version timestamp on
-    `workspace.FileState`** (persisted in the hub snapshot) so "age" is real, not a version gap. The
-    node keeps running meanwhile (heartbeat, agent works non-conflicted files) until the operator
-    decides. Builds on #19's broker + ResumeFromHub; the manifest reconcile also generalizes to a
-    "repair drift" sync path beyond startup conflicts.
+    `FileState` gained a persisted `Modified` timestamp for the "age". Built on #19's broker +
+    ResumeFromHub; the manifest reconcile also stands alone as a "repair drift" sync path. Tests:
+    `TestResyncReconcilesAgainstManifest`, `TestNodeStartupConflict{Resync,Resolve}`.
 
 ### Single operator
 

@@ -78,7 +78,13 @@ const (
 	decisionAllowSession = "allow_for_session"
 	decisionMine         = "mine"
 	decisionDelegate     = "delegate"
+	decisionResync       = "resync"  // node-startup conflict: checksum-manifest reconcile (#21)
+	decisionResolve      = "resolve" // node-startup conflict: write markers, agent reconciles
 )
+
+// conflictSourceNodeStartup marks a per-node startup conflict (resync/resolve/overview) vs. a
+// per-file seed conflict (mine/delegate).
+const conflictSourceNodeStartup = "node-startup"
 
 // ControlInfo surfaces node-enrollment details in the TUI (the alt-screen hides stdout, so
 // printing the token wouldn't be visible).
@@ -138,9 +144,10 @@ type Model struct {
 
 	control     *ControlInfo
 	token       string
-	approvalSel int  // selected row in the Approvals view
-	conflictSel int  // selected row in the Conflicts view
-	quitArmed   bool // first ctrl+c arms; second (in succession) quits
+	approvalSel int             // selected row in the Approvals view
+	conflictSel int             // selected row in the Conflicts view
+	conflictExp map[string]bool // node-startup conflicts whose overview is expanded
+	quitArmed   bool            // first ctrl+c arms; second (in succession) quits
 
 	seen map[uint64]bool
 }
@@ -186,9 +193,10 @@ func NewModel(deps Deps) *Model {
 		width:   100,
 		height:  30,
 		input:   ta,
-		agents:  make(map[string]*agentState),
-		control: deps.Control,
-		seen:    make(map[uint64]bool),
+		agents:      make(map[string]*agentState),
+		control:     deps.Control,
+		seen:        make(map[uint64]bool),
+		conflictExp: make(map[string]bool),
 	}
 	if m.control != nil && m.control.CurrentToken != nil {
 		m.token = m.control.CurrentToken()
@@ -479,6 +487,27 @@ func (m *Model) handleConflictKey(s string) bool {
 			m.conflictSel++
 		}
 		return true
+	}
+	if m.conflictSel < 0 || m.conflictSel >= len(pend) {
+		return false
+	}
+	cf := pend[m.conflictSel]
+	if cf.Source == conflictSourceNodeStartup {
+		// Per-node startup conflict: full resync, resolve (markers + agent), or toggle the overview.
+		switch s {
+		case "r":
+			m.resolveConflictSelected(pend, decisionResync, "")
+			return true
+		case "x":
+			m.resolveConflictSelected(pend, decisionResolve, "")
+			return true
+		case "o", "enter":
+			m.conflictExp[cf.ID] = !m.conflictExp[cf.ID]
+			return true
+		}
+		return false
+	}
+	switch s { // per-file seed conflict
 	case "m", "enter":
 		m.resolveConflictSelected(pend, decisionMine, "")
 		return true
@@ -677,7 +706,12 @@ func (m *Model) render() string {
 			help = "tab: view · ↑/↓ (j/k): select · y: allow · a: allow kind this session · n: deny · esc: stop · ctrl+c ×2: quit"
 		}
 		if m.tab == tabConflicts {
-			help = "tab: view · ↑/↓ (j/k): select · m: I'll resolve · d: delegate to ‹" + m.selectedTarget() + "› (ctrl+t) · ctrl+c ×2: quit"
+			pend := m.pendingConflicts()
+			if m.conflictSel >= 0 && m.conflictSel < len(pend) && pend[m.conflictSel].Source == conflictSourceNodeStartup {
+				help = "tab: view · ↑/↓ (j/k): select · r: resync (take canonical) · x: resolve (markers) · o: overview · ctrl+c ×2: quit"
+			} else {
+				help = "tab: view · ↑/↓ (j/k): select · m: I'll resolve · d: delegate to ‹" + m.selectedTarget() + "› (ctrl+t) · ctrl+c ×2: quit"
+			}
 		}
 		if m.control != nil {
 			help += " · ctrl+e: new enroll token"
@@ -771,6 +805,15 @@ func (m *Model) bodyLines() []string {
 			marker := "  "
 			if i == m.conflictSel {
 				marker = activeTab.Render("▸ ")
+			}
+			if cf.Source == conflictSourceNodeStartup {
+				out = append(out, fmt.Sprintf("%snode %s — startup conflict %s", marker, cf.Path, helpStyle.Render("(r: resync · x: resolve · o: overview)")))
+				if m.conflictExp[cf.ID] && cf.Detail != "" {
+					for _, dl := range strings.Split(cf.Detail, "\n") {
+						out = append(out, helpStyle.Render("      "+dl))
+					}
+				}
+				continue
 			}
 			line := fmt.Sprintf("%s%s (hub v%d, %s) — has git-style markers; edit to resolve", marker, cf.Path, cf.HubVersion, cf.Source)
 			if cf.Detail != "" {

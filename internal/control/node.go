@@ -40,6 +40,11 @@ type Node struct {
 	ignore      workspace.Ignore
 	conflicts   map[string]bool // paths holding unresolved conflict markers (locked from sync)
 
+	firstSync   bool            // true until the first SyncUp completes (startup-conflict detection, #21)
+	held        []SyncResult    // first-sync conflicts held for the operator's resync/resolve verdict
+	startupHeld map[string]bool // paths frozen awaiting that verdict — skipped from sync regardless of markers
+	directive   string          // latest operator directive from a heartbeat (TakeDirective drains it)
+
 	reMu sync.Mutex // serializes re-enrollment so concurrent 401s don't stampede
 }
 
@@ -52,7 +57,9 @@ func NewNode(coreURL, id string) *Node {
 		base:      make(map[string]uint64),
 		stamps:    make(workspace.Stamps),
 		ignore:    workspace.DefaultIgnore(),
-		conflicts: make(map[string]bool),
+		conflicts:   make(map[string]bool),
+		firstSync:   true,
+		startupHeld: make(map[string]bool),
 	}
 }
 
@@ -85,9 +92,53 @@ func (n *Node) enroll(ctx context.Context) error {
 	return nil
 }
 
-// Heartbeat marks the node live at core.
+// Heartbeat marks the node live at core and stashes any operator directive the response carries
+// (a held startup conflict's verdict, #21); drain it with TakeDirective.
 func (n *Node) Heartbeat() error {
-	return n.post(PathHeartbeat, n.sess(), HeartbeatRequest{NodeID: n.ID}, nil)
+	var resp HeartbeatResponse
+	if err := n.post(PathHeartbeat, n.sess(), HeartbeatRequest{NodeID: n.ID}, &resp); err != nil {
+		return err
+	}
+	if resp.Directive != "" {
+		n.mu.Lock()
+		n.directive = resp.Directive
+		n.mu.Unlock()
+	}
+	return nil
+}
+
+// TakeDirective returns and clears the latest operator directive (empty if none).
+func (n *Node) TakeDirective() string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	d := n.directive
+	n.directive = ""
+	return d
+}
+
+// ApplyDirective acts on the operator's verdict for held startup conflicts (#21): "resync" runs a
+// checksum-manifest reconcile (discarding local divergence); "resolve" writes git-style markers
+// into the held files so the agent reconciles them as usual. Either way the hold is released.
+func (n *Node) ApplyDirective(dir, directive string) error {
+	switch directive {
+	case ConflictResync:
+		n.mu.Lock()
+		n.held = nil
+		n.startupHeld = make(map[string]bool)
+		n.mu.Unlock()
+		return n.Resync(dir) // also rebuilds base/stamps/conflicts from the manifest
+	case ConflictResolve:
+		n.mu.Lock()
+		held := n.held
+		n.held = nil
+		n.startupHeld = make(map[string]bool) // release the freeze; markConflict re-locks via markers
+		n.mu.Unlock()
+		for _, r := range held {
+			n.markConflict(dir, r) // writes markers, locks, adopts hub version as base
+		}
+		return nil
+	}
+	return nil
 }
 
 // SyncUp scans dir and pushes changes (and deletions) to the hub, advancing local base for
@@ -103,9 +154,15 @@ func (n *Node) SyncUp(dir string) ([]SyncResult, error) {
 	changedSet := make(map[string]bool, len(changed))
 	for _, c := range changed {
 		changedSet[c.Path] = true
-		// A path holding unresolved conflict markers is LOCKED: don't push it (that would land
-		// the markers in the hub). When the agent edits it marker-free, it's resolved → unlock
-		// and push from the adopted base so it lands as the next version.
+		// A startup-held path is frozen awaiting the operator's verdict (#21): never push it,
+		// regardless of content, until ApplyDirective releases it.
+		if n.startupHeld[c.Path] {
+			n.stamps[c.Path] = stampOf[c.Path]
+			continue
+		}
+		// A path holding unresolved conflict markers is LOCKED: don't push it (that would land the
+		// markers in the hub). When the agent edits it marker-free, it's resolved → unlock and push
+		// from the adopted base so it lands as the next version.
 		if workspace.HasConflictMarkers(c.Content) {
 			n.conflicts[c.Path] = true
 			n.stamps[c.Path] = stampOf[c.Path]
@@ -122,16 +179,18 @@ func (n *Node) SyncUp(dir string) ([]SyncResult, error) {
 		}
 	}
 	for path, b := range n.base {
-		if !seen[path] && !n.conflicts[path] { // a conflicted (held) file isn't a deletion
+		if !seen[path] && !n.conflicts[path] && !n.startupHeld[path] { // a held file isn't a deletion
 			wire = append(wire, SyncChange{Path: path, Deleted: true, Base: b})
 		}
 	}
+	first := n.firstSync
+	n.firstSync = false
 	if len(wire) == 0 {
 		return nil, nil // nothing changed → no round-trip
 	}
 
 	var resp PushResponse
-	if err := n.post(PathPush, n.sess(), PushRequest{Changes: wire}, &resp); err != nil {
+	if err := n.post(PathPush, n.sess(), PushRequest{Changes: wire, FirstSync: first}, &resp); err != nil {
 		return nil, err
 	}
 	var conflicts []SyncResult
@@ -145,9 +204,17 @@ func (n *Node) SyncUp(dir string) ([]SyncResult, error) {
 				delete(n.stamps, r.Path) // a deletion
 			}
 		case r.Conflict:
-			// Write 3-way markers into the local file (the agent's edit is the "ours" side, so
-			// nothing is lost), adopt the hub version as base, and lock the path until resolved.
-			n.markConflict(dir, r)
+			if first {
+				// Startup conflict: HOLD it (freeze the path, no markers) for the operator's verdict
+				// — resync or resolve, delivered via ApplyDirective. Keep both sides in n.held so a
+				// later "resolve" can still write the 3-way markers.
+				n.startupHeld[r.Path] = true
+				n.held = append(n.held, r)
+			} else {
+				// Mid-run: write 3-way markers (the agent's edit is the "ours" side, so nothing is
+				// lost), adopt the hub version as base, and lock until the agent resolves it.
+				n.markConflict(dir, r)
+			}
 			conflicts = append(conflicts, r)
 		}
 	}
@@ -225,6 +292,7 @@ func (n *Node) Resync(dir string) error {
 	n.base = make(map[string]uint64)
 	n.stamps = make(workspace.Stamps)
 	n.conflicts = make(map[string]bool)
+	n.startupHeld = make(map[string]bool)
 	for path, e := range manifest {
 		if st, ok := stampOf[path]; ok && st.Hash == e.Checksum {
 			// Local copy already matches canonical → adopt the version, skip the download.
@@ -264,8 +332,8 @@ func (n *Node) SyncDown(dir string) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	for _, f := range resp.Files {
-		if n.conflicts[f.Path] {
-			continue // LOCKED: the agent is resolving conflict markers here — don't clobber it
+		if n.conflicts[f.Path] || n.startupHeld[f.Path] {
+			continue // LOCKED/HELD: a reconcile is in progress here — don't clobber it
 		}
 		if err := workspace.ApplyFile(dir, workspace.FileState{
 			Path: f.Path, Content: f.Content, Mode: fs.FileMode(f.Mode), Version: f.Version, Deleted: f.Deleted,

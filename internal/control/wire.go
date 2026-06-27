@@ -93,6 +93,13 @@ type HeartbeatRequest struct {
 	NodeID string `json:"nodeId"`
 }
 
+// HeartbeatResponse carries any operator directive for the node — currently the verdict on a held
+// startup conflict (item #21): "resync" (checksum-manifest reconcile) or "resolve" (write markers,
+// reconcile as usual). Empty when there's nothing to do. Delivered (and cleared) on heartbeat.
+type HeartbeatResponse struct {
+	Directive string `json:"directive,omitempty"`
+}
+
 // SyncChange is a node's proposed change to one path (content is base64 via []byte).
 type SyncChange struct {
 	Path    string `json:"path"`
@@ -102,9 +109,12 @@ type SyncChange struct {
 	Base    uint64 `json:"base"`
 }
 
-// PushRequest carries a batch of changes to the canonical hub.
+// PushRequest carries a batch of changes to the canonical hub. FirstSync marks a node's very first
+// push after (re)start: conflicts then are owner-less startup conflicts routed to the operator's
+// choice (resync/resolve, item #21) rather than auto-marked for the agent.
 type PushRequest struct {
-	Changes []SyncChange `json:"changes"`
+	Changes   []SyncChange `json:"changes"`
+	FirstSync bool         `json:"firstSync,omitempty"`
 }
 
 // SyncResult reports the outcome of one pushed change. On Conflict, HubVersion/HubContent

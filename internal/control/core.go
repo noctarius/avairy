@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"strings"
@@ -56,13 +57,19 @@ type Core struct {
 	// node already has (incremental; DESIGN.md §9). (nil, nil) means the node is already current.
 	// Nodes pull this to build a local read-only mirror. nil field → /repo/bundle 404s.
 	Bundle func(ctx context.Context, have []string) ([]byte, error)
+	// OnNodeConflict, if set, routes a node's held startup conflicts (item #21) to the operator's
+	// choice (resync/resolve) rather than the agent. summary is a human-readable overview of the
+	// conflicted paths (with hub versions/ages). Raised once per node until the operator decides.
+	OnNodeConflict func(nodeID, summary string, paths []string)
 
-	mu        sync.Mutex
-	conflicts map[string]uint64 // agent\x00path -> last-notified hub version
-	pending   string            // current operator-facing token (hand to the next node)
-	bound     map[string]string // enrollment token -> node id it's bound to (reusable for rejoin)
-	sessions  map[string]string // sessionToken -> nodeID
-	nodes     map[string]*NodeInfo
+	mu         sync.Mutex
+	conflicts  map[string]uint64 // agent\x00path -> last-notified hub version
+	pending    string            // current operator-facing token (hand to the next node)
+	bound      map[string]string // enrollment token -> node id it's bound to (reusable for rejoin)
+	sessions   map[string]string // sessionToken -> nodeID
+	nodes      map[string]*NodeInfo
+	directives map[string]string // nodeID -> pending heartbeat directive (resync/resolve)
+	startup    map[string]bool   // nodeID -> startup conflict already raised (dedup until resolved)
 }
 
 // NewCore returns a Core backed by hub, journaling lifecycle events to jrnl.
@@ -76,7 +83,18 @@ func NewCore(hub *workspace.Hub, jrnl journal.Log) *Core {
 		sessions:        make(map[string]string),
 		nodes:           make(map[string]*NodeInfo),
 		conflicts:       make(map[string]uint64),
+		directives:      make(map[string]string),
+		startup:         make(map[string]bool),
 	}
+}
+
+// SetNodeDirective queues the operator's verdict on a node's held startup conflict; the node picks
+// it up on its next heartbeat. Clears the dedup flag so a later restart can raise again (#21).
+func (c *Core) SetNodeDirective(nodeID, decision string) {
+	c.mu.Lock()
+	c.directives[nodeID] = decision
+	delete(c.startup, nodeID)
+	c.mu.Unlock()
 }
 
 // CurrentToken returns the operator-facing enrollment token for the next node (minting one if
@@ -292,7 +310,11 @@ func (c *Core) handleEvents(nodeID string, w http.ResponseWriter, r *http.Reques
 
 func (c *Core) handleHeartbeat(nodeID string, w http.ResponseWriter, r *http.Request) {
 	c.touch(nodeID)
-	writeJSON(w, map[string]bool{"ok": true})
+	c.mu.Lock()
+	dir := c.directives[nodeID]
+	delete(c.directives, nodeID) // deliver once
+	c.mu.Unlock()
+	writeJSON(w, HeartbeatResponse{Directive: dir})
 }
 
 func (c *Core) handlePush(nodeID string, w http.ResponseWriter, r *http.Request) {
@@ -302,6 +324,7 @@ func (c *Core) handlePush(nodeID string, w http.ResponseWriter, r *http.Request)
 	}
 	c.touch(nodeID)
 	results := make([]SyncResult, 0, len(req.Changes))
+	var startup []string // conflicted paths on a first sync → operator's choice, not the agent
 	for _, ch := range req.Changes {
 		res := c.hub.Push(nodeID, workspace.Change{
 			Path:    ch.Path,
@@ -316,14 +339,48 @@ func (c *Core) handlePush(nodeID string, w http.ResponseWriter, r *http.Request)
 			sr.HubVersion = res.Conflict.Hub.Version
 			sr.HubContent = res.Conflict.Hub.Content
 			c.jrnl.Append(journal.KindSystem, nodeID, map[string]any{"event": "sync_conflict", "path": ch.Path})
-			// Route to the agent for reconciliation — once per hub version, not every tick.
-			if c.OnConflict != nil && c.newConflict(nodeID, ch.Path, res.Conflict.Hub.Version) {
+			if req.FirstSync {
+				// Startup conflict: the node holds it; the operator chooses resync vs resolve (#21).
+				startup = append(startup, ch.Path)
+			} else if c.OnConflict != nil && c.newConflict(nodeID, ch.Path, res.Conflict.Hub.Version) {
+				// Mid-run: route to the agent for reconciliation — once per hub version, not every tick.
 				c.OnConflict(nodeID, ch.Path, res.Conflict.Hub.Version, res.Conflict.Hub.Content, res.Conflict.Incoming.Content)
 			}
 		}
 		results = append(results, sr)
 	}
+	c.raiseStartupConflict(nodeID, startup)
 	writeJSON(w, PushResponse{Results: results})
+}
+
+// raiseStartupConflict routes a node's first-sync conflicts to the operator's choice (#21), once
+// per node until the operator decides. The summary lists the conflicted paths with their hub
+// version + age, for the operator's inline overview.
+func (c *Core) raiseStartupConflict(nodeID string, paths []string) {
+	if len(paths) == 0 || c.OnNodeConflict == nil {
+		return
+	}
+	c.mu.Lock()
+	already := c.startup[nodeID]
+	c.startup[nodeID] = true
+	c.mu.Unlock()
+	if already {
+		return
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d file(s) diverged from canonical while %q was offline:\n", len(paths), nodeID)
+	for _, p := range paths {
+		if f, ok := c.hub.Get(p); ok {
+			age := "unknown age"
+			if !f.Modified.IsZero() {
+				age = time.Since(f.Modified).Round(time.Second).String() + " ago"
+			}
+			fmt.Fprintf(&b, "  %s — hub v%d, changed %s\n", p, f.Version, age)
+		} else {
+			fmt.Fprintf(&b, "  %s\n", p)
+		}
+	}
+	c.OnNodeConflict(nodeID, strings.TrimRight(b.String(), "\n"), paths)
 }
 
 func (c *Core) handlePull(nodeID string, w http.ResponseWriter, r *http.Request) {

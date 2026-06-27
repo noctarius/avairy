@@ -329,6 +329,13 @@ func main() {
 				path, hubVersion, path)
 			b.Publish("avairy", bus.Agent(agentID), body, agent.DeliverySteer)
 		}
+		// A node's first-sync (startup) conflicts have no owning agent — surface the operator's
+		// choice (resync / resolve / overview) on the Conflicts surface; the verdict rides back to
+		// the node on its heartbeat (#21). One entry per node; Path carries the node id.
+		core.OnNodeConflict = func(nodeID, summary string, paths []string) {
+			conflictBroker.Raise(control.OperatorConflict{Path: nodeID, Source: "node-startup", Detail: summary})
+		}
+		svc.NodeDirective = core.SetNodeDirective
 		// When a node enrolls, register its agent on the bus (identity, caps, inbox); deliver
 		// that agent's inbound bus messages back over the control channel.
 		core.OnEnroll = func(nodeID string, caps map[string]string) {

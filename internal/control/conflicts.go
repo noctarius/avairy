@@ -14,6 +14,11 @@ const (
 	ConflictMine = "mine"
 	// ConflictDelegate: hand it to an agent, which edits the markers out and calls resolve_conflict.
 	ConflictDelegate = "delegate"
+	// ConflictResync / ConflictResolve: the operator's verdict on a node's held startup conflict
+	// (#21). Resync = checksum-manifest reconcile (discard local divergence); Resolve = write markers
+	// and reconcile as usual. Routed back to the node as a heartbeat directive.
+	ConflictResync  = "resync"
+	ConflictResolve = "resolve"
 )
 
 // OperatorConflict is a file conflict with no owning agent — the operator's own seed workspace
