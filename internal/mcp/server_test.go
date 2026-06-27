@@ -110,3 +110,37 @@ func TestPostAndClaimTaskCapabilityGate(t *testing.T) {
 		t.Fatalf("bob claim = %q", got)
 	}
 }
+
+// Reproducer (#bug): a node's PullInbox loop drains the agent's wake queue (DrainInbox) and discards
+// context-only messages it won't wake on (#25 — agent→role/broadcast). That must NOT consume the
+// agent's read_inbox: a role-addressed peer message has to remain readable. Before the wake queue
+// was split from the read_inbox buffer, the daemon's drain stole the message and read_inbox went
+// empty — exactly the "linux → role:macos never reaches macos" symptom.
+func TestNodeWakeDrainDoesNotStealReadInbox(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.RegisterAgent("macos", AgentRoles("macos", map[string]string{"os": "darwin"}), map[string]string{"os": "darwin"})
+	s.RegisterAgent("linux", AgentRoles("linux", map[string]string{"os": "linux"}), map[string]string{"os": "linux"})
+
+	// linux addresses macos by role (the form the node won't wake on).
+	mustText(t, must(s.handleSendMessage(asAgent("linux"), call(map[string]any{"to": "role:macos", "body": "cross-check please"}))))
+
+	// The node daemon's PullInbox loop drains macos's wake queue every tick (and discards the
+	// context-only message because Wake()==false). This must not empty read_inbox.
+	_ = s.DrainInbox("macos")
+
+	res := must(s.handleReadInbox(asAgent("macos"), call(nil)))
+	var msgs []inboxMessage
+	if err := json.Unmarshal([]byte(mustText(t, res)), &msgs); err != nil {
+		t.Fatalf("inbox json: %v", err)
+	}
+	if len(msgs) != 1 || msgs[0].From != "linux" || msgs[0].Body != "cross-check please" {
+		t.Fatalf("read_inbox = %+v; the node's wake drain stole the role-addressed message", msgs)
+	}
+}
+
+func must(res *mcpgo.CallToolResult, err error) *mcpgo.CallToolResult {
+	if err != nil {
+		panic(err)
+	}
+	return res
+}

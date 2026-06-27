@@ -60,6 +60,12 @@ type registered struct {
 	caps   map[string]string
 	ch     <-chan bus.Message // the agent's bus inbox; read_inbox drains it
 	cancel func()
+	// wakeCh is a SECOND, independent subscription drained by the node daemon's PullInbox to decide
+	// what to wake the agent on. It must be separate from ch so the daemon's drain (which discards
+	// context-only messages it won't wake on, #25) doesn't empty the agent's read_inbox. This mirrors
+	// core-local agents, where the runner and read_inbox already use distinct subscriptions.
+	wakeCh     <-chan bus.Message
+	wakeCancel func()
 }
 
 // inboxMessage is the wire view of a bus message returned by read_inbox.
@@ -123,11 +129,17 @@ func (s *Server) HTTPHandler() http.Handler {
 // the daemon when an agent enrolls; in the single-machine case, by the harness.
 func (s *Server) RegisterAgent(id string, roles []string, caps map[string]string) {
 	ch, cancel := s.bus.Subscribe(id, roles...)
-	reg := &registered{roles: roles, caps: caps, ch: ch, cancel: cancel}
+	wakeCh, wakeCancel := s.bus.Subscribe(id, roles...) // independent stream for the node's wake loop
+	reg := &registered{roles: roles, caps: caps, ch: ch, cancel: cancel, wakeCh: wakeCh, wakeCancel: wakeCancel}
 
 	s.mu.Lock()
-	if old := s.agents[id]; old != nil && old.cancel != nil {
-		old.cancel()
+	if old := s.agents[id]; old != nil {
+		if old.cancel != nil {
+			old.cancel()
+		}
+		if old.wakeCancel != nil {
+			old.wakeCancel()
+		}
 	}
 	s.agents[id] = reg
 	s.mu.Unlock()
@@ -141,13 +153,20 @@ func (s *Server) Unregister(id string) {
 	reg := s.agents[id]
 	delete(s.agents, id)
 	s.mu.Unlock()
-	if reg != nil && reg.cancel != nil {
-		reg.cancel()
+	if reg != nil {
+		if reg.cancel != nil {
+			reg.cancel()
+		}
+		if reg.wakeCancel != nil {
+			reg.wakeCancel()
+		}
 	}
 }
 
-// DrainInbox non-blockingly returns and clears the bus messages buffered for an agent. Used
-// by the control channel to deliver inbound messages to a remote agent's daemon.
+// DrainInbox non-blockingly returns and clears the WAKE-queue messages buffered for an agent. Used
+// by the control channel for a node daemon's PullInbox loop: the daemon decides what to wake the
+// agent on. It drains the wake queue, NOT the read_inbox buffer (reg.ch) — so the daemon discarding
+// context-only messages it won't wake on doesn't empty the agent's read_inbox.
 func (s *Server) DrainInbox(agentID string) []bus.Message {
 	reg := s.agent(agentID)
 	if reg == nil {
@@ -156,7 +175,7 @@ func (s *Server) DrainInbox(agentID string) []bus.Message {
 	var out []bus.Message
 	for {
 		select {
-		case m := <-reg.ch:
+		case m := <-reg.wakeCh:
 			out = append(out, m)
 		default:
 			return out
