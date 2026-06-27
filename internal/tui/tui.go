@@ -214,6 +214,8 @@ var (
 	sepStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
 	ctrlStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("13"))
 	warnStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
+	// reasoningStyle dims agent thinking/reasoning so it reads as background to the actual reply (#23).
+	reasoningStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Italic(true)
 )
 
 // NewModel builds the model, backfilling existing journal records and subscribing to new ones.
@@ -652,6 +654,11 @@ func (m *Model) apply(rec journal.Record) {
 			case agent.EventText:
 				a.status = "working"
 				m.addConversation(rec.Actor + ":\n" + m.markdown(ev.Text)) // agents emit markdown — render it (#23)
+			case agent.EventReasoning:
+				a.status = "working"
+				if t := strings.TrimSpace(ev.Text); t != "" {
+					m.addConversation(reasoningStyle.Render(fmt.Sprintf("%s 💭 %s", rec.Actor, t)))
+				}
 			case agent.EventToolUse:
 				a.status = "working"
 				m.addConversation(fmt.Sprintf("%s ⚙ %s", rec.Actor, agent.ToolSummary(ev.Tool)))

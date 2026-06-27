@@ -39,6 +39,9 @@ type rawBlock struct {
 	// text
 	Text string `json:"text"`
 
+	// thinking (extended thinking blocks; redacted_thinking carries no readable text)
+	Thinking string `json:"thinking"`
+
 	// tool_use
 	ID    string          `json:"id"`
 	Name  string          `json:"name"`
@@ -76,6 +79,11 @@ func parseLine(line []byte) (events []agent.Event, sessionID string) {
 			switch b.Type {
 			case "text":
 				events = append(events, agent.Event{Type: agent.EventText, Text: b.Text, Raw: clone(line)})
+			case "thinking":
+				events = append(events, agent.Event{Type: agent.EventReasoning, Text: b.Thinking, Raw: clone(line)})
+			case "redacted_thinking":
+				// Encrypted reasoning the model emitted but we can't read — record that it happened.
+				events = append(events, agent.Event{Type: agent.EventReasoning, Text: "[redacted thinking]", Raw: clone(line)})
 			case "tool_use":
 				events = append(events, agent.Event{
 					Type: agent.EventToolUse,

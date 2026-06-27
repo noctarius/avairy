@@ -12,6 +12,8 @@ const (
 	lineRateLimit  = `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed"},"session_id":"febeeb5a"}`
 	lineAssistant  = `{"type":"assistant","message":{"model":"claude-opus-4-8","role":"assistant","content":[{"type":"text","text":"OK"}],"stop_reason":null,"usage":{"input_tokens":4423,"output_tokens":1}},"session_id":"febeeb5a"}`
 	lineToolUse    = `{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"tu_1","name":"Bash","input":{"command":"go test ./..."}}]}}`
+	lineThinking   = `{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Let me check the failing test first.","signature":"abc"}]}}`
+	lineRedacted   = `{"type":"assistant","message":{"role":"assistant","content":[{"type":"redacted_thinking","data":"eyJ..."}]}}`
 	lineToolResult = `{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu_1","content":"ok\n"}]}}`
 	lineResultOK   = `{"type":"result","subtype":"success","is_error":false,"result":"OK","stop_reason":"end_turn","total_cost_usd":0.1995,"usage":{"input_tokens":4423,"output_tokens":4}}`
 	lineResultErr  = `{"type":"result","subtype":"error","is_error":true,"result":"boom","total_cost_usd":0.01}`
@@ -41,6 +43,17 @@ func TestParseLine_AssistantText(t *testing.T) {
 	}
 	if len(evs[0].Raw) == 0 {
 		t.Fatal("assistant text: Raw not populated")
+	}
+}
+
+func TestParseLine_Thinking(t *testing.T) {
+	evs, _ := parseLine([]byte(lineThinking))
+	if len(evs) != 1 || evs[0].Type != agent.EventReasoning || evs[0].Text != "Let me check the failing test first." {
+		t.Fatalf("thinking: got %+v", evs)
+	}
+	evs, _ = parseLine([]byte(lineRedacted))
+	if len(evs) != 1 || evs[0].Type != agent.EventReasoning || evs[0].Text != "[redacted thinking]" {
+		t.Fatalf("redacted_thinking: got %+v", evs)
 	}
 }
 
