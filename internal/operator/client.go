@@ -192,6 +192,7 @@ func (c *Client) Deps() tui.Deps {
 			JoinFile:     cs.JoinFile,
 			OperatorJoin: cs.OperatorJoin,
 			WebURL:       cs.WebURL,
+			MTLSOnly:     cs.MTLSOnly,
 			CurrentToken: c.currentToken,
 			NewToken:     c.newToken,
 		}

@@ -91,6 +91,7 @@ type ControlInfo struct {
 	JoinFile     string        // path to the one-string join bundle (core URL + CA + token) for a new node
 	OperatorJoin string        // path to the operator-join bundle (for a remote TUI to attach, #18)
 	WebURL       string        // browser operator console URL, with token (#17)
+	MTLSOnly     bool          // token enrollment is disabled — nodes join by mTLS client cert only
 }
 
 const (
@@ -617,18 +618,26 @@ func (m *Model) render() string {
 
 	controlLines := 0
 	if m.control != nil {
-		line := fmt.Sprintf("control %s · bus %s · enroll token: %s", m.control.ControlURL, m.control.BusBase, m.token)
-		if m.control.JoinFile != "" {
-			line += " · join: " + m.control.JoinFile
-		}
-		if m.control.OperatorJoin != "" {
-			line += " · op-join: " + m.control.OperatorJoin
+		// Spread the control info over a few lines so long values (notably the web URL) stay fully
+		// visible instead of being truncated off the end of one packed line.
+		var ls []string
+		ls = append(ls, fmt.Sprintf("control %s · bus %s", m.control.ControlURL, m.control.BusBase))
+		// Under mTLS there's no enroll token (nodes join by client cert — see docs), so show
+		// nothing. Otherwise show the token + node-join path.
+		if !m.control.MTLSOnly {
+			e := "enroll token: " + m.token
+			if m.control.JoinFile != "" {
+				e += " · node join: " + m.control.JoinFile
+			}
+			ls = append(ls, e)
 		}
 		if m.control.WebURL != "" {
-			line += " · web: " + m.control.WebURL
+			ls = append(ls, "web console: "+m.control.WebURL)
 		}
-		b.WriteString(ctrlStyle.Render(truncate(line, m.width)) + "\n")
-		controlLines++
+		for _, l := range ls {
+			b.WriteString(ctrlStyle.Render(truncate(l, m.width)) + "\n")
+			controlLines++
+		}
 		if m.control.Warn != "" {
 			b.WriteString(warnStyle.Render(truncate("⚠ "+m.control.Warn, m.width)) + "\n")
 			controlLines++

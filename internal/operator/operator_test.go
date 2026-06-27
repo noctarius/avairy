@@ -37,7 +37,7 @@ func TestOperatorServerClientRoundTrip(t *testing.T) {
 		Tasks:  bd.List,
 		Roster: func() []string { return []string{"alice", "linbot"} },
 	}
-	ts := httptest.NewServer(operator.NewServer(svc, "sekret").Handler())
+	ts := httptest.NewServer(operator.NewServer(svc, "sekret", true).Handler())
 	defer ts.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -89,7 +89,7 @@ func TestOperatorServerClientRoundTrip(t *testing.T) {
 func TestOperatorAuth(t *testing.T) {
 	j := journal.NewMemory()
 	svc := &operator.Services{Journal: j, Bus: bus.New(j), Approvals: control.NewApprovals(0), Conflicts: control.NewConflicts()}
-	ts := httptest.NewServer(operator.NewServer(svc, "sekret").Handler())
+	ts := httptest.NewServer(operator.NewServer(svc, "sekret", true).Handler())
 	defer ts.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)

@@ -59,6 +59,7 @@ type ControlState struct {
 	JoinFile     string `json:"joinFile,omitempty"`
 	OperatorJoin string `json:"operatorJoin,omitempty"`
 	WebURL       string `json:"webUrl,omitempty"` // browser console URL (with token), #17
+	MTLSOnly     bool   `json:"mtlsOnly,omitempty"`
 }
 
 // State is the snapshot the client polls/refreshes (everything the TUI reads synchronously while

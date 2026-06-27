@@ -15,6 +15,8 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -66,15 +68,22 @@ func main() {
 	send := flag.String("send", "", "one-shot (dev/verification): send this message to a local 'alice', wait for her turn, print the journal, and exit")
 	model := flag.String("model", "haiku", "model for the live agent (kept cheap by default; ignored for codex unless set)")
 	controlAddr := flag.String("control-addr", "", "if set, serve the node control API here (enrollment/sync) and print an enroll token")
-	mcpAddr := flag.String("mcp-addr", "127.0.0.1:0", "MCP bus listen address (use 0.0.0.0:PORT to allow remote nodes)")
+	mcpAddr := flag.String("mcp-addr", "127.0.0.1:7702", "MCP bus listen address (use 0.0.0.0:7702 to allow remote nodes)")
 	advertise := flag.String("advertise", "", "host/IP remote nodes use to reach this core (defaults to the listen host)")
 	workspaceDir := flag.String("workspace", "", "operator project dir to seed/sync into the canonical hub (with -control-addr)")
 	tlsCert := flag.String("tls-cert", "", "PEM cert file: serve the node control channel over TLS (recommended for remote nodes)")
 	tlsKey := flag.String("tls-key", "", "PEM private key file for -tls-cert")
-	tlsAuto := flag.Bool("tls-auto", false, "self-manage a CA under .avairy and serve the control channel over TLS (the CA travels to nodes in the join bundle; enables mTLS)")
+	tlsAuto := flag.Bool("tls-auto", false, "self-manage a CA under .avairy and serve the control channel over TLS with mTLS (the CA travels to nodes in the join bundle; mTLS disables token enrollment)")
 	gateEdits := flag.Bool("gate-edits", false, "also require operator approval for file edits (per-edit gating; allow-for-session avoids per-diff prompts)")
 	operatorToken := flag.String("operator-token", "", "bearer token for the remote operator API (#18); default: random, shown in the TUI / printed when headless")
+	web := flag.Bool("web", false, "serve the browser operator console at /operator/ui (#17); off by default")
 	flag.Parse()
+
+	// -tls-auto self-manages a CA that both signs core's server cert and verifies node client certs,
+	// i.e. mTLS. Once every node authenticates by client certificate, the shared enrollment token is
+	// just a weaker credential to leak — so mTLS disables token enrollment. (-tls-cert alone is only
+	// a server leaf cert: it encrypts the channel but can't verify clients, so it isn't mTLS.)
+	mtlsEnabled := *tlsAuto
 
 	// Durable, append-only journal (DESIGN.md §10) under .avairy/; falls back to memory-only.
 	// On restart, replay the persisted log so both the board and the TUI history resume.
@@ -161,13 +170,22 @@ func main() {
 		ca, serverCert, caPEM = c, cert, c.CertPEM()
 	}
 
+	// HTTP servers' per-connection errors (e.g. a browser refusing the self-signed cert, which the
+	// peer reports as a TLS alert) must NOT hit the terminal — under the TUI's alt-screen they
+	// corrupt the display. Route every server's ErrorLog to a file instead of the default stderr.
+	httpLog := log.New(io.Discard, "", 0)
+	if f, ferr := os.OpenFile(filepath.Join(".avairy", "server.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); ferr == nil {
+		httpLog = log.New(f, "", log.LstdFlags)
+		defer f.Close()
+	}
+
 	// Local agents on this machine always reach the bus via a PLAIN loopback listener — they
 	// never need TLS, even when the remote-facing bus is encrypted.
 	lnLocal, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		fail("listen local bus", err)
 	}
-	go http.Serve(lnLocal, mcpSrv.HTTPHandler())
+	go (&http.Server{Handler: mcpSrv.HTTPHandler(), ErrorLog: httpLog}).Serve(lnLocal)
 	_, localPort, _ := net.SplitHostPort(lnLocal.Addr().String())
 	busURL := "http://127.0.0.1:" + localPort + mcp.EndpointPath
 
@@ -178,16 +196,17 @@ func main() {
 		fail("listen", err)
 	}
 	busScheme := "http"
+	busSrv := &http.Server{Handler: mcpSrv.HTTPHandler(), ErrorLog: httpLog}
 	switch {
 	case *tlsAuto:
 		busScheme = "https"
-		srv := &http.Server{Handler: mcpSrv.HTTPHandler(), TLSConfig: &tls.Config{Certificates: []tls.Certificate{serverCert}}}
-		go srv.ServeTLS(ln, "", "")
+		busSrv.TLSConfig = &tls.Config{Certificates: []tls.Certificate{serverCert}}
+		go busSrv.ServeTLS(ln, "", "")
 	case *tlsCert != "" && *tlsKey != "":
 		busScheme = "https"
-		go http.ServeTLS(ln, mcpSrv.HTTPHandler(), *tlsCert, *tlsKey)
+		go busSrv.ServeTLS(ln, *tlsCert, *tlsKey)
 	default:
-		go http.Serve(ln, mcpSrv.HTTPHandler())
+		go busSrv.Serve(ln)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -302,8 +321,9 @@ func main() {
 		})
 
 		core := control.NewCore(hub, jrnl)
-		core.Approvals = approvals // one broker feeds both node agents and the operator TUI
-		core.Bundle = bundleFn     // serve the repo as a bundle for node mirrors (nil if no repo)
+		core.RequireClientCert = mtlsEnabled // reject token enrollment; nodes join by mTLS client cert
+		core.Approvals = approvals           // one broker feeds both node agents and the operator TUI
+		core.Bundle = bundleFn               // serve the repo as a bundle for node mirrors (nil if no repo)
 		core.OnConflict = func(agentID, path string, hubVersion uint64, hubContent, yourContent []byte) {
 			body := fmt.Sprintf("CONFLICT on %s — another agent changed it (now hub v%d). Your working copy now has git-style conflict markers (<<<<<<< your edit / ======= / >>>>>>> hub); edit %s to resolve them and remove the markers — it will then sync as the next version. (Or submit a merge directly with resolve_conflict.)",
 				path, hubVersion, path)
@@ -325,33 +345,30 @@ func main() {
 		// /operator/* → remote TUI/web clients; everything else → the node channel.
 		rootHandler := func() http.Handler {
 			mux := http.NewServeMux()
-			mux.Handle("/operator/", operator.NewServer(svc, opToken).Handler())
+			mux.Handle("/operator/", operator.NewServer(svc, opToken, *web).Handler())
 			mux.Handle("/", core.Handler())
 			return mux
 		}
 		ctrlScheme := "http"
+		ctrlSrv := &http.Server{Addr: *controlAddr, Handler: rootHandler(), ErrorLog: httpLog}
 		serve := func() error {
-			return http.ListenAndServe(*controlAddr, rootHandler())
+			return ctrlSrv.ListenAndServe()
 		}
 		switch {
 		case *tlsAuto:
 			ctrlScheme = "https"
-			srv := &http.Server{
-				Addr:    *controlAddr,
-				Handler: rootHandler(),
-				TLSConfig: &tls.Config{
-					Certificates: []tls.Certificate{serverCert}, // shared self-CA cert (built above)
-					ClientAuth:   tls.VerifyClientCertIfGiven,   // token OR client-cert auth
-					ClientCAs:    ca.Pool(),
-				},
+			ctrlSrv.TLSConfig = &tls.Config{
+				Certificates: []tls.Certificate{serverCert}, // shared self-CA cert (built above)
+				ClientAuth:   tls.VerifyClientCertIfGiven,   // verify a node's client cert (mTLS) if presented; the operator API on this listener presents none
+				ClientCAs:    ca.Pool(),
 			}
 			serve = func() error {
-				return srv.ListenAndServeTLS("", "")
+				return ctrlSrv.ListenAndServeTLS("", "")
 			}
 		case *tlsCert != "" && *tlsKey != "":
 			ctrlScheme = "https"
 			serve = func() error {
-				return http.ListenAndServeTLS(*controlAddr, *tlsCert, *tlsKey, rootHandler())
+				return ctrlSrv.ListenAndServeTLS(*tlsCert, *tlsKey)
 			}
 		}
 		go func() {
@@ -367,39 +384,63 @@ func main() {
 		if unreachableHost(hostOf(advertised(*advertise, ln.Addr().String()))) {
 			warn = "host not reachable from other machines — pass -advertise <ip/host> and bind -control-addr/-mcp-addr to 0.0.0.0:PORT"
 		}
-		// Write a one-string join bundle (core URL + CA + token) for the next node, refreshed
-		// whenever the token is read or rotated, so "the pubcert travels with the token".
+		// Token enrollment: write a one-string join bundle (core URL + CA + token) for the next
+		// node, refreshed whenever the token is read or rotated. Skipped under -mtls-only, where
+		// nodes authenticate by client cert (mint a join with `avairy mint-join`) and the shared
+		// token would only be a weaker credential to leak.
 		joinPath := filepath.Join(".avairy", "join")
 		writeJoin := func(tok string) {
 			jb := control.EncodeJoin(control.JoinBundle{Core: ctrlURL, Bus: busBase, CA: caPEM, Token: tok})
 			_ = os.WriteFile(joinPath, []byte(jb), 0o600)
 		}
 		curToken := func() string {
+			if mtlsEnabled {
+				return ""
+			}
 			t := core.CurrentToken()
 			writeJoin(t)
 			return t
 		}
-		newToken := func() string {
-			t := core.NewPendingToken()
-			writeJoin(t)
-			return t
+		var newTokenFn func() string
+		if !mtlsEnabled {
+			newTokenFn = func() string {
+				t := core.NewPendingToken()
+				writeJoin(t)
+				return t
+			}
 		}
 		// A remote operator (#18) attaches the same TUI from another machine. Bundle core URL + CA +
 		// the operator token into one .avairy/operator-join string (reusing the node join machinery),
-		// so `avairy-tui -join-file .avairy/operator-join` is a single argument.
+		// so `avairy-tui -join-file .avairy/operator-join` is a single argument (documented, not shown
+		// in the UI). This is the operator API credential, NOT a node credential — unaffected by mTLS.
 		operatorJoinFile = filepath.Join(".avairy", "operator-join")
 		_ = os.WriteFile(operatorJoinFile, []byte(control.EncodeJoin(control.JoinBundle{Core: ctrlURL, CA: caPEM, Token: opToken})), 0o600)
 		// Feed the operator surface so both the local TUI and remote clients see endpoints/token.
-		webURL := ctrlURL + operator.PathUI + "?token=" + opToken
-		svc.Control = func() *operator.ControlState {
-			return &operator.ControlState{ControlURL: ctrlURL, BusBase: busBase, Warn: warn, Token: curToken(), JoinFile: joinPath, OperatorJoin: operatorJoinFile, WebURL: webURL}
+		// The web console URL is only meaningful when -web actually serves the page.
+		webURL := ""
+		if *web {
+			webURL = ctrlURL + operator.PathUI + "?token=" + opToken
 		}
-		svc.NewToken = newToken
+		joinFileShown := joinPath
+		if mtlsEnabled {
+			joinFileShown = "" // no token join under mTLS-only
+		}
+		svc.Control = func() *operator.ControlState {
+			return &operator.ControlState{ControlURL: ctrlURL, BusBase: busBase, Warn: warn, Token: curToken(), JoinFile: joinFileShown, OperatorJoin: operatorJoinFile, WebURL: webURL, MTLSOnly: mtlsEnabled}
+		}
+		svc.NewToken = newTokenFn
 		// Under the TUI's alt-screen, stdout is hidden — so the token/join is shown in the TUI.
 		// Only print here when there's no TUI (headless serve, or a one-shot -send).
 		if *headless || *send != "" {
-			fmt.Printf("control API:  %s\nMCP bus base: %s\nenroll token: %s\njoin file:    %s\noperator join: %s\noperator token: %s\nweb console:  %s%s?token=%s\n",
-				ctrlURL, busBase, curToken(), joinPath, operatorJoinFile, opToken, ctrlURL, operator.PathUI, opToken)
+			fmt.Printf("control API:  %s\nMCP bus base: %s\n", ctrlURL, busBase)
+			// Token enrollment only — under mTLS nodes join by client cert (see docs); show nothing.
+			if !mtlsEnabled {
+				fmt.Printf("enroll token: %s\nnode join:    %s\n", curToken(), joinPath)
+			}
+			fmt.Printf("operator token: %s\n", opToken)
+			if webURL != "" {
+				fmt.Printf("web console:  %s\n", webURL)
+			}
 			if warn != "" {
 				fmt.Println("warning:", warn)
 			}
@@ -691,17 +732,34 @@ func truncateForBus(b []byte) string {
 	return string(b[:max]) + "\n… (truncated)"
 }
 
+// Default ports avairy serves on, used to infer URLs from -advertise: control on 7700 (the
+// convention), the MCP bus on 7702 (matches -mcp-addr's default). Give -core/-mcp to override.
+const (
+	defaultControlPort = "7700"
+	defaultBusPort     = "7702"
+)
+
 // mintJoin issues an mTLS client-cert join bundle from the self-managed CA (no enrollment
 // token): the node it's given to authenticates by certificate. Prints the join string.
 func mintJoin(argv []string) {
 	fs := flag.NewFlagSet("mint-join", flag.ExitOnError)
 	id := fs.String("id", "", "node id (becomes the client cert CN) — required")
-	coreURL := fs.String("core", "", "control API URL the node will dial (https://…) — required")
-	busURL := fs.String("mcp", "", "MCP bus base URL to bundle (so -family works from the join alone)")
+	advertise := fs.String("advertise", "", "core host/IP — derives -core (https://host:7700) and -mcp (https://host:7702); same value you passed core")
+	coreURL := fs.String("core", "", "control API URL the node will dial (https://…); overrides -advertise")
+	busURL := fs.String("mcp", "", "MCP bus base URL to bundle so -family works from the join alone; overrides -advertise")
 	dir := fs.String("dir", ".avairy", "directory holding the CA (ca.crt/ca.key)")
 	_ = fs.Parse(argv)
+	// Infer the URLs from -advertise + default ports when they're not given explicitly.
+	if *advertise != "" {
+		if *coreURL == "" {
+			*coreURL = "https://" + *advertise + ":" + defaultControlPort
+		}
+		if *busURL == "" {
+			*busURL = "https://" + *advertise + ":" + defaultBusPort
+		}
+	}
 	if *id == "" || *coreURL == "" {
-		fmt.Fprintln(os.Stderr, "mint-join: -id and -core are required")
+		fmt.Fprintln(os.Stderr, "mint-join: -id required, plus -advertise <host> (or an explicit -core URL)")
 		os.Exit(2)
 	}
 	ca, err := control.EnsureCA(*dir)

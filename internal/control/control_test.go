@@ -31,6 +31,29 @@ func writeFile(t *testing.T, dir, rel, content string) {
 	}
 }
 
+// The agent is registered (OnEnroll) BEFORE the node_enrolled record is journaled — otherwise the
+// operator's roster refresh, triggered by that record, can read an empty roster and the enrolled
+// node stays invisible in the fleet until it later emits an event.
+func TestOnEnrollRunsBeforeJournal(t *testing.T) {
+	core, srv := newCoreServer(t)
+	enrolledRecordSeenAtCallback := true
+	core.OnEnroll = func(id string, _ map[string]string) {
+		enrolledRecordSeenAtCallback = false
+		for _, r := range core.jrnl.Records() {
+			if d, ok := r.Data.(map[string]any); ok && d["event"] == "node_enrolled" {
+				enrolledRecordSeenAtCallback = true
+			}
+		}
+	}
+	n := NewNode(srv.URL, "macos")
+	if err := n.Enroll(core.CurrentToken(), "darwin", nil); err != nil {
+		t.Fatal(err)
+	}
+	if enrolledRecordSeenAtCallback {
+		t.Fatal("OnEnroll must run before node_enrolled is journaled (else the fleet misses the node)")
+	}
+}
+
 // Enroll two nodes; a file synced up from one appears when the other syncs down — over HTTP,
 // through the canonical hub.
 func TestEnrollAndSyncAcrossNodes(t *testing.T) {

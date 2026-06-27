@@ -102,6 +102,7 @@ func (s *Services) Deps() tui.Deps {
 				JoinFile:     cs.JoinFile,
 				OperatorJoin: cs.OperatorJoin,
 				WebURL:       cs.WebURL,
+				MTLSOnly:     cs.MTLSOnly,
 				CurrentToken: func() string { return s.Control().Token },
 				NewToken:     s.NewToken,
 			}

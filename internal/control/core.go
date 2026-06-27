@@ -42,6 +42,10 @@ type Core struct {
 	// LivenessTimeout is how long a node may go without contact before it's marked offline.
 	// Must exceed the node's heartbeat interval (default 2s); NewCore defaults it to 15s.
 	LivenessTimeout time.Duration
+	// RequireClientCert disables token enrollment: a node must present a verified mTLS client cert
+	// (its node id in the SAN). Set with -mtls-only — once every node authenticates by certificate,
+	// the shared enrollment token is just a weaker credential to leak, so lock it off.
+	RequireClientCert bool
 	// OnConflict, if set, routes a rejected (divergent) push to the responsible agent for
 	// reconciliation (DESIGN.md §9). It carries BOTH sides — the hub's current content and the
 	// agent's rejected edit — because the node's SyncDown will overwrite the local file with the
@@ -173,6 +177,10 @@ func (c *Core) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	}
 	// mTLS path: a verified client cert authenticates the node by its SAN, no token needed.
 	certID := verifiedNodeID(r)
+	if c.RequireClientCert && certID == "" {
+		http.Error(w, "invalid enrollment: client certificate required (token enrollment is disabled)", http.StatusUnauthorized)
+		return
+	}
 	if certID == "" && req.Token == "" {
 		http.Error(w, "invalid enrollment: token or client certificate required", http.StatusUnauthorized)
 		return
@@ -213,10 +221,13 @@ func (c *Core) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	if rejoin {
 		event = "node_rejoined"
 	}
-	c.jrnl.Append(journal.KindSystem, req.NodeID, map[string]any{"event": event, "os": req.OS, "caps": req.Caps})
+	// Register the agent on the bus BEFORE journaling the enrollment: the journal record wakes the
+	// operator's roster refresh, so if it ran first the refresh could read an empty roster (and not
+	// re-run until the agent later emits an event) — leaving an enrolled node invisible in the fleet.
 	if c.OnEnroll != nil {
 		c.OnEnroll(req.NodeID, req.Caps)
 	}
+	c.jrnl.Append(journal.KindSystem, req.NodeID, map[string]any{"event": event, "os": req.OS, "caps": req.Caps})
 	writeJSON(w, EnrollResponse{SessionToken: session})
 }
 

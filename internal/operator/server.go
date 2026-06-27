@@ -25,11 +25,13 @@ func RandomToken() string {
 type Server struct {
 	svc   *Services
 	token string
+	web   bool // serve the browser console at /operator/ui (opt-in via -web)
 }
 
 // NewServer wraps services with a bearer token. An empty token leaves the API OPEN (dev only).
-func NewServer(svc *Services, token string) *Server {
-	return &Server{svc: svc, token: token}
+// web enables the browser console page (#17); the API itself (for avairy-tui) is always served.
+func NewServer(svc *Services, token string, web bool) *Server {
+	return &Server{svc: svc, token: token, web: web}
 }
 
 // Handler returns the operator routes. Mount it under "/operator/" on the control mux.
@@ -37,7 +39,10 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	// The web UI (#17) is a second client of this same API: a static page, served unauthenticated
 	// (its data calls carry the token), that consumes the stream/state/actions below in a browser.
-	mux.HandleFunc(PathUI, handleUI)
+	// Opt-in: only mounted with -web, so a headless/remote-TUI deployment needn't expose a page.
+	if s.web {
+		mux.HandleFunc(PathUI, handleUI)
+	}
 	mux.HandleFunc(PathStream, s.auth(s.handleStream))
 	mux.HandleFunc(PathState, s.auth(s.handleState))
 	mux.HandleFunc(PathInject, s.auth(s.handleInject))

@@ -265,6 +265,39 @@ Ranked roughly by value-to-effort within each group.
     broker carries a `Source` field (`"seed"` | `"git"`) so a future merge op can raise into the
     same view without rework.
 
+20. **Scrollable conversation (and other views) in the TUI.** The body always pins to the tail —
+    `render()` shows only the last N lines that fit (`lines[len(lines)-avail:]`), with no scroll
+    offset, viewport, or PageUp/Down/mouse-wheel handling, so earlier history is unreachable (and
+    the conv buffer is capped at 500 lines, so it's eventually dropped). Add scrollback: a scroll
+    offset (or swap the body for a Bubbles `viewport`) + keybindings (PageUp/Down, maybe mouse
+    wheel), auto-following the tail unless the operator has scrolled up. Applies to Conversation
+    and, ideally, the Handovers/Tasks/Approvals/Conflicts lists too.
+
+21. **Operator choice on startup conflicts (full resync vs. resolve).** A node that finds conflicts
+    on its first sync (genuine divergence: it was offline, made local edits, and the hub moved on)
+    currently just writes git-style markers and proceeds — the mid-run #3 flow. At startup a clean
+    discard is often the right call, so the node should hold the conflicted paths and surface the
+    choice to the **operator** (human) rather than auto-marking. Decisions locked: the **operator
+    decides** (via the existing Conflicts surface — TUI tab + web, extended), and the options are:
+    - **Full resync (checksum-manifest reconcile, NOT a wipe)** — the hub serves a manifest of every
+      path with its content checksum (+ version + age); the node compares it against its local tree
+      and applies only the delta: fetch added/changed files, delete paths the hub no longer has,
+      skip everything whose checksum already matches. For a large repo this transfers only what
+      actually differs instead of re-downloading the whole tree. The node's base is rebuilt from the
+      manifest so it's back in lockstep with canonical, local divergence discarded.
+    - **Resolve** — markers + reconcile, as today (may delegate to the agent, per #19).
+    - **Overview** — list the conflicted paths with local-vs-hub versions/checksums and a diff, plus
+      how old each side is, so the operator can choose between the former two.
+
+    Needs: startup-conflict detection that holds (doesn't auto-mark) + raises to the operator; a
+    **hub manifest endpoint** (path → checksum + version + timestamp; checksums are cheap — the hub
+    already content-hashes); the node-side delta apply (add/update/delete vs. local hashes, which
+    the node already keeps in `stamps`); an overview payload; and a **per-version timestamp on
+    `workspace.FileState`** (persisted in the hub snapshot) so "age" is real, not a version gap. The
+    node keeps running meanwhile (heartbeat, agent works non-conflicted files) until the operator
+    decides. Builds on #19's broker + ResumeFromHub; the manifest reconcile also generalizes to a
+    "repair drift" sync path beyond startup conflicts.
+
 ### Single operator
 
 13. The TUI is single-operator by design (v1). Multi-operator is out of scope for now.
