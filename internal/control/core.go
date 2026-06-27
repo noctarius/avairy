@@ -68,8 +68,10 @@ type Core struct {
 	bound      map[string]string // enrollment token -> node id it's bound to (reusable for rejoin)
 	sessions   map[string]string // sessionToken -> nodeID
 	nodes      map[string]*NodeInfo
-	directives map[string]string // nodeID -> pending heartbeat directive (resync/resolve)
-	startup    map[string]bool   // nodeID -> startup conflict already raised (dedup until resolved)
+	directives map[string]string   // nodeID -> pending heartbeat directive (resync/resolve)
+	startup    map[string]bool     // nodeID -> startup conflict already raised (dedup until resolved)
+	nConflicts map[string][]string // nodeID -> its currently-conflicted paths (reported on heartbeat, #22)
+	unlocks    map[string][]string // nodeID -> paths resolved via resolve_conflict to unlock (#22)
 }
 
 // NewCore returns a Core backed by hub, journaling lifecycle events to jrnl.
@@ -85,7 +87,30 @@ func NewCore(hub *workspace.Hub, jrnl journal.Log) *Core {
 		conflicts:       make(map[string]uint64),
 		directives:      make(map[string]string),
 		startup:         make(map[string]bool),
+		nConflicts:      make(map[string][]string),
+		unlocks:         make(map[string][]string),
 	}
+}
+
+// NodeConflicts returns the paths a node last reported as conflicted (marker-locked or startup-held).
+// Backs the agent's list_conflicts MCP tool (#22) — agent id == node id.
+func (c *Core) NodeConflicts(nodeID string) []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]string(nil), c.nConflicts[nodeID]...)
+}
+
+// ResolveNodeConflict records that agent resolved path via resolve_conflict (the merged content is
+// already on the hub). It queues an unlock so the node drops its lock on the next heartbeat and
+// SyncDown lands the canonical content — closing the gap where the tool left the node's markers
+// stale (#22). No-op for a non-node caller (local/seed agents don't poll heartbeats).
+func (c *Core) ResolveNodeConflict(nodeID, path string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, isNode := c.nodes[nodeID]; !isNode {
+		return
+	}
+	c.unlocks[nodeID] = append(c.unlocks[nodeID], path)
 }
 
 // SetNodeDirective queues the operator's verdict on a node's held startup conflict; the node picks
@@ -309,12 +334,19 @@ func (c *Core) handleEvents(nodeID string, w http.ResponseWriter, r *http.Reques
 }
 
 func (c *Core) handleHeartbeat(nodeID string, w http.ResponseWriter, r *http.Request) {
+	var req HeartbeatRequest
+	_ = json.NewDecoder(r.Body).Decode(&req) // body optional; missing → no conflict update
 	c.touch(nodeID)
 	c.mu.Lock()
+	if req.Conflicts != nil {
+		c.nConflicts[nodeID] = req.Conflicts
+	}
 	dir := c.directives[nodeID]
 	delete(c.directives, nodeID) // deliver once
+	unlock := c.unlocks[nodeID]
+	delete(c.unlocks, nodeID)
 	c.mu.Unlock()
-	writeJSON(w, HeartbeatResponse{Directive: dir})
+	writeJSON(w, HeartbeatResponse{Directive: dir, Unlock: unlock})
 }
 
 func (c *Core) handlePush(nodeID string, w http.ResponseWriter, r *http.Request) {

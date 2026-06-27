@@ -79,7 +79,7 @@ func conflictedNodeB(t *testing.T) (*Core, *Node, *Node, string) {
 
 	nodeB := NewNode(srv.URL, "b")
 	nodeB.Enroll(core.CurrentToken(), "linux", nil)
-	nodeB.SyncUp(dirB)             // empty first sync → past the startup-hold, so the next conflict is MARKED
+	nodeB.SyncUp(dirB)              // empty first sync → past the startup-hold, so the next conflict is MARKED
 	writeFile(t, dirB, "f.go", "B") // divergent edit (base 0 vs hub v1) → mid-run conflict
 	if c, _ := nodeB.SyncUp(dirB); len(c) != 1 {
 		t.Fatalf("expected conflict, got %+v", c)
@@ -126,6 +126,42 @@ func TestNodeConflictLockHoldsAgainstSyncDown(t *testing.T) {
 	nodeB.SyncDown(dirB) // must NOT overwrite B's in-progress markers
 	if got := read(t, dirB, "f.go"); got != marked {
 		t.Fatalf("locked conflicted file was clobbered:\n%s", got)
+	}
+}
+
+// list_conflicts source + the resolve_conflict node-unlock gap (#22): a node reports its conflicted
+// paths on heartbeat (so core can answer list_conflicts), and resolving via resolve_conflict queues
+// an unlock that drops the node's lock and lands the merged content over its stale markers.
+func TestNodeConflictListAndResolveUnlock(t *testing.T) {
+	core, _, nodeB, dirB := conflictedNodeB(t) // nodeB holds f.go with markers (locked)
+
+	if err := nodeB.Heartbeat(); err != nil {
+		t.Fatal(err)
+	}
+	if got := core.NodeConflicts("b"); len(got) != 1 || got[0] != "f.go" {
+		t.Fatalf("NodeConflicts = %v, want [f.go]", got)
+	}
+	nodeB.TakeUnlocks() // nothing queued yet
+
+	// resolve_conflict: merged content lands on the hub, and core queues an unlock for the node.
+	core.hub.Resolve("b", "f.go", []byte("MERGED"))
+	core.ResolveNodeConflict("b", "f.go")
+
+	if err := nodeB.Heartbeat(); err != nil {
+		t.Fatal(err)
+	}
+	u := nodeB.TakeUnlocks()
+	if len(u) != 1 || u[0] != "f.go" {
+		t.Fatalf("unlock = %v, want [f.go]", u)
+	}
+	if err := nodeB.ApplyUnlocks(dirB, u); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(t, dirB, "f.go"); got != "MERGED" || workspace.HasConflictMarkers([]byte(got)) {
+		t.Fatalf("after resolve_conflict unlock, f.go = %q (want MERGED, no markers)", got)
+	}
+	if got := nodeB.ConflictPaths(); len(got) != 0 {
+		t.Fatalf("conflict should be cleared, got %v", got)
 	}
 }
 
@@ -186,9 +222,9 @@ func TestResyncReconcilesAgainstManifest(t *testing.T) {
 
 	// A node with a divergent tree: a.go matches, b.go diverged, c.go missing, x.go is local-only.
 	dir := t.TempDir()
-	writeFile(t, dir, "a.go", "AAA")        // matches canonical → must not be re-pulled
-	writeFile(t, dir, "b.go", "B-local")    // diverged → must be overwritten with canonical
-	writeFile(t, dir, "x.go", "X-local")    // not in hub → must be deleted
+	writeFile(t, dir, "a.go", "AAA")     // matches canonical → must not be re-pulled
+	writeFile(t, dir, "b.go", "B-local") // diverged → must be overwritten with canonical
+	writeFile(t, dir, "x.go", "X-local") // not in hub → must be deleted
 	node := NewNode(srv.URL, "macos")
 	node.Enroll(core.CurrentToken(), "darwin", nil)
 

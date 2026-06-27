@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 
@@ -22,6 +23,30 @@ func (s *Server) EnableConflicts(resolve ConflictResolver) {
 		mcpgo.WithString("path", mcpgo.Required(), mcpgo.Description("the conflicted file path (as given in the notification)")),
 		mcpgo.WithString("content", mcpgo.Required(), mcpgo.Description("the full merged file content")),
 	), s.handleResolveConflict)
+}
+
+// EnableConflictList wires list_conflicts: lister returns the calling agent's currently-conflicted
+// paths (authoritative, from the node's tracked set) so the agent never greps for markers (#22).
+func (s *Server) EnableConflictList(lister func(agentID string) []string) {
+	s.conflictList = lister
+	s.mcp.AddTool(mcpgo.NewTool("list_conflicts",
+		mcpgo.WithDescription("List YOUR files that currently have unresolved sync conflicts (git-style markers). Authoritative — use this instead of grepping for <<<<<<< markers. Resolve each by editing it marker-free (or resolve_conflict)."),
+	), s.handleListConflicts)
+}
+
+func (s *Server) handleListConflicts(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	var paths []string
+	if s.conflictList != nil {
+		paths = s.conflictList(agentFromContext(ctx))
+	}
+	if len(paths) == 0 {
+		return mcpgo.NewToolResultText("no conflicts"), nil
+	}
+	b, err := json.Marshal(paths)
+	if err != nil {
+		return mcpgo.NewToolResultError(err.Error()), nil
+	}
+	return mcpgo.NewToolResultText(string(b)), nil
 }
 
 func (s *Server) handleResolveConflict(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {

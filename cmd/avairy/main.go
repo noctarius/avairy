@@ -314,11 +314,6 @@ func main() {
 			}
 		}
 		svc.Commit = commitFn // operator /commit over the API/TUI (nil when no git repo)
-		// Conflict reconciliation (DESIGN.md §9): agents resolve divergent edits via the bus +
-		// resolve_conflict tool. Only meaningful with a hub (always present here).
-		mcpSrv.EnableConflicts(func(agentID, path string, content []byte) (uint64, error) {
-			return hub.Resolve(agentID, path, content).Version, nil
-		})
 
 		core := control.NewCore(hub, jrnl)
 		core.RequireClientCert = mtlsEnabled // reject token enrollment; nodes join by mTLS client cert
@@ -336,6 +331,18 @@ func main() {
 			conflictBroker.Raise(control.OperatorConflict{Path: nodeID, Source: "node-startup", Detail: summary})
 		}
 		svc.NodeDirective = core.SetNodeDirective
+		// Conflict reconciliation (DESIGN.md §9): agents resolve divergent edits via resolve_conflict
+		// (merged content → next canonical version). For a node agent, also unlock the path so the
+		// node drops its stale markers and pulls the merged content (#22 — closes the gap where the
+		// tool only advanced the hub and left the node locked).
+		mcpSrv.EnableConflicts(func(agentID, path string, content []byte) (uint64, error) {
+			v := hub.Resolve(agentID, path, content).Version
+			core.ResolveNodeConflict(agentID, path)
+			return v, nil
+		})
+		// list_conflicts (#22): the agent's authoritative conflicted-file list, from what its node
+		// reports on heartbeat — so it never greps for markers (agent id == node id).
+		mcpSrv.EnableConflictList(core.NodeConflicts)
 		// When a node enrolls, register its agent on the bus (identity, caps, inbox); deliver
 		// that agent's inbound bus messages back over the control channel.
 		core.OnEnroll = func(nodeID string, caps map[string]string) {
@@ -518,7 +525,7 @@ func main() {
 
 const aliceRole = "You are 'alice', a backend engineer agent in the avairy multi-agent system. " +
 	"Collaborate ONLY through the avairy MCP tools: post_task, claim_task, list_tasks, " +
-	"send_message, read_inbox, report_status, git_history, request_commit, scratch_worktree, resolve_conflict, fresh_look, note, read_notes. Be terse and do exactly what you are asked, then stop."
+	"send_message, read_inbox, report_status, git_history, request_commit, scratch_worktree, list_conflicts, resolve_conflict, fresh_look, note, read_notes. Be terse and do exactly what you are asked, then stop."
 
 func startLiveAlice(ctx context.Context, family, model, busURL string, b *bus.Bus, jrnl journal.Log, approvals *control.Approvals, gateEdits bool) {
 	ws, err := os.MkdirTemp("", "avairy-alice-")

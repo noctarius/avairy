@@ -188,11 +188,11 @@ func NewModel(deps Deps) *Model {
 
 	sub, _ := deps.Journal.Subscribe()
 	m := &Model{
-		deps:    deps,
-		sub:     sub,
-		width:   100,
-		height:  30,
-		input:   ta,
+		deps:        deps,
+		sub:         sub,
+		width:       100,
+		height:      30,
+		input:       ta,
 		agents:      make(map[string]*agentState),
 		control:     deps.Control,
 		seen:        make(map[uint64]bool),

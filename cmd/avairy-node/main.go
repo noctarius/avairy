@@ -242,6 +242,13 @@ func main() {
 					fmt.Fprintln(os.Stderr, "apply directive:", err)
 				}
 			}
+			// Conflicts the agent resolved via resolve_conflict (#22): unlock + pull canonical BEFORE
+			// syncUp, so the marker scan doesn't re-lock the still-markered file first.
+			if u := n.TakeUnlocks(); len(u) > 0 && *ws != "" {
+				if err := n.ApplyUnlocks(*ws, u); err != nil {
+					fmt.Fprintln(os.Stderr, "apply unlocks:", err)
+				}
+			}
 			syncUp()
 			if *ws != "" {
 				if err := n.SyncDown(*ws); err != nil {
@@ -253,7 +260,7 @@ func main() {
 }
 
 const defaultRole = "You are an avairy agent. Collaborate ONLY through the avairy MCP tools " +
-	"(send_message, read_inbox, post_task, claim_task, list_tasks, report_status, git_history, request_commit, scratch_worktree, resolve_conflict, fresh_look, note, read_notes). Be terse."
+	"(send_message, read_inbox, post_task, claim_task, list_tasks, report_status, git_history, request_commit, scratch_worktree, list_conflicts, resolve_conflict, fresh_look, note, read_notes). Be terse."
 
 // readSession reads a persisted agent session id (empty if absent/unreadable).
 func readSession(path string) string {

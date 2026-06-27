@@ -41,6 +41,9 @@ type Server struct {
 
 	// resolveConflict applies an agent's reconciled file as the next hub version (EnableConflicts).
 	resolveConflict ConflictResolver
+	// conflictList returns the caller's currently-conflicted paths (EnableConflicts) — backs
+	// list_conflicts so the agent doesn't grep for markers (#22). nil → tool reports none.
+	conflictList func(agentID string) []string
 	// freshLook runs a question through an ephemeral clean-context session (EnableFreshLook).
 	freshLook FreshLookFunc
 

@@ -88,9 +88,14 @@ type EnrollResponse struct {
 	SessionToken string `json:"sessionToken"`
 }
 
-// HeartbeatRequest keeps a node marked live.
+// HeartbeatRequest keeps a node marked live and reports the node's currently-conflicted paths
+// (marker-locked + startup-held) so core can answer the agent's list_conflicts without a grep (#22).
 type HeartbeatRequest struct {
 	NodeID string `json:"nodeId"`
+	// Conflicts is the node's current conflicted paths; always sent (even empty) so resolving the
+	// last one clears core's view. nil only from an older node that doesn't report — then core keeps
+	// its prior value.
+	Conflicts []string `json:"conflicts"`
 }
 
 // HeartbeatResponse carries any operator directive for the node — currently the verdict on a held
@@ -98,6 +103,9 @@ type HeartbeatRequest struct {
 // reconcile as usual). Empty when there's nothing to do. Delivered (and cleared) on heartbeat.
 type HeartbeatResponse struct {
 	Directive string `json:"directive,omitempty"`
+	// Unlock lists paths the operator/agent resolved via resolve_conflict (#22): the node drops its
+	// lock so the next SyncDown lands the merged canonical content (clearing the stale markers).
+	Unlock []string `json:"unlock,omitempty"`
 }
 
 // SyncChange is a node's proposed change to one path (content is base64 via []byte).

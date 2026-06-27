@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
@@ -44,6 +45,7 @@ type Node struct {
 	held        []SyncResult    // first-sync conflicts held for the operator's resync/resolve verdict
 	startupHeld map[string]bool // paths frozen awaiting that verdict — skipped from sync regardless of markers
 	directive   string          // latest operator directive from a heartbeat (TakeDirective drains it)
+	unlock      []string        // paths resolved via resolve_conflict to unlock + re-pull (#22)
 
 	reMu sync.Mutex // serializes re-enrollment so concurrent 401s don't stampede
 }
@@ -51,12 +53,12 @@ type Node struct {
 // NewNode returns a node client for the core control API at coreURL.
 func NewNode(coreURL, id string) *Node {
 	return &Node{
-		CoreURL:   strings.TrimRight(coreURL, "/"),
-		HTTP:      http.DefaultClient,
-		ID:        id,
-		base:      make(map[string]uint64),
-		stamps:    make(workspace.Stamps),
-		ignore:    workspace.DefaultIgnore(),
+		CoreURL:     strings.TrimRight(coreURL, "/"),
+		HTTP:        http.DefaultClient,
+		ID:          id,
+		base:        make(map[string]uint64),
+		stamps:      make(workspace.Stamps),
+		ignore:      workspace.DefaultIgnore(),
 		conflicts:   make(map[string]bool),
 		firstSync:   true,
 		startupHeld: make(map[string]bool),
@@ -92,19 +94,68 @@ func (n *Node) enroll(ctx context.Context) error {
 	return nil
 }
 
-// Heartbeat marks the node live at core and stashes any operator directive the response carries
-// (a held startup conflict's verdict, #21); drain it with TakeDirective.
+// Heartbeat marks the node live at core, reports the node's currently-conflicted paths (so the
+// agent's list_conflicts is authoritative, #22), and stashes any operator directive the response
+// carries (a held startup conflict's verdict, #21); drain it with TakeDirective.
 func (n *Node) Heartbeat() error {
 	var resp HeartbeatResponse
-	if err := n.post(PathHeartbeat, n.sess(), HeartbeatRequest{NodeID: n.ID}, &resp); err != nil {
+	if err := n.post(PathHeartbeat, n.sess(), HeartbeatRequest{NodeID: n.ID, Conflicts: n.ConflictPaths()}, &resp); err != nil {
 		return err
 	}
-	if resp.Directive != "" {
+	if resp.Directive != "" || len(resp.Unlock) > 0 {
 		n.mu.Lock()
-		n.directive = resp.Directive
+		if resp.Directive != "" {
+			n.directive = resp.Directive
+		}
+		n.unlock = append(n.unlock, resp.Unlock...)
 		n.mu.Unlock()
 	}
 	return nil
+}
+
+// TakeUnlocks returns and clears paths the agent resolved via resolve_conflict (#22).
+func (n *Node) TakeUnlocks() []string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	u := n.unlock
+	n.unlock = nil
+	return u
+}
+
+// ApplyUnlocks drops the locks for paths resolved via resolve_conflict and pulls canonical, so the
+// merged content (already on the hub) lands over the node's stale markers. Call BEFORE SyncUp so the
+// marker scan doesn't just re-lock the still-markered file before SyncDown overwrites it.
+func (n *Node) ApplyUnlocks(dir string, paths []string) error {
+	if len(paths) == 0 {
+		return nil
+	}
+	n.mu.Lock()
+	for _, p := range paths {
+		delete(n.conflicts, p)
+		delete(n.startupHeld, p)
+	}
+	n.mu.Unlock()
+	return n.SyncDown(dir) // base<hubVersion for these → pulled, overwriting the markers
+}
+
+// ConflictPaths returns the node's currently-conflicted files — marker-locked (mid-run) plus
+// startup-held (awaiting the operator) — sorted. The authoritative source for list_conflicts (#22).
+func (n *Node) ConflictPaths() []string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	set := make(map[string]bool, len(n.conflicts)+len(n.startupHeld))
+	for p := range n.conflicts {
+		set[p] = true
+	}
+	for p := range n.startupHeld {
+		set[p] = true
+	}
+	out := make([]string, 0, len(set))
+	for p := range set {
+		out = append(out, p)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // TakeDirective returns and clears the latest operator directive (empty if none).
