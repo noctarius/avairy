@@ -348,6 +348,35 @@ Ranked roughly by value-to-effort within each group.
       `send_message` (e.g. "who's on linux?") instead of guessing ids. In all role prompts. Test:
       `TestListAgentsTool`.
 
+### Robustness / scale (next)
+
+25. **Bus hardening — stop reply-storms.** Today every inbound message wakes the recipient and is
+    sent straight into a turn, so a broadcast/role message can trigger reply-all cascades (and burn
+    credits) — there's no hop/TTL, dedup, reply budget, or quiescence. Make delivery
+    address-aware: a **direct** message wakes & acts; **broadcast/role** delivers as *context* (no
+    auto-turn) — plus a per-conversation reply budget, message dedup, and idle quiescence so chatter
+    converges instead of amplifying. (Requirements under discussion.)
+
+26. **Cost overview + budget guardrails.** Cost is summed in the fleet line, but there's no
+    per-agent breakdown or ceiling. Add per-agent spend (and tokens), an **overview** the operator
+    can see, and an optional per-agent/total **budget cap** that pauses/stops an agent (with a
+    warning) at a threshold — insurance against a fan-out racking up spend.
+
+27. **Blackboard view in the operator console.** The blackboard (`note`/`read_notes`) is durable
+    shared memory, but the operator can't see it — there's no Notes tab/panel (TUI has
+    Conversation/Handovers/Tasks/Approvals/Conflicts, not blackboard). Add a read view over
+    `board.Blackboard` (TUI tab + web panel) — pure visibility, reuses existing machinery.
+
+28. **Idle teardown / lazy worker spawn.** Agents are resident-but-idle, holding context/credits
+    with nothing to do. Tear an idle agent down to a **"sleeping"** state (fleet shows it) and
+    lazily respawn it on the next directed message. Pairs with #26 (cost); the ephemeral-session
+    machinery from #24 is most of the plumbing.
+
+29. **End-to-end distributed integration test.** No black-box test spins up core + a node + a mock
+    agent over real HTTP and asserts a message round-trips, a file syncs, and a conflict resolves.
+    Cheap (mock adapter, no credits) and would catch regressions across the whole channel now that
+    the surface is large.
+
 ### Single operator
 
 13. The TUI is single-operator by design (v1). Multi-operator is out of scope for now.
