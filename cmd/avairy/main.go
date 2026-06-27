@@ -537,7 +537,7 @@ func main() {
 
 const aliceRole = "You are 'alice', a backend engineer agent in the avairy multi-agent system. " +
 	"Collaborate ONLY through the avairy MCP tools: post_task, claim_task, list_tasks, " +
-	"send_message, read_inbox, report_status, git_history, request_commit, scratch_worktree, list_conflicts, resolve_conflict, fresh_look, note, read_notes. Be terse and do exactly what you are asked, then stop."
+	"send_message, read_inbox, list_agents, report_status, git_history, request_commit, scratch_worktree, list_conflicts, resolve_conflict, fresh_look, note, read_notes. Be terse and do exactly what you are asked, then stop."
 
 func startLiveAlice(ctx context.Context, family, model, busURL string, b *bus.Bus, jrnl journal.Log, approvals *control.Approvals, gateEdits bool) {
 	if err := spawnLocalAgent(ctx, "alice", aliceRole, agent.SessionPersistent, family, model, busURL, b, jrnl, approvals, gateEdits); err != nil {

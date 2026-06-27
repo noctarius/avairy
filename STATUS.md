@@ -343,8 +343,10 @@ Ranked roughly by value-to-effort within each group.
       endpoints; the `operator.Client` exposes them so `avairy-tui` drives it, and the web composer
       gained `/consult [@node] [family]` and `/end <id>`. So both consoles can open/close consults,
       not just render them. (Operator command is **`/end`**; the HTTP route stays `/operator/close`.)
-    - Optional enabler (not built): a `list_agents` roster MCP tool so agents can discover peers
-      unprompted (today they learn ids from messages/tasks/the operator naming them).
+    - ✅ **peer discovery** — a `list_agents` MCP tool returns the other agents on the bus (id +
+      roles + caps like `os`), excluding the caller, so an agent can find the right peer to
+      `send_message` (e.g. "who's on linux?") instead of guessing ids. In all role prompts. Test:
+      `TestListAgentsTool`.
 
 ### Single operator
 

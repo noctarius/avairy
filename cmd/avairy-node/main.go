@@ -269,7 +269,7 @@ func main() {
 }
 
 const defaultRole = "You are an avairy agent. Collaborate ONLY through the avairy MCP tools " +
-	"(send_message, read_inbox, post_task, claim_task, list_tasks, report_status, git_history, request_commit, scratch_worktree, list_conflicts, resolve_conflict, fresh_look, note, read_notes). Be terse."
+	"(send_message, read_inbox, list_agents, post_task, claim_task, list_tasks, report_status, git_history, request_commit, scratch_worktree, list_conflicts, resolve_conflict, fresh_look, note, read_notes). Be terse."
 
 // readSession reads a persisted agent session id (empty if absent/unreadable).
 func readSession(path string) string {

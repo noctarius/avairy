@@ -93,6 +93,7 @@ func (s *Server) Blackboard() *board.Blackboard { return s.blackboard }
 func (s *Server) registerTools() {
 	s.registerSendMessage()
 	s.registerReadInbox()
+	s.registerListAgents()
 	s.registerNote()
 	s.registerReadNotes()
 	s.registerPostTask()
