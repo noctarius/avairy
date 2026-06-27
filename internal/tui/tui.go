@@ -5,6 +5,7 @@ package tui
 
 import (
 	"fmt"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
@@ -216,7 +217,12 @@ var (
 	warnStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
 	// reasoningStyle dims agent thinking/reasoning so it reads as background to the actual reply (#23).
 	reasoningStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Italic(true)
+	// mentionStyle highlights an @<agent> mention so it stands out in any message (user or agent).
+	mentionStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true)
 )
+
+// mentionRe matches an @<id> token (the id charset agents use as bus identities).
+var mentionRe = regexp.MustCompile(`@[A-Za-z0-9_.-]+`)
 
 // NewModel builds the model, backfilling existing journal records and subscribing to new ones.
 func NewModel(deps Deps) *Model {
@@ -645,7 +651,7 @@ func (m *Model) apply(rec journal.Record) {
 	switch rec.Kind {
 	case journal.KindMessage:
 		if msg, ok := rec.Data.(bus.Message); ok {
-			m.addConversation(fmt.Sprintf("%s → %s: %s", msg.From, addrStr(msg.To), msg.Body))
+			m.addConversation(fmt.Sprintf("%s → %s: %s", msg.From, addrStr(msg.To), m.highlightMentions(msg.Body)))
 		}
 	case journal.KindAgentEvent:
 		if ev, ok := rec.Data.(agent.Event); ok {
@@ -653,7 +659,7 @@ func (m *Model) apply(rec journal.Record) {
 			switch ev.Type {
 			case agent.EventText:
 				a.status = "working"
-				m.addConversation(rec.Actor + ":\n" + m.markdown(ev.Text)) // agents emit markdown — render it (#23)
+				m.addConversation(rec.Actor + ":\n" + m.highlightMentions(m.markdown(ev.Text))) // agents emit markdown — render it (#23)
 			case agent.EventReasoning:
 				a.status = "working"
 				if t := strings.TrimSpace(ev.Text); t != "" {
@@ -742,6 +748,18 @@ func (m *Model) apply(rec journal.Record) {
 			}
 		}
 	}
+}
+
+// highlightMentions styles @<id> tokens that name a known agent (or @all/@everyone) so mentions
+// pop in any message. Restricted to known ids so it doesn't false-match @media/@param in prose/code.
+func (m *Model) highlightMentions(s string) string {
+	return mentionRe.ReplaceAllStringFunc(s, func(tok string) string {
+		id := tok[1:]
+		if _, ok := m.agents[id]; ok || id == "all" || id == "everyone" {
+			return mentionStyle.Render(tok)
+		}
+		return tok
+	})
 }
 
 func (m *Model) addConversation(line string) {

@@ -69,6 +69,8 @@
   .row.me .msg{background:var(--accent);color:var(--accent-ink);border-color:transparent}
   .who{font-size:11px;font-weight:700;margin-bottom:3px;opacity:.95}
   .to{font-weight:500;opacity:.7}
+  .mention{font-weight:700;background:rgba(125,130,180,.20);border-radius:4px;padding:0 3px}
+  .row.me .mention{background:rgba(255,255,255,.22)}
   /* rendered markdown inside a bubble */
   .msg.md{white-space:normal}
   .msg.md > .who{margin-bottom:5px}
@@ -191,6 +193,35 @@ const logwrap = $("logwrap");
 function atBottom(){ const l=$("log"); return l.scrollHeight - l.scrollTop - l.clientHeight < 90; }
 function toBottom(){ const l=$("log"); l.scrollTop = l.scrollHeight; }
 function colorFor(name){ let h=0; for(const c of name) h=(h*31+c.charCodeAt(0))%360; return `hsl(${h} 60% 62%)`; }
+// highlightMentions wraps @<agent> tokens (known agents, or @all/@everyone) in a styled span so
+// mentions pop in any message. Walks text nodes only — skips code/pre/links — to avoid touching
+// code or false-matching @media/@param; restricting to known ids guards prose too.
+function highlightMentions(root){
+  const skip={CODE:1,PRE:1,A:1}, re=/@([A-Za-z0-9_.-]+)/g, hasRe=/@[A-Za-z0-9_.-]/;
+  const known=id=>agents.has(id)||id==="all"||id==="everyone";
+  const walker=document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(n){
+      for(let p=n.parentNode; p && p!==root.parentNode; p=p.parentNode){ if(p.nodeType===1 && skip[p.tagName]) return NodeFilter.FILTER_REJECT; }
+      return hasRe.test(n.nodeValue) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+    }
+  });
+  const nodes=[]; let n; while(n=walker.nextNode()) nodes.push(n);
+  for(const t of nodes){
+    const s=t.nodeValue; let last=0, mm, any=false; const frag=document.createDocumentFragment();
+    re.lastIndex=0;
+    while(mm=re.exec(s)){
+      if(!known(mm[1])) continue;
+      any=true;
+      if(mm.index>last) frag.appendChild(document.createTextNode(s.slice(last,mm.index)));
+      const span=document.createElement("span"); span.className="mention"; span.textContent=mm[0];
+      if(agents.has(mm[1])) span.style.color=colorFor(mm[1]);
+      frag.appendChild(span); last=mm.index+mm[0].length;
+    }
+    if(!any) continue;
+    if(last<s.length) frag.appendChild(document.createTextNode(s.slice(last)));
+    t.parentNode.replaceChild(frag, t);
+  }
+}
 function clearEmpty(){ const e=$("emptyChat"); if(e) e.remove(); }
 
 // mdInto renders markdown (with syntax highlighting incl. diff) into el, sanitized. Falls back to
@@ -220,6 +251,7 @@ function bubble(author, to, text, cls, md){
   }
   const b=document.createElement("div");
   if(md) mdInto(b, text); else b.textContent=text;
+  highlightMentions(b);
   m.appendChild(b);
   row.appendChild(m); logwrap.appendChild(row);
   if(stick) toBottom();

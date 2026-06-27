@@ -92,6 +92,26 @@ func TestScrollback(t *testing.T) {
 	}
 }
 
+func TestHighlightMentions(t *testing.T) {
+	m, _, _ := newTestModel()
+	m.touchAgent("linux") // a known agent
+
+	out := m.highlightMentions("ping @linux and @all about @media settings")
+	if !strings.Contains(out, mentionStyle.Render("@linux")) {
+		t.Fatalf("known agent mention not highlighted: %q", out)
+	}
+	if !strings.Contains(out, mentionStyle.Render("@all")) {
+		t.Fatalf("@all not highlighted: %q", out)
+	}
+	// @media is not an agent → must be left as-is (no false-match in prose/code).
+	if strings.Contains(out, mentionStyle.Render("@media")) {
+		t.Fatalf("non-agent token wrongly highlighted: %q", out)
+	}
+	if !strings.Contains(out, "@media") {
+		t.Fatalf("non-agent token should survive verbatim: %q", out)
+	}
+}
+
 func newTestModel() (*Model, *bus.Bus, journal.Log) {
 	j := journal.NewMemory()
 	b := bus.New(j)
