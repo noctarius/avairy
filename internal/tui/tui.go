@@ -133,7 +133,9 @@ var newlineKey = func() string {
 
 type agentState struct {
 	id     string
-	status string // working | idle | blocked
+	status string  // working | idle | blocked
+	cost   float64 // accumulated spend in USD (#26)
+	over   bool    // crossed its budget cap (#26)
 }
 
 // Model is the Bubble Tea model.
@@ -656,6 +658,7 @@ func (m *Model) apply(rec journal.Record) {
 				a.status = "idle"
 				if ev.Usage != nil {
 					m.cost += ev.Usage.CostUSD
+					a.cost += ev.Usage.CostUSD
 				}
 			case agent.EventError:
 				m.addConversation(fmt.Sprintf("%s ⚠ %s", rec.Actor, ev.Text))
@@ -706,6 +709,18 @@ func (m *Model) apply(rec journal.Record) {
 		case "consult_closed":
 			if id, _ := d["id"].(string); id != "" {
 				m.addConversation(helpStyle.Render("✓ closed " + id + " — gone (capture anything kept to the blackboard/tasks)"))
+			}
+		case "budget_exceeded":
+			scope, _ := d["scope"].(string)
+			spent, _ := d["spent"].(float64)
+			agentID, _ := d["agent"].(string)
+			if scope == "agent" && agentID != "" {
+				if a := m.agents[agentID]; a != nil {
+					a.over = true
+				}
+				m.addConversation(warnStyle.Render(fmt.Sprintf("⚠ %s exceeded its budget ($%.2f) — interrupted", agentID, spent)))
+			} else {
+				m.addConversation(warnStyle.Render(fmt.Sprintf("⚠ fleet exceeded its budget ($%.2f) — all agents interrupted", spent)))
 			}
 		}
 	}
@@ -875,7 +890,11 @@ func (m *Model) fleetLine() string {
 		if strings.HasPrefix(id, "consult-") {
 			tag = helpStyle.Render("⟳") // ephemeral consult (#24)
 		}
-		parts = append(parts, fmt.Sprintf("%s%s %s[%s]", tag, dot, id, a.status))
+		spend := helpStyle.Render(fmt.Sprintf(" $%.2f", a.cost)) // per-agent spend (#26)
+		if a.over {
+			spend = warnStyle.Render(fmt.Sprintf(" $%.2f⚠", a.cost)) // over budget
+		}
+		parts = append(parts, fmt.Sprintf("%s%s %s[%s]%s", tag, dot, id, a.status, spend))
 	}
 	return "fleet: " + strings.Join(parts, "  ") + fmt.Sprintf("   cost $%.2f", m.cost)
 }

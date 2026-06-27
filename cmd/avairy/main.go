@@ -37,6 +37,7 @@ import (
 	"avairy/internal/board"
 	"avairy/internal/bus"
 	"avairy/internal/control"
+	"avairy/internal/cost"
 	"avairy/internal/facilitator"
 	"avairy/internal/gating"
 	"avairy/internal/git"
@@ -84,6 +85,8 @@ func main() {
 	gateEdits := flag.Bool("gate-edits", false, "also require operator approval for file edits (per-edit gating; allow-for-session avoids per-diff prompts)")
 	operatorToken := flag.String("operator-token", "", "bearer token for the remote operator API (#18); default: random, shown in the TUI / printed when headless")
 	web := flag.Bool("web", false, "serve the browser operator console at /operator/ui (#17); off by default")
+	budget := flag.Float64("budget", 0, "fleet spend cap in USD (#26): when total cost crosses this, warn the operator and interrupt; 0 = uncapped")
+	agentBudget := flag.Float64("agent-budget", 0, "per-agent spend cap in USD (#26): when an agent crosses this, warn the operator and interrupt that agent; 0 = uncapped")
 	flag.Parse()
 
 	// -tls-auto self-manages a CA that both signs core's server cert and verifies node client certs,
@@ -496,6 +499,27 @@ func main() {
 	}
 	facSub, _ := jrnl.Subscribe()
 	go fac.Run(ctx, facSub)
+
+	// Cost guardrails (#26): fold per-agent/total spend off the journal and, when a cap is crossed,
+	// warn the operator (a journaled budget_exceeded event surfaces in both consoles) and interrupt
+	// the runaway turn. Capless monitoring is still useful — the consoles show per-agent spend.
+	costMon := cost.New(*agentBudget, *budget)
+	costMon.OnExceed = func(agentID, scope string, spent float64) {
+		actor := agentID
+		if actor == "" {
+			actor = "core"
+		}
+		jrnl.Append(journal.KindSystem, actor, map[string]any{
+			"event": "budget_exceeded", "scope": scope, "agent": agentID, "spent": spent,
+		})
+		if scope == "agent" && agentID != "" {
+			b.Interrupt("avairy", bus.Agent(agentID))
+		} else {
+			b.Interrupt("avairy", bus.Broadcast())
+		}
+	}
+	costSub, _ := jrnl.Subscribe()
+	go costMon.Run(costSub)
 
 	caps := map[string]string{"os": runtime.GOOS}
 

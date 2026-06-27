@@ -49,6 +49,7 @@
   .agent:hover{background:var(--panel2)}
   .agent .name{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .agent .st{margin-left:auto;font-size:11px;color:var(--muted)}
+  .agent .spend{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
   .task{padding:8px 10px;border:1px solid var(--line);border-radius:9px;margin-bottom:6px;font-size:13px}
   .task .t{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .task .meta{color:var(--muted);font-size:11px;margin-top:2px}
@@ -168,6 +169,8 @@ const authq = token ? "?token=" + encodeURIComponent(token) : "";
 const hdr = token ? {"Authorization":"Bearer "+token} : {};
 
 const agents = new Map();   // id -> status
+const agentCost = {};       // id -> spend USD (#26)
+const agentOver = new Set(); // ids over budget (#26)
 let cost = 0;
 const $ = id => document.getElementById(id);
 
@@ -254,7 +257,7 @@ function applyRecord(rec){
     case "agent_event":
       if(d.Type==="text"){ setStatus(rec.actor,"working"); bubble(rec.actor, null, d.Text, "", true); }
       else if(d.Type==="tool_use"){ setStatus(rec.actor,"working"); bubble(rec.actor, null, "⚙ "+toolSummary(d.Tool), "tool"); }
-      else if(d.Type==="turn_done"){ setStatus(rec.actor,"idle"); if(d.Usage){ cost += d.Usage.CostUSD||0; $("cost").textContent="$"+cost.toFixed(2); } }
+      else if(d.Type==="turn_done"){ setStatus(rec.actor,"idle"); if(d.Usage){ cost += d.Usage.CostUSD||0; $("cost").textContent="$"+cost.toFixed(2); agentCost[rec.actor]=(agentCost[rec.actor]||0)+(d.Usage.CostUSD||0); renderFleet(); } }
       else if(d.Type==="error"){ bubble(rec.actor, null, "⚠ "+d.Text, "err"); }
       break;
     case "handover": sysline(`${d.Claimant} claimed ${d.ID} — “${d.Title}”`); break;
@@ -271,6 +274,12 @@ function applySystem(actor, d){
     case "conflict_raised": sysline(`conflict on ${d.path} needs resolution`); break;
     case "consult_opened": if(d.id) sysline(`opened ${d.id} (ephemeral) — @${d.id} to talk · /end ${d.id}`); break;
     case "consult_closed": if(d.id) sysline(`closed ${d.id} — gone`); break;
+    case "budget_exceeded": {
+      const spent=(d.spent||0).toFixed(2);
+      if(d.scope==="agent" && d.agent){ agentOver.add(d.agent); renderFleet(); sysline(`⚠ ${d.agent} exceeded its budget ($${spent}) — interrupted`); }
+      else sysline(`⚠ fleet exceeded its budget ($${spent}) — all agents interrupted`);
+      break;
+    }
   }
 }
 
@@ -283,7 +292,9 @@ function renderFleet(){
   [...agents.keys()].sort().forEach(id=>{
     const st=agents.get(id);
     const d=document.createElement("div"); d.className="agent";
-    d.innerHTML=`<span class="dot ${dotClass(st)}"></span><span class="name"></span><span class="st">${st}</span>`;
+    const spend=(agentCost[id]||0).toFixed(2);
+    const over=agentOver.has(id);
+    d.innerHTML=`<span class="dot ${dotClass(st)}"></span><span class="name"></span><span class="st">${st}</span><span class="spend"${over?' style="color:#e5c07b"':''}>$${spend}${over?" ⚠":""}</span>`;
     const n=d.querySelector(".name"); n.textContent=id; n.style.color=colorFor(id);
     el.appendChild(d);
   });

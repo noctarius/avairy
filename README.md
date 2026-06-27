@@ -46,7 +46,7 @@ local agents** — you bring them via `avairy-node` or `-live`.)
 - `tab` cycles **Conversation / Handovers / Tasks / Approvals / Conflicts**; **Esc** stops running agents; **Ctrl+C twice** quits.
 - On the **Approvals** tab, `↑/↓` (or `j/k`) selects a pending gated action; **`y`** allows it once, **`a`** allows that kind from that agent for the rest of the session, **`n`** denies. The tab shows a `(N)` badge while any are waiting.
 - On the **Conflicts** tab, owner-less conflicts (your seed workspace diverging from a node's edit) appear with a `(N)` badge; `↑/↓` selects, **`m`** takes it yourself (the file already has git-style markers — fix it in your editor and the next sync picks it up), **`d`** delegates it to the selected recipient agent (`ctrl+t` picks who).
-- The fleet line shows each agent's status (working / idle / blocked / offline) and running cost.
+- The fleet line shows each agent's status (working / idle / blocked / offline), its running spend, and the fleet total. Set `-budget`/`-agent-budget` (USD) to have core warn you and interrupt an agent (or the whole fleet) when it crosses the cap; an over-budget agent's spend turns amber with a `⚠`.
 - Type `/commit <message>` to sign a commit of the canonical repo yourself (when core has one).
 
 **A real Claude agent on the bus:**
@@ -268,6 +268,8 @@ node cert can't pose as an operator). Same for `avairy-tui` with `-ca` + a clien
 | `-tls-cert` / `-tls-key` | — | Serve the control channel with your own PEM cert/key instead. |
 | `-gate-edits` | off | Also require operator approval for file edits (not just risky commands). |
 | `-operator-token <tok>` | random | Bearer token for the remote operator API / web console. |
+| `-budget <usd>` | 0 (off) | Fleet spend cap: cross it and the operator is warned and every agent is interrupted. |
+| `-agent-budget <usd>` | 0 (off) | Per-agent spend cap: cross it and that agent is warned and interrupted. |
 
 Subcommands: `avairy mint-join -id <node> -core <https-url>` issues an mTLS client-cert join for a
 node; `avairy mint-web-cert` writes an `operator.p12` to import into a browser for mTLS console auth;

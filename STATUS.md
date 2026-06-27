@@ -365,10 +365,18 @@ Ranked roughly by value-to-effort within each group.
       `read_inbox` unchanged; `InboxMessage` gained `ToKind` so the node can apply the policy.
       Tests: `TestWakerPolicyAndBudget`, `TestPublishDedup`.
 
-26. **Cost overview + budget guardrails.** Cost is summed in the fleet line, but there's no
-    per-agent breakdown or ceiling. Add per-agent spend (and tokens), an **overview** the operator
-    can see, and an optional per-agent/total **budget cap** that pauses/stops an agent (with a
-    warning) at a threshold — insurance against a fan-out racking up spend.
+26. ~~**Cost overview + budget guardrails.**~~ ✅ Done. Two halves:
+    - **Overview (display).** Per-agent spend now shows in the fleet line (TUI + web), alongside the
+      fleet total. Computed client-side by folding `turn_done` usage by actor off the journal stream,
+      so it works identically in-process and remote — no operator-API plumbing.
+    - **Guardrails (enforcement).** A core-side `cost.Monitor` (`internal/cost`) folds per-agent +
+      total spend (cost & tokens) off the journal and, when `-agent-budget`/`-budget` (USD) is set
+      and crossed, fires once: journals a `budget_exceeded` system event (rendered as a warning in
+      both consoles, and the over agent's spend turns amber `⚠`) and `bus.Interrupt`s the runaway —
+      the agent for an agent cap, broadcast for the fleet cap. Combined with the #25 wake-rate budget
+      this caps a fan-out's burn. Tests in `cost_test.go` (accumulation + fire-once per scope).
+      (Soft stop: interrupt halts the current turn; a hard "won't wake until the cap is raised" would
+      need cross-process suppression at the activation points — a follow-up if needed.)
 
 27. ~~**Blackboard view in the operator console.**~~ ✅ Done. A read view over `board.Blackboard`:
     a **Notes** tab in the TUI (key · author + text, sorted by key) and a **Notes** panel in the web
