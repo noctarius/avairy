@@ -43,8 +43,8 @@ func TestConsultCommands(t *testing.T) {
 		t.Fatalf("bare consult args = (%q,%q), want empty", gotTarget, gotFamily)
 	}
 
-	// "/close consult-core" tears it down.
-	m.input.SetValue("/close consult-core")
+	// "/end consult-core" tears it down.
+	m.input.SetValue("/end consult-core")
 	m.submit()
 	if closed != "consult-core" {
 		t.Fatalf("close id = %q, want consult-core", closed)

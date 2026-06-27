@@ -85,6 +85,49 @@ func TestOperatorServerClientRoundTrip(t *testing.T) {
 	}
 }
 
+// Consult / close round-trip through the operator API: the client's Deps drive svc.Consult and
+// svc.CloseConsult (so avairy-tui / the web can spawn ephemeral consults remotely, #24).
+func TestOperatorConsultRoundTrip(t *testing.T) {
+	j := journal.NewMemory()
+	var gotTarget, gotFamily, closed string
+	svc := &operator.Services{
+		Journal: j, Bus: bus.New(j), Approvals: control.NewApprovals(0), Conflicts: control.NewConflicts(),
+		Consult: func(target, family string) (string, error) {
+			gotTarget, gotFamily = target, family
+			return "consult-" + nonEmpty(target, "core"), nil
+		},
+		CloseConsult: func(id string) bool { closed = id; return true },
+	}
+	ts := httptest.NewServer(operator.NewServer(svc, "sekret", false).Handler())
+	defer ts.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client, err := operator.Connect(ctx, ts.URL, "sekret", ts.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	deps := client.Deps()
+
+	id, err := deps.Consult("linux", "codex")
+	if err != nil || id != "consult-linux" {
+		t.Fatalf("consult = %q err=%v", id, err)
+	}
+	if gotTarget != "linux" || gotFamily != "codex" {
+		t.Fatalf("consult args = (%q,%q)", gotTarget, gotFamily)
+	}
+	if !deps.CloseConsult("consult-linux") || closed != "consult-linux" {
+		t.Fatalf("close not routed: closed=%q", closed)
+	}
+}
+
+func nonEmpty(s, dflt string) string {
+	if s == "" {
+		return dflt
+	}
+	return s
+}
+
 // Unauthorized requests are rejected when a token is set.
 func TestOperatorAuth(t *testing.T) {
 	j := journal.NewMemory()

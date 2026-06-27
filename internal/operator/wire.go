@@ -25,6 +25,8 @@ const (
 	PathCommit    = "/operator/commit"    // POST: signed commit of the canonical repo
 	PathToken     = "/operator/token"     // POST: rotate the node-enrollment token
 	PathUI        = "/operator/ui"        // GET: the browser operator console (#17)
+	PathConsult   = "/operator/consult"   // POST: spawn an ephemeral consult agent (#24)
+	PathClose     = "/operator/close"     // POST: close an ephemeral consult agent (#24)
 )
 
 // readyEvent is the SSE event name core sends once the journal backfill is fully streamed, so the
@@ -85,6 +87,12 @@ type (
 	tokenResponse struct {
 		Token string `json:"token"`
 	}
+	consultRequest  struct{ Target, Family string }
+	consultResponse struct {
+		ID    string `json:"id"`
+		Error string `json:"error,omitempty"`
+	}
+	closeRequest struct{ ID string }
 )
 
 // encodeRecord renders a journal record for the wire as a PersistedRecord (Data as raw JSON), the

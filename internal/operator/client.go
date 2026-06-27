@@ -179,6 +179,8 @@ func (c *Client) Deps() tui.Deps {
 		ResolveApproval:  c.resolveApproval,
 		PendingConflicts: c.pendingConflicts,
 		ResolveConflict:  c.resolveConflict,
+		Consult:          c.consult,
+		CloseConsult:     c.closeConsult,
 		Commit:           c.commit,
 	}
 	c.mu.Lock()
@@ -251,6 +253,21 @@ func (c *Client) resolveApproval(id, decision string) {
 
 func (c *Client) resolveConflict(id, decision, target string) {
 	_ = c.post(PathConflict, conflictDecision{ID: id, Decision: decision, Target: target}, nil)
+}
+
+func (c *Client) consult(target, family string) (string, error) {
+	var resp consultResponse
+	if err := c.post(PathConsult, consultRequest{Target: target, Family: family}, &resp); err != nil {
+		return "", err
+	}
+	if resp.Error != "" {
+		return "", errors.New(resp.Error)
+	}
+	return resp.ID, nil
+}
+
+func (c *Client) closeConsult(id string) bool {
+	return c.post(PathClose, closeRequest{ID: id}, nil) == nil
 }
 
 func (c *Client) commit(message string) (string, error) {

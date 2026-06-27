@@ -317,11 +317,11 @@ Ranked roughly by value-to-effort within each group.
       Messages and agent text render as markdown with fenced-code syntax highlighting (incl. diff);
       tool/system lines stay plain. Falls back to plain text if the libs don't load.
 
-24. **Operator-spawned ephemeral consult agents.** The operator can spin up a disposable agent to
+24. ~~**Operator-spawned ephemeral consult agents.**~~ ✅ Done. The operator can spin up a disposable agent to
     ask questions / get feedback (e.g. OS-specific path validation) — on **core** or, for OS-specific
     answers, on a **node** (runs there, with that OS/filesystem). Design (agreed):
     - **Disposable, multi-turn, never persisted.** A real bus participant you converse with
-      (`@consult-…`), running in `SessionMode: Ephemeral` (no session id on disk); `/close` tears it
+      (`@consult-…`), running in `SessionMode: Ephemeral` (no session id on disk); `/end` tears it
       down and it's *gone*. Since the transcript vanishes, **outcomes must be captured deliberately**
       to the blackboard (`note`) or task board (`post_task`) — nothing is auto-saved.
     - **Full bus citizen.** Has the normal MCP tools, so it can ask other agents
@@ -329,9 +329,9 @@ Ranked roughly by value-to-effort within each group.
     - **Naming/addressing** — location-encoded, deduped ids handed back at creation: `/consult`
       → `consult-core`; `/consult @<node>` → `consult-<node>` (e.g. `consult-linux`); a second on the
       same target → `consult-linux-2`. Address with the normal `@id` semantics; ephemeral consults
-      show in the fleet tagged (so they're discoverable) and `/close <id>` removes them.
+      show in the fleet tagged (so they're discoverable) and `/end <id>` removes them.
     - ✅ **core-local** — `/consult [family]` spawns `consult-core` (deduped) via `spawnLocalAgent` in
-      `SessionEphemeral`; `/close <id>` cancels the session + `mcp.Server.Unregister`s it. Lifecycle
+      `SessionEphemeral`; `/end <id>` cancels the session + `mcp.Server.Unregister`s it. Lifecycle
       is **journaled** (`consult_opened`/`consult_closed`) so the TUI and web both show it; fleet tags
       consults with `⟳`. Wired through `operator.Services` → `tui.Deps`.
     - ✅ **node-targeted** — `/consult @<node> [family]` registers the consult on the bus and queues
@@ -339,11 +339,12 @@ Ranked roughly by value-to-effort within each group.
       spawns it on its own ephemeral proxy (its OS/filesystem), ships events + pulls its inbox like
       any agent, and tears it down on the close command. `Core.NodeOnline` gates with a clear error.
       Tests: `TestConsultCommandDelivery`, `TestConsultCommands`.
-    - **Remaining:** triggering from the web / remote-TUI (operator API `/operator/consult` +
-      `/operator/close` endpoints) — both consoles already *render* the lifecycle; only the in-process
-      TUI can *open/close* one today.
-    - Optional enabler: a `list_agents` roster MCP tool so agents can discover peers unprompted
-      (today they learn ids from messages/tasks/the operator naming them).
+    - ✅ **web / remote-TUI triggering** — operator API `/operator/consult` + `/operator/close`
+      endpoints; the `operator.Client` exposes them so `avairy-tui` drives it, and the web composer
+      gained `/consult [@node] [family]` and `/end <id>`. So both consoles can open/close consults,
+      not just render them. (Operator command is **`/end`**; the HTTP route stays `/operator/close`.)
+    - Optional enabler (not built): a `list_agents` roster MCP tool so agents can discover peers
+      unprompted (today they learn ids from messages/tasks/the operator naming them).
 
 ### Single operator
 

@@ -148,7 +148,7 @@
           <button class="stop" id="stop" title="interrupt running agents">Stop</button>
         </div>
       </div>
-      <div class="hint">Enter to send · Shift+Enter for a newline · <code>/commit &lt;msg&gt;</code> to commit the repo</div>
+      <div class="hint">Enter to send · Shift+Enter newline · <code>/commit &lt;msg&gt;</code> · <code>/consult [@node] [family]</code> · <code>/end &lt;id&gt;</code></div>
     </div>
   </main>
 
@@ -267,7 +267,7 @@ function applySystem(actor, d){
     case "node_offline": if(agents.has(actor)) setStatus(actor,"offline"); break;
     case "node_online": if(agents.get(actor)==="offline") setStatus(actor,"idle"); break;
     case "conflict_raised": sysline(`conflict on ${d.path} needs resolution`); break;
-    case "consult_opened": if(d.id) sysline(`opened ${d.id} (ephemeral) — @${d.id} to talk · /close ${d.id}`); break;
+    case "consult_opened": if(d.id) sysline(`opened ${d.id} (ephemeral) — @${d.id} to talk · /end ${d.id}`); break;
     case "consult_closed": if(d.id) sysline(`closed ${d.id} — gone`); break;
   }
 }
@@ -370,10 +370,24 @@ async function refresh(){
 }
 
 // ---- composer ----
+// parseConsult turns "/consult" args into {Target, Family}: "@linux codex" → linux/codex,
+// "codex" → core/codex, "" → core/default. Mirrors the TUI's leading-@ semantics.
+function parseConsult(a){
+  let target="", family=a;
+  if(a.startsWith("@")){ const sp=a.indexOf(" ");
+    if(sp>=0){ target=a.slice(1,sp); family=a.slice(sp+1).trim(); } else { target=a.slice(1); family=""; } }
+  return {Target:target, Family:family};
+}
 function send(){
   const ta=$("msg"); const text=ta.value.trim(); if(!text) return;
   if(text.startsWith("/commit")){ const m=text.slice(7).trim();
     if(m) post("/operator/commit",{Message:m}).then(()=>sysline("commit requested: "+m));
+    ta.value=""; grow(); return; }
+  if(text.startsWith("/consult")){
+    post("/operator/consult", parseConsult(text.slice(8).trim())); // result shows via the journal
+    ta.value=""; grow(); return; }
+  if(text.startsWith("/end")){
+    post("/operator/close",{ID:text.slice(4).trim().replace(/^@/,"")});
     ta.value=""; grow(); return; }
   post("/operator/inject",{Target:$("to").value, Body:text});
   ta.value=""; grow();

@@ -52,6 +52,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc(PathConflict, s.auth(s.handleConflict))
 	mux.HandleFunc(PathCommit, s.auth(s.handleCommit))
 	mux.HandleFunc(PathToken, s.auth(s.handleToken))
+	mux.HandleFunc(PathConsult, s.auth(s.handleConsult))
+	mux.HandleFunc(PathClose, s.auth(s.handleClose))
 	return mux
 }
 
@@ -169,6 +171,34 @@ func (s *Server) handleCommit(w http.ResponseWriter, r *http.Request) {
 		resp.Error = err.Error()
 	}
 	writeJSON(w, resp)
+}
+
+func (s *Server) handleConsult(w http.ResponseWriter, r *http.Request) {
+	var req consultRequest
+	if !readJSON(w, r, &req) {
+		return
+	}
+	if s.svc.Consult == nil {
+		writeJSON(w, consultResponse{Error: "consult unavailable"})
+		return
+	}
+	id, err := s.svc.Consult(req.Target, req.Family)
+	resp := consultResponse{ID: id}
+	if err != nil {
+		resp.Error = err.Error()
+	}
+	writeJSON(w, resp)
+}
+
+func (s *Server) handleClose(w http.ResponseWriter, r *http.Request) {
+	var req closeRequest
+	if !readJSON(w, r, &req) {
+		return
+	}
+	if s.svc.CloseConsult != nil {
+		s.svc.CloseConsult(req.ID)
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {

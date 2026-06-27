@@ -383,7 +383,7 @@ func (m *Model) submit() tea.Cmd {
 	if rest, ok := strings.CutPrefix(text, "/consult"); ok {
 		return m.consultCmd(strings.TrimSpace(rest))
 	}
-	if rest, ok := strings.CutPrefix(text, "/close"); ok {
+	if rest, ok := strings.CutPrefix(text, "/end"); ok {
 		m.closeConsult(strings.TrimSpace(rest))
 		return nil
 	}
@@ -435,7 +435,7 @@ func (m *Model) consultCmd(arg string) tea.Cmd {
 func (m *Model) closeConsult(arg string) {
 	id := strings.TrimPrefix(arg, "@")
 	if id == "" || m.deps.CloseConsult == nil {
-		m.addConversation(helpStyle.Render("usage: /close <consult-id>"))
+		m.addConversation(helpStyle.Render("usage: /end <consult-id>"))
 		return
 	}
 	if !m.deps.CloseConsult(id) { // success is journaled (consult_closed); only report the miss
@@ -698,7 +698,7 @@ func (m *Model) apply(rec journal.Record) {
 			}
 		case "consult_opened":
 			if id, _ := d["id"].(string); id != "" {
-				m.addConversation(helpStyle.Render("✓ opened " + id + " (ephemeral) — talk to it with @" + id + " · /close " + id + " when done"))
+				m.addConversation(helpStyle.Render("✓ opened " + id + " (ephemeral) — talk to it with @" + id + " · /end " + id + " when done"))
 			}
 		case "consult_closed":
 			if id, _ := d["id"].(string); id != "" {
