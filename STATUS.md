@@ -263,13 +263,12 @@ Ranked roughly by value-to-effort within each group.
     broker carries a `Source` field (`"seed"` | `"git"`) so a future merge op can raise into the
     same view without rework.
 
-20. **Scrollable conversation (and other views) in the TUI.** The body always pins to the tail —
-    `render()` shows only the last N lines that fit (`lines[len(lines)-avail:]`), with no scroll
-    offset, viewport, or PageUp/Down/mouse-wheel handling, so earlier history is unreachable (and
-    the conv buffer is capped at 500 lines, so it's eventually dropped). Add scrollback: a scroll
-    offset (or swap the body for a Bubbles `viewport`) + keybindings (PageUp/Down, maybe mouse
-    wheel), auto-following the tail unless the operator has scrolled up. Applies to Conversation
-    and, ideally, the Handovers/Tasks/Approvals/Conflicts lists too.
+20. ~~**Scrollable conversation (and other views) in the TUI.**~~ ✅ Done. `render()` now windows the
+    flattened body by a `scroll` offset (visual lines above the bottom; 0 = following the tail).
+    **PgUp/PgDn** scroll a half-page, **End** jumps to the latest, switching tabs resets to the tail.
+    While scrolled up, a new record grows the offset by the rows it added so the viewport stays
+    anchored on what you're reading (no drift); a footer indicator shows when you're scrolled back.
+    Applies to every tab (Conversation/Handovers/Tasks/Approvals/Conflicts). Test: `TestScrollback`.
 
 21. ~~**Operator choice on startup conflicts (full resync vs. resolve).**~~ ✅ Done. A node that hits
     conflicts on its **first** sync (genuine divergence: offline, local edits, hub moved on) now

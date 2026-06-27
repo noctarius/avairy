@@ -148,6 +148,7 @@ type Model struct {
 	approvalSel int             // selected row in the Approvals view
 	conflictSel int             // selected row in the Conflicts view
 	conflictExp map[string]bool // node-startup conflicts whose overview is expanded
+	scroll      int             // scrollback: visual lines above the bottom (0 = following the tail)
 	quitArmed   bool            // first ctrl+c arms; second (in succession) quits
 
 	md      *glamour.TermRenderer // markdown renderer for agent text (#23); rebuilt on width change
@@ -264,8 +265,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case recordMsg:
+		before := len(m.visualLines())
 		m.apply(journal.Record(msg))
 		m.refreshRoster() // pick up newly-enrolled agents (enrollment journals a record)
+		// If the operator has scrolled up, grow the offset by the new rows so their viewport stays
+		// anchored on what they're reading instead of drifting toward the tail.
+		if m.scroll > 0 {
+			if delta := len(m.visualLines()) - before; delta > 0 {
+				m.scroll += delta
+			}
+		}
 		return m, listen(m.sub)
 
 	case commitResultMsg:
@@ -304,6 +313,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "tab":
 			m.tab = (m.tab + 1) % numTabs
+			m.scroll = 0 // each view follows its own tail
+			return m, nil
+		case "pgup":
+			m.scroll += m.pageStep()
+			return m, nil
+		case "pgdown":
+			m.scroll = max(0, m.scroll-m.pageStep())
+			return m, nil
+		case "home":
+			m.scroll = 1 << 30 // clamped to the top in render
+			return m, nil
+		case "end":
+			m.scroll = 0 // back to following the tail
 			return m, nil
 		case "ctrl+e":
 			if m.control != nil && m.control.NewToken != nil {
@@ -702,15 +724,15 @@ func (m *Model) render() string {
 
 	// Flatten entries into visual lines — an agent message can be multi-line, and the row
 	// budget must count actual rows (else a multi-line message overflows and gets clipped).
-	var lines []string
-	for _, e := range m.bodyLines() {
-		lines = append(lines, strings.Split(e, "\n")...)
-	}
+	all := m.visualLines()
 	// Reserve rows: title + tabs + fleet + 2 seps + selector + help (+1 slack) + control + input.
 	avail := max(m.height-8-controlLines-inputHeight, 1)
-	if len(lines) > avail {
-		lines = lines[len(lines)-avail:]
-	}
+	// Scrollback: m.scroll is lines above the bottom (0 = following the tail). Clamp to range here so
+	// resizes / new content can't strand the viewport past the top.
+	maxScroll := max(0, len(all)-avail)
+	m.scroll = min(m.scroll, maxScroll)
+	end := len(all) - m.scroll
+	lines := all[max(0, end-avail):end]
 	for _, l := range lines {
 		b.WriteString(truncate(l, m.width) + "\n")
 	}
@@ -723,8 +745,10 @@ func (m *Model) render() string {
 	b.WriteString(m.input.View() + "\n")
 	if m.quitArmed {
 		b.WriteString(warnStyle.Render("press ctrl+c again to quit"))
+	} else if m.scroll > 0 {
+		b.WriteString(warnStyle.Render("⇡ scrolled back — PgUp/PgDn: scroll · End: jump to latest"))
 	} else {
-		help := "tab: view · ctrl+t: recipient · enter: send · " + newlineKey + ": newline · esc: stop · ctrl+c ×2: quit"
+		help := "tab: view · ctrl+t: recipient · enter: send · pgup/pgdn: scroll · esc: stop · ctrl+c ×2: quit"
 		if m.tab == tabApprovals {
 			help = "tab: view · ↑/↓ (j/k): select · y: allow · a: allow kind this session · n: deny · esc: stop · ctrl+c ×2: quit"
 		}
@@ -785,6 +809,19 @@ func (m *Model) fleetLine() string {
 		parts = append(parts, fmt.Sprintf("%s %s[%s]", dot, id, a.status))
 	}
 	return "fleet: " + strings.Join(parts, "  ") + fmt.Sprintf("   cost $%.2f", m.cost)
+}
+
+// pageStep is how many rows PageUp/PageDown move — about half the visible body.
+func (m *Model) pageStep() int { return max(1, (m.height-10)/2) }
+
+// visualLines flattens the current tab's body entries into terminal rows (a multi-line message
+// counts as its actual rows), so scroll math and clipping operate on real rows.
+func (m *Model) visualLines() []string {
+	var lines []string
+	for _, e := range m.bodyLines() {
+		lines = append(lines, strings.Split(e, "\n")...)
+	}
+	return lines
 }
 
 func (m *Model) bodyLines() []string {

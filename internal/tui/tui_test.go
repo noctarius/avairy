@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -11,6 +12,40 @@ import (
 	"avairy/internal/bus"
 	"avairy/internal/journal"
 )
+
+// Scrollback: at the tail the latest line shows and the oldest is off-screen; scrolling up reveals
+// older lines and hides the latest; a new record while scrolled up keeps the viewport anchored.
+func TestScrollback(t *testing.T) {
+	m, _, _ := newTestModel()
+	m.height = 20 // small body so only a few rows fit
+	for i := 0; i < 40; i++ {
+		m.apply(journal.Record{Seq: uint64(i + 1), Kind: journal.KindMessage, Actor: "human",
+			Data: bus.Message{From: "human", To: bus.Broadcast(), Body: fmt.Sprintf("line-%d", i)}})
+	}
+	v := m.render()
+	if !strings.Contains(v, "line-39") || strings.Contains(v, "line-0") {
+		t.Fatalf("at the tail: latest visible, oldest hidden:\n%s", v)
+	}
+
+	m.scroll = 30 // scroll up
+	v = m.render()
+	if strings.Contains(v, "line-39") || !strings.Contains(v, "line-9") {
+		t.Fatalf("scrolled up: latest hidden, older visible:\n%s", v)
+	}
+
+	// A new record while scrolled grows the offset by the added rows (viewport stays put).
+	before := m.scroll
+	m.Update(recordMsg(journal.Record{Seq: 100, Kind: journal.KindMessage, Actor: "human",
+		Data: bus.Message{From: "human", To: bus.Broadcast(), Body: "NEW"}}))
+	if m.scroll != before+1 {
+		t.Fatalf("scroll should grow by the new row: got %d, want %d", m.scroll, before+1)
+	}
+
+	m.scroll = 0 // back to the tail
+	if !strings.Contains(m.render(), "NEW") {
+		t.Fatal("at the tail the newest line should show")
+	}
+}
 
 func newTestModel() (*Model, *bus.Bus, journal.Log) {
 	j := journal.NewMemory()
