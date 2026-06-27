@@ -61,6 +61,12 @@ func main() {
 		mintJoin(os.Args[2:])
 		return
 	}
+	// `avairy mint-web-cert` issues an operator client cert as a .p12 to import into a browser/OS
+	// keychain, so the web console authenticates by mTLS instead of a URL token (#30).
+	if len(os.Args) > 1 && os.Args[1] == "mint-web-cert" {
+		mintWebCert(os.Args[2:])
+		return
+	}
 
 	demo := flag.Bool("demo", false, "spawn mock agents (alice, bob) for trying the loop / tests — off by default")
 	live := flag.Bool("live", false, "run 'alice' as a real agent on the MCP bus")
@@ -928,6 +934,34 @@ func mintJoin(argv []string) {
 	fmt.Println(control.EncodeJoin(control.JoinBundle{
 		Core: *coreURL, Bus: *busURL, CA: ca.CertPEM(), NodeID: *id, ClientCert: cert, ClientKey: key,
 	}))
+}
+
+// mintWebCert issues an operator client cert from the self-managed CA and writes it as a
+// password-protected PKCS#12 (.p12) to import into a browser/OS keychain — so the web console
+// authenticates by mTLS instead of a URL token (#30). Run on the core host (reads .avairy/ca.*).
+func mintWebCert(argv []string) {
+	fs := flag.NewFlagSet("mint-web-cert", flag.ExitOnError)
+	name := fs.String("name", "operator", "operator identity embedded in the cert (CN/SAN)")
+	dir := fs.String("dir", ".avairy", "directory holding the CA (ca.crt/ca.key)")
+	out := fs.String("o", "operator.p12", "output PKCS#12 file to import into the browser")
+	password := fs.String("password", "", "PKCS#12 password (browsers/keychains usually require one; default: random, printed)")
+	_ = fs.Parse(argv)
+	ca, err := control.EnsureCA(*dir)
+	if err != nil {
+		fail("mint-web-cert: ca", err)
+	}
+	pw := *password
+	if pw == "" {
+		pw = operator.RandomToken()[:16]
+	}
+	p12, err := ca.OperatorP12(*name, pw)
+	if err != nil {
+		fail("mint-web-cert", err)
+	}
+	if err := os.WriteFile(*out, p12, 0o600); err != nil {
+		fail("mint-web-cert: write", err)
+	}
+	fmt.Printf("wrote %s (password: %s)\nImport it into your browser / OS keychain, then open the web console with NO ?token= — the cert authenticates you.\n", *out, pw)
 }
 
 // decodeRecords turns persisted journal records back into typed in-memory records, so the TUI

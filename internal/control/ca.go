@@ -16,6 +16,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	pkcs12 "software.sslmate.com/src/go-pkcs12"
 )
 
 // Self-managed CA (DESIGN.md §4): so an operator can run a TLS control channel without
@@ -144,6 +146,71 @@ func (ca *CA) ClientTLS(nodeID string) (certPEM, keyPEM []byte, err error) {
 	certPEM = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 	keyPEM = pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
 	return certPEM, keyPEM, nil
+}
+
+// OperatorTLS issues a client cert for a human operator (browser / avairy-tui mTLS, #30). Its
+// identity lives in a DISTINCT URI SAN (avairy-operator:<name>) so an operator cert is never
+// mistaken for a node cert, nor a node cert for an operator.
+func (ca *CA) OperatorTLS(name string) (certPEM, keyPEM []byte, err error) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, nil, err
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: serialNumber(),
+		Subject:      pkix.Name{CommonName: name},
+		URIs:         []*url.URL{{Scheme: "avairy-operator", Opaque: name}},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().AddDate(10, 0, 0),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, ca.cert, &key.PublicKey, ca.key)
+	if err != nil {
+		return nil, nil, err
+	}
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		return nil, nil, err
+	}
+	certPEM = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyPEM = pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+	return certPEM, keyPEM, nil
+}
+
+// OperatorP12 mints an operator client cert and encodes it (with the CA in the chain) as a
+// password-protected PKCS#12 bundle for import into a browser / OS keychain (#30).
+func (ca *CA) OperatorP12(name, password string) ([]byte, error) {
+	certPEM, keyPEM, err := ca.OperatorTLS(name)
+	if err != nil {
+		return nil, err
+	}
+	cb, _ := pem.Decode(certPEM)
+	kb, _ := pem.Decode(keyPEM)
+	cert, err := x509.ParseCertificate(cb.Bytes)
+	if err != nil {
+		return nil, err
+	}
+	key, err := x509.ParseECPrivateKey(kb.Bytes)
+	if err != nil {
+		return nil, err
+	}
+	return pkcs12.Modern.Encode(key, cert, []*x509.Certificate{ca.cert}, password)
+}
+
+// OperatorIDFromCert returns the operator name from a verified client cert's avairy-operator: URI
+// SAN, or "" if it isn't an operator cert (e.g. a node cert) — so operator auth accepts only
+// operator certs, not any CA-signed cert.
+func OperatorIDFromCert(cert *x509.Certificate) string {
+	for _, u := range cert.URIs {
+		if u.Scheme == "avairy-operator" {
+			if u.Opaque != "" {
+				return u.Opaque
+			}
+			return strings.TrimPrefix(u.Path, "/")
+		}
+	}
+	return ""
 }
 
 // Pool returns a cert pool containing the CA, for verifying node client certs.

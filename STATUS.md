@@ -385,13 +385,18 @@ Ranked roughly by value-to-effort within each group.
     Cheap (mock adapter, no credits) and would catch regressions across the whole channel now that
     the surface is large.
 
-30. **Browser-client mTLS + install option.** The web operator console authenticates with the
-    operator token in the URL (`?token=`) — fine, but a leak-prone credential. Give browser clients
-    the **same client-certificate (mTLS) auth nodes have** (a CA-signed cert presented by the
-    browser, verified like a node's), so the token isn't the only path. Plus an **installation
-    option** for browser clients: a smooth flow to install the client cert into the browser/OS
-    keychain, and/or make the console **PWA-installable** so it's a first-class app rather than a
-    URL. Reuses the self-managed CA (#8) + `mint-join`-style issuance.
+30. ~~**Browser-client mTLS + install option.**~~ ✅ Done (PWA optional, deferred). The web console
+    (and `avairy-tui`, curl, …) can authenticate by **mTLS client certificate** instead of the URL
+    token: the operator-API auth accepts a verified **operator** cert and falls back to the token.
+    - Operator certs carry a **distinct SAN** (`avairy-operator:<name>`) so a node cert — though
+      CA-signed — can **not** authenticate to the operator API (`control.OperatorIDFromCert`).
+    - **`avairy mint-web-cert`** issues an operator cert from the self-managed CA and writes a
+      password-protected **PKCS#12 (`.p12`)** (cert + key + CA chain, via `go-pkcs12`) to import into
+      a browser/OS keychain. Then open the console with **no `?token=`** — the cert authenticates.
+    - Tests: `TestOperatorCertDistinctFromNode`, `TestOperatorP12RoundTrip`, `TestOperatorMTLSAuth`
+      (operator cert authes token-less; node cert + no-cert are rejected).
+    - **Deferred (optional):** PWA-installable console (manifest + service worker + icons) — the
+      `.p12` is the substantive "install option"; PWA is a UX nicety we can add later.
 
 ### Single operator
 

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	"avairy/internal/control"
 	"avairy/internal/journal"
 )
 
@@ -59,17 +60,29 @@ func (s *Server) Handler() http.Handler {
 
 func (s *Server) auth(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if s.token != "" {
-			// Bearer header (API clients) OR ?token= query param — the browser's EventSource can't
-			// set headers, so the web UI passes the token in the URL.
-			got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-			if got == "" {
-				got = r.URL.Query().Get("token")
+		if s.token == "" {
+			h(w, r) // open (dev)
+			return
+		}
+		// mTLS (#30): a verified operator client cert authenticates without a token. Only an operator
+		// cert (avairy-operator: SAN) qualifies — a node cert, though CA-signed, does not.
+		if r.TLS != nil {
+			for _, chain := range r.TLS.VerifiedChains {
+				if len(chain) > 0 && control.OperatorIDFromCert(chain[0]) != "" {
+					h(w, r)
+					return
+				}
 			}
-			if subtle.ConstantTimeCompare([]byte(got), []byte(s.token)) != 1 {
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
-				return
-			}
+		}
+		// Bearer header (API clients) OR ?token= query param — the browser's EventSource can't set
+		// headers, so the web UI passes the token in the URL.
+		got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if got == "" {
+			got = r.URL.Query().Get("token")
+		}
+		if subtle.ConstantTimeCompare([]byte(got), []byte(s.token)) != 1 {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
 		}
 		h(w, r)
 	}

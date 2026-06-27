@@ -2,6 +2,8 @@ package operator_test
 
 import (
 	"context"
+	"crypto/tls"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -13,6 +15,60 @@ import (
 	"avairy/internal/journal"
 	"avairy/internal/operator"
 )
+
+// mTLS auth (#30): a verified operator client cert authenticates the API with no token; a node
+// cert (CA-signed but not an operator cert) does not, and a plain client with neither is rejected.
+func TestOperatorMTLSAuth(t *testing.T) {
+	ca, err := control.EnsureCA(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverCert, err := ca.ServerTLS([]string{"127.0.0.1", "localhost"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	j := journal.NewMemory()
+	svc := &operator.Services{Journal: j, Bus: bus.New(j), Approvals: control.NewApprovals(0), Conflicts: control.NewConflicts()}
+	ts := httptest.NewUnstartedServer(operator.NewServer(svc, "sekret", false).Handler())
+	ts.TLS = &tls.Config{Certificates: []tls.Certificate{serverCert}, ClientAuth: tls.VerifyClientCertIfGiven, ClientCAs: ca.Pool()}
+	ts.StartTLS()
+	defer ts.Close()
+
+	client := func(cert *tls.Certificate) *http.Client {
+		tc := &tls.Config{RootCAs: ca.Pool()}
+		if cert != nil {
+			tc.Certificates = []tls.Certificate{*cert}
+		}
+		return &http.Client{Transport: &http.Transport{TLSClientConfig: tc}}
+	}
+	status := func(c *http.Client) int {
+		resp, err := c.Get(ts.URL + operator.PathState) // no ?token=
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	keypair := func(certPEM, keyPEM []byte) *tls.Certificate {
+		kp, err := tls.X509KeyPair(certPEM, keyPEM)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return &kp
+	}
+
+	opCert, opKey, _ := ca.OperatorTLS("op")
+	if got := status(client(keypair(opCert, opKey))); got != http.StatusOK {
+		t.Fatalf("operator cert should authenticate token-less: got %d", got)
+	}
+	nodeCert, nodeKey, _ := ca.ClientTLS("linbot")
+	if got := status(client(keypair(nodeCert, nodeKey))); got != http.StatusUnauthorized {
+		t.Fatalf("node cert must NOT authenticate the operator API: got %d", got)
+	}
+	if got := status(client(nil)); got != http.StatusUnauthorized {
+		t.Fatalf("no cert + no token should be unauthorized: got %d", got)
+	}
+}
 
 // End-to-end: an in-process Services served over the operator API, attached by a Client, must
 // replay journal history, stream new records, reflect state (tasks/approvals/conflicts/roster), and

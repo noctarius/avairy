@@ -12,6 +12,7 @@ require (
 	github.com/mark3labs/mcp-go v0.55.1
 	github.com/moby/patternmatcher v0.6.1
 	github.com/sabhiram/go-gitignore v0.0.0-20210923224102-525f6e181f06
+	software.sslmate.com/src/go-pkcs12 v0.7.3
 )
 
 require (
@@ -48,6 +49,7 @@ require (
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	github.com/yuin/goldmark v1.7.13 // indirect
 	github.com/yuin/goldmark-emoji v1.0.6 // indirect
+	golang.org/x/crypto v0.36.0 // indirect
 	golang.org/x/net v0.38.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.45.0 // indirect

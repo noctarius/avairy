@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	pkcs12 "software.sslmate.com/src/go-pkcs12"
+
 	"avairy/internal/journal"
 	"avairy/internal/workspace"
 )
@@ -162,4 +164,66 @@ func TestJoinEncodeDecode(t *testing.T) {
 	if _, err := DecodeJoin("!!!not base64!!!"); err == nil {
 		t.Fatal("bad join string should error")
 	}
+}
+
+// An operator cert (avairy-operator: SAN) is recognized as an operator; a node cert (avairy: SAN),
+// though CA-signed, is NOT — so a node can't authenticate to the operator API (#30).
+func TestOperatorCertDistinctFromNode(t *testing.T) {
+	ca, err := EnsureCA(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	opPEM, _, err := ca.OperatorTLS("alice-op")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := OperatorIDFromCert(parseCertPEM(t, opPEM)); got != "alice-op" {
+		t.Fatalf("operator id from operator cert = %q, want alice-op", got)
+	}
+	nodePEM, _, err := ca.ClientTLS("linbot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodeCert := parseCertPEM(t, nodePEM)
+	if OperatorIDFromCert(nodeCert) != "" {
+		t.Fatal("a node cert must NOT count as an operator cert")
+	}
+	if nodeIDFromCert(nodeCert) != "linbot" {
+		t.Fatalf("node id from node cert = %q, want linbot", nodeIDFromCert(nodeCert))
+	}
+}
+
+// OperatorP12 produces a browser-importable PKCS#12 carrying the operator key, cert, and CA chain.
+func TestOperatorP12RoundTrip(t *testing.T) {
+	ca, err := EnsureCA(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	p12, err := ca.OperatorP12("op", "secret123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, cert, caCerts, err := pkcs12.DecodeChain(p12, "secret123")
+	if err != nil {
+		t.Fatalf("decode p12: %v", err)
+	}
+	if key == nil || cert == nil {
+		t.Fatal("p12 missing key/cert")
+	}
+	if OperatorIDFromCert(cert) != "op" {
+		t.Fatalf("p12 cert SAN = %q, want op", OperatorIDFromCert(cert))
+	}
+	if len(caCerts) != 1 {
+		t.Fatalf("p12 should carry the CA chain, got %d certs", len(caCerts))
+	}
+}
+
+func parseCertPEM(t *testing.T, p []byte) *x509.Certificate {
+	t.Helper()
+	b, _ := pem.Decode(p)
+	c, err := x509.ParseCertificate(b.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
 }
