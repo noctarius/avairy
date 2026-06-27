@@ -12,10 +12,17 @@ import (
 
 func (s *Server) registerSendMessage() {
 	s.mcp.AddTool(mcpgo.NewTool("send_message",
-		mcpgo.WithDescription("Send a message to another agent, a role, or everyone, over the avairy bus."),
+		mcpgo.WithDescription("Send a message to a specific agent, a role/group, or everyone, over the avairy bus. "+
+			"To get ONE peer to act on something, address it directly with agent:<id> — that wakes it into a turn. "+
+			"role:<name> and broadcast are for group context (FYI to several agents) and do NOT wake anyone into a "+
+			"turn, so don't use them to ask a particular agent to do something."),
 		mcpgo.WithString("to", mcpgo.Required(),
-			mcpgo.Description("Recipient: \"broadcast\", \"agent:<id>\" (use an id from list_agents), or \"role:<name>\". "+
-				"To reach a specific agent prefer agent:<id>; an agent is also addressable as role:<its id> and role:<its os>.")),
+			mcpgo.Description("Recipient, one of:\n"+
+				"  agent:<id>   — one specific agent (use an id from list_agents). Wakes it; use this to ask a peer to act.\n"+
+				"  role:<name>  — every agent with that role; delivered as context, does not wake. An agent is also\n"+
+				"                 reachable as role:<its id> and role:<its os> (e.g. role:macos, role:darwin).\n"+
+				"  broadcast    — everyone; context only, does not wake.\n"+
+				"A directed send that matches nobody is rejected with an error — call list_agents to see who's reachable.")),
 		mcpgo.WithString("body", mcpgo.Required(), mcpgo.Description("Message text")),
 		mcpgo.WithString("delivery",
 			mcpgo.Description("\"steer\" (default; deliver at next turn boundary) or \"interrupt\" (mid-reasoning)")),
