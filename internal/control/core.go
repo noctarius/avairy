@@ -340,6 +340,17 @@ func (c *Core) handleEvents(nodeID string, w http.ResponseWriter, r *http.Reques
 	}
 	c.touch(nodeID)
 	for _, e := range req.Events {
+		// Idle teardown (#28): the node reports a sleeping/awake agent lifecycle over the same
+		// events channel; translate those into the system events the operator consoles render
+		// (they aren't real agent stream events).
+		if e.Type == EventAgentSleeping || e.Type == EventAgentAwake {
+			event := "agent_sleeping"
+			if e.Type == EventAgentAwake {
+				event = "agent_awake"
+			}
+			c.jrnl.Append(journal.KindSystem, e.AgentID, map[string]any{"event": event})
+			continue
+		}
 		ev := agent.Event{Type: agent.EventType(e.Type), Text: e.Text}
 		if e.Tool != "" {
 			ev.Tool = &agent.ToolCall{Name: e.Tool, Input: e.ToolInput}

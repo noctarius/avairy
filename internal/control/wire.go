@@ -68,6 +68,14 @@ type InboxPullResponse struct {
 	Messages []InboxMessage `json:"messages"`
 }
 
+// Pseudo-event types a node reports over the events channel to signal an agent's idle-teardown
+// lifecycle (#28); core translates these into agent_sleeping/agent_awake system events rather than
+// journaling them as agent stream events. Distinct from any agent.EventType.
+const (
+	EventAgentSleeping = "sleeping"
+	EventAgentAwake    = "awake"
+)
+
 // AgentEventReport is a normalized agent stream event shipped to the core journal so a
 // remote agent's activity shows in the operator TUI.
 type AgentEventReport struct {

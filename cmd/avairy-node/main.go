@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -57,6 +58,7 @@ func main() {
 	insecure := flag.Bool("insecure", false, "skip TLS verification for an https core (DEV ONLY — exposes the channel to MITM)")
 	join := flag.String("join", "", "join string from core (carries core URL + CA + token or client cert); supplies -core/-token/-ca")
 	joinFile := flag.String("join-file", "", "file containing a join string (e.g. core's .avairy/join)")
+	idleSleep := flag.Duration("idle-sleep", 0, "tear this node's idle agent subprocess down to a \"sleeping\" state after this long with no activity, respawning (and resuming its session) on the next directed message (#28); 0 = stay resident")
 	flag.Parse()
 
 	// A join bundle supplies core URL + how to trust/authenticate in one string, overriding the
@@ -192,7 +194,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, "avairy-node: -family requires -core-mcp")
 			os.Exit(2)
 		}
-		if err := spawnAgent(ctx, n, *family, *id, *role, *model, *ws, *proxy, mirrorDir, agent.SessionPersistent, *gateEdits); err != nil {
+		if err := spawnAgent(ctx, n, *family, *id, *role, *model, *ws, *proxy, mirrorDir, agent.SessionPersistent, *gateEdits, *idleSleep); err != nil {
 			fmt.Fprintln(os.Stderr, "avairy-node: spawn agent:", err)
 			os.Exit(1)
 		}
@@ -360,7 +362,7 @@ func (m *nodeConsultMgr) apply(parent context.Context, cmd control.ConsultComman
 			fmt.Fprintln(os.Stderr, "consult workspace:", err)
 			return
 		}
-		if err := spawnAgent(cctx, m.n, fam, cmd.ID, nodeConsultRole, m.model, ws, proxyAddr, "", agent.SessionEphemeral, m.gateEdits); err != nil {
+		if err := spawnAgent(cctx, m.n, fam, cmd.ID, nodeConsultRole, m.model, ws, proxyAddr, "", agent.SessionEphemeral, m.gateEdits, 0); err != nil {
 			cancel()
 			fmt.Fprintln(os.Stderr, "consult spawn:", err)
 			return
@@ -397,8 +399,12 @@ func startConsultProxy(ctx context.Context, n *control.Node, coreMCP, id string,
 }
 
 // spawnAgent starts an agent on this node wired to the local MCP proxy, ships its events to
-// the core journal, and injects inbound bus messages (pulled from core) into its session.
-func spawnAgent(ctx context.Context, n *control.Node, family, agentID, role, model, ws, proxy, mirrorDir string, mode agent.SessionMode, gateEdits bool) error {
+// the core journal, and injects inbound bus messages (pulled from core) into its session. When
+// idle > 0 it tears the subprocess down to a "sleeping" state after that long quiet and lazily
+// respawns it on the next wake-worthy directed message (#28) — the node-side mirror of
+// internal/supervisor, over the HTTP pull/post transport instead of the in-process bus. A respawn
+// resumes the agent's session (so context survives sleep for families that support --resume).
+func spawnAgent(ctx context.Context, n *control.Node, family, agentID, role, model, ws, proxy, mirrorDir string, mode agent.SessionMode, gateEdits bool, idle time.Duration) error {
 	if role == "" {
 		role = defaultRole
 	}
@@ -416,83 +422,156 @@ func spawnAgent(ctx context.Context, n *control.Node, family, agentID, role, mod
 	if err != nil {
 		return err
 	}
-	cfg := agent.SessionConfig{
-		AgentID:   agentID,
-		Role:      role,
-		Mode:      mode,
-		Workspace: ws,
-		Model:     model,
-		MCP:       []agent.MCPServer{{Name: "avairy", Type: "http", URL: proxyURL}},
-	}
-	// Resume the agent's prior conversation across a node restart (DESIGN.md §8): the session id
-	// is persisted under the sync-excluded .avairy dir and passed back as ResumeID. Only for
-	// families that actually honor it (claude --resume, codex thread/resume).
-	// Persist/resume only for a persistent session — never an ephemeral one (a one-shot fresh
-	// look must not overwrite the agent's real session). The node only spawns persistent agents
-	// today; the Mode guard keeps the invariant if that ever changes.
+	// Persist/resume the session id (DESIGN.md §8) only for a persistent session — never an
+	// ephemeral one. Across both node restarts and idle respawns, ResumeID restores the agent's
+	// prior conversation for families that honor it (claude --resume, codex thread/resume).
 	var sessionFile string
-	if ws != "" && ad.Capabilities().SupportsResume && cfg.Mode != agent.SessionEphemeral {
+	if ws != "" && ad.Capabilities().SupportsResume && mode != agent.SessionEphemeral {
 		sessionFile = filepath.Join(ws, ".avairy", "session")
-		if prev := readSession(sessionFile); prev != "" {
-			cfg.ResumeID = prev
-			fmt.Printf("resuming %s session %s for agent %q\n", family, prev, agentID)
-		}
 	}
-	sess, err := ad.Start(ctx, cfg)
-	if err != nil {
-		return err
-	}
-	fmt.Printf("spawned %s agent %q → bus via %s\n", family, agentID, proxyURL)
 
-	// Ship the agent's events to the core journal (so they appear in the operator TUI), and
-	// persist the session id once the agent reports it so a respawn can resume.
-	go func() {
-		savedSession := ""
-		for ev := range sess.Events() {
-			if sessionFile != "" {
-				if id := sess.ID(); id != "" && id != savedSession {
-					savedSession = id
-					writeSession(sessionFile, id)
+	// Shared activity state, updated by the per-session event goroutine and the pull loop; read by
+	// the idle check. A session is never slept mid-turn (working stays true until turn_done).
+	var (
+		mu         sync.Mutex
+		lastActive = time.Now()
+		working    bool
+	)
+	touch := func() {
+		mu.Lock()
+		lastActive = time.Now()
+		mu.Unlock()
+	}
+
+	// spawn starts a fresh session (resuming if we have a prior id) and a goroutine shipping its
+	// events to core + persisting its session id. Each respawn gets its own event goroutine, which
+	// ends when the session's stream closes (on sleep / shutdown).
+	spawn := func(sctx context.Context) (agent.Session, error) {
+		cfg := agent.SessionConfig{
+			AgentID:   agentID,
+			Role:      role,
+			Mode:      mode,
+			Workspace: ws,
+			Model:     model,
+			MCP:       []agent.MCPServer{{Name: "avairy", Type: "http", URL: proxyURL}},
+		}
+		if sessionFile != "" {
+			if prev := readSession(sessionFile); prev != "" {
+				cfg.ResumeID = prev
+				fmt.Printf("resuming %s session %s for agent %q\n", family, prev, agentID)
+			}
+		}
+		sess, err := ad.Start(sctx, cfg)
+		if err != nil {
+			return nil, err
+		}
+		fmt.Printf("spawned %s agent %q → bus via %s\n", family, agentID, proxyURL)
+		go func() {
+			savedSession := ""
+			for ev := range sess.Events() {
+				if sessionFile != "" {
+					if id := sess.ID(); id != "" && id != savedSession {
+						savedSession = id
+						writeSession(sessionFile, id)
+					}
 				}
+				r := control.AgentEventReport{AgentID: agentID, Type: string(ev.Type), Text: ev.Text}
+				if ev.Tool != nil {
+					r.Tool = ev.Tool.Name
+					r.ToolInput = agent.TrimInput(ev.Tool.Input) // ship the args so core sees what the agent did
+				}
+				if ev.Usage != nil {
+					r.CostUSD = ev.Usage.CostUSD
+				}
+				_ = n.PostEvents([]control.AgentEventReport{r})
+				mu.Lock()
+				lastActive = time.Now()
+				working = ev.Type != agent.EventTurnDone
+				mu.Unlock()
 			}
-			r := control.AgentEventReport{AgentID: agentID, Type: string(ev.Type), Text: ev.Text}
-			if ev.Tool != nil {
-				r.Tool = ev.Tool.Name
-				r.ToolInput = agent.TrimInput(ev.Tool.Input) // ship the args so core sees what the agent did
-			}
-			if ev.Usage != nil {
-				r.CostUSD = ev.Usage.CostUSD
-			}
-			_ = n.PostEvents([]control.AgentEventReport{r})
-		}
-	}()
+		}()
+		touch()
+		return sess, nil
+	}
 
-	// Pull inbound bus messages from core and inject them into the agent (the node-side runner).
-	waker := bus.NewWaker()
+	// The node-side runner: spawn (awake), pull inbound messages each tick, wake/deliver/interrupt,
+	// and (when idle > 0) sleep on quiet / lazily respawn on the next wake-worthy message.
 	go func() {
+		var (
+			sess       agent.Session
+			sessCancel context.CancelFunc
+		)
+		wakeUp := func(wasAsleep bool) bool {
+			if sess != nil {
+				return true
+			}
+			sctx, sc := context.WithCancel(ctx)
+			s, err := spawn(sctx)
+			if err != nil {
+				sc()
+				fmt.Fprintln(os.Stderr, "avairy-node: respawn agent:", err)
+				return false
+			}
+			sess, sessCancel = s, sc
+			if wasAsleep {
+				_ = n.PostEvents([]control.AgentEventReport{{AgentID: agentID, Type: control.EventAgentAwake}})
+			}
+			return true
+		}
+		sleep := func() {
+			if sess == nil {
+				return
+			}
+			sessCancel()
+			_ = sess.Close()
+			sess, sessCancel = nil, nil
+			mu.Lock()
+			working = false
+			mu.Unlock()
+			_ = n.PostEvents([]control.AgentEventReport{{AgentID: agentID, Type: control.EventAgentSleeping}})
+			fmt.Printf("agent %q sleeping (idle) — a directed message wakes it\n", agentID)
+		}
+
+		wakeUp(false) // start awake
+		waker := bus.NewWaker()
 		t := time.NewTicker(time.Second)
 		defer t.Stop()
 		for {
 			select {
 			case <-ctx.Done():
-				_ = sess.Close()
+				if sess != nil {
+					sessCancel()
+					_ = sess.Close()
+				}
 				return
 			case <-t.C:
-				msgs, err := n.PullInbox(agentID)
-				if err != nil {
-					continue
+				if msgs, err := n.PullInbox(agentID); err == nil {
+					for _, m := range msgs {
+						if m.Interrupt {
+							if sess != nil {
+								_ = sess.Interrupt(ctx)
+							}
+							continue
+						}
+						// Bus hardening (#25): only wake the agent for messages that should trigger a
+						// turn (direct, or human/facilitator, within the autonomous-wake budget).
+						if !waker.Wake(m.From, bus.ToKind(m.ToKind), false, time.Now()) {
+							continue
+						}
+						if sess == nil && !wakeUp(true) {
+							continue
+						}
+						_ = sess.Send(ctx, m.Body, agent.DeliverySteer)
+						touch()
+					}
 				}
-				for _, m := range msgs {
-					if m.Interrupt {
-						_ = sess.Interrupt(ctx)
-						continue
+				if idle > 0 && sess != nil {
+					mu.Lock()
+					elapsed := !working && time.Since(lastActive) >= idle
+					mu.Unlock()
+					if elapsed {
+						sleep()
 					}
-					// Bus hardening (#25): only wake the agent for messages that should trigger a
-					// turn (direct, or human/facilitator, within the autonomous-wake budget).
-					if !waker.Wake(m.From, bus.ToKind(m.ToKind), false, time.Now()) {
-						continue
-					}
-					_ = sess.Send(ctx, m.Body, agent.DeliverySteer)
 				}
 			}
 		}

@@ -394,8 +394,13 @@ Ranked roughly by value-to-effort within each group.
     the family adapter + gate server are built once and reused across respawns. A crashed subprocess
     also drops to sleeping and respawns on demand. Default **off** (sleep drops in-session context;
     the agent re-reads the blackboard/journal on wake). Tests: `supervisor_test.go` (deliver-as-runner,
-    sleep+respawn) with `-race`. **Follow-up:** wire the same supervisor into `avairy-node` (it still
-    uses the plain runner) so remote agents sleep too.
+    sleep+respawn) with `-race`.
+    - **Node agents too** ✅: `avairy-node -idle-sleep <dur>` mirrors the state machine over the HTTP
+      pull/post transport (no local bus). The node reports `sleeping`/`awake` over the events channel;
+      core translates those two pseudo-types into the same `agent_sleeping`/`agent_awake` system events
+      the consoles render. A node respawn **resumes** the agent's session (ResumeID), so context
+      survives sleep for families that support `--resume` — better than core-local (which loses it).
+      Test: `TestE2E_NodeSleepLifecycleSurfaces` asserts the wire translation over real HTTP.
 
 29. ~~**End-to-end distributed integration test.**~~ ✅ Done. New `internal/e2e` package: a black-box
     test that stands up a real core (bus + MCP bus HTTP server + control HTTP server + canonical hub)

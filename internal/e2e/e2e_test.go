@@ -239,7 +239,51 @@ func TestE2E_ConflictRaisesAndResolves(t *testing.T) {
 	}
 }
 
+// A node reporting its agent's idle-teardown lifecycle over the events channel lands as the
+// agent_sleeping / agent_awake system events the operator consoles render (#28).
+func TestE2E_NodeSleepLifecycleSurfaces(t *testing.T) {
+	env := newCore(t)
+	node := control.NewNode(env.ctrlURL, "edge")
+	if err := node.Enroll(env.core.CurrentToken(), "linux", nil); err != nil {
+		t.Fatalf("enroll: %v", err)
+	}
+
+	if err := node.PostEvents([]control.AgentEventReport{{AgentID: "edge", Type: control.EventAgentSleeping}}); err != nil {
+		t.Fatalf("post sleeping: %v", err)
+	}
+	if !journalHasSystem(env.jrnl, "edge", "agent_sleeping") {
+		t.Fatalf("sleeping lifecycle did not surface; records=%+v", env.jrnl.Records())
+	}
+
+	if err := node.PostEvents([]control.AgentEventReport{{AgentID: "edge", Type: control.EventAgentAwake}}); err != nil {
+		t.Fatalf("post awake: %v", err)
+	}
+	if !journalHasSystem(env.jrnl, "edge", "agent_awake") {
+		t.Fatalf("awake lifecycle did not surface; records=%+v", env.jrnl.Records())
+	}
+	// And the pseudo-events must NOT have been journaled as agent stream events.
+	for _, r := range env.jrnl.Records() {
+		if r.Kind == journal.KindAgentEvent {
+			if ev, ok := r.Data.(agent.Event); ok && (ev.Type == "sleeping" || ev.Type == "awake") {
+				t.Fatalf("lifecycle leaked as an agent stream event: %+v", ev)
+			}
+		}
+	}
+}
+
 // --- helpers ---
+
+func journalHasSystem(j *journal.Memory, actor, event string) bool {
+	for _, r := range j.Records() {
+		if r.Kind != journal.KindSystem || r.Actor != actor {
+			continue
+		}
+		if d, ok := r.Data.(map[string]any); ok && d["event"] == event {
+			return true
+		}
+	}
+	return false
+}
 
 func writeFile(t *testing.T, dir, rel, content string) {
 	t.Helper()

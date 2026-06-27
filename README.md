@@ -291,6 +291,7 @@ node; `avairy mint-web-cert` writes an `operator.p12` to import into a browser f
 | `-family <fam>` | — | Spawn & drive the agent here (`claude`/`codex`/`copilot`/`grok`); empty = proxy-only. |
 | `-model` / `-role` | — | Tune the spawned agent. |
 | `-gate-edits` | off | Gate the spawned agent's file edits. |
+| `-idle-sleep <dur>` | 0 (off) | Tear this node's idle agent down to a **sleeping** state after this long quiet; the next directed message respawns it (resuming its session). |
 | `-ca <file>` / `-insecure` | — | Trust a PEM CA for an https core / skip verification (dev only). |
 | `-join <str>` / `-join-file <path>` | — | One bundled string: core URL + CA + token/cert. |
 
