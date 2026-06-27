@@ -397,10 +397,16 @@ Ranked roughly by value-to-effort within each group.
     sleep+respawn) with `-race`. **Follow-up:** wire the same supervisor into `avairy-node` (it still
     uses the plain runner) so remote agents sleep too.
 
-29. **End-to-end distributed integration test.** No black-box test spins up core + a node + a mock
-    agent over real HTTP and asserts a message round-trips, a file syncs, and a conflict resolves.
-    Cheap (mock adapter, no credits) and would catch regressions across the whole channel now that
-    the surface is large.
+29. ~~**End-to-end distributed integration test.**~~ ✅ Done. New `internal/e2e` package: a black-box
+    test that stands up a real core (bus + MCP bus HTTP server + control HTTP server + canonical hub)
+    and a real `control.Node` talking over actual `httptest` HTTP, driving a mock agent through the
+    node's pull/post loop (the same two goroutines `avairy-node` runs) — zero credits. Three tests:
+    `TestE2E_MessageRoundTrips` (human→bus→MCP inbox→node→agent→PostEvents→core journal),
+    `TestE2E_FileSyncRoundTrips` (file up to the hub and back down to a second node), and
+    `TestE2E_ConflictRaisesAndResolves` (a diverged node raises a startup conflict to the operator,
+    whose resync verdict rides the heartbeat back and reconciles it to canonical). Wired exactly as
+    `cmd/avairy` does (`OnEnroll`→`RegisterAgent`, `InboxDrainer`→`DrainInbox`, `OnNodeConflict`).
+    Passes under `-race`.
 
 30. ~~**Browser-client mTLS + install option.**~~ ✅ Done (PWA optional, deferred). The web console
     (and `avairy-tui`, curl, …) can authenticate by **mTLS client certificate** instead of the URL
