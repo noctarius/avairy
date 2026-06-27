@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
+
+	"avairy/internal/bus"
 )
 
 // AgentRoles is the bus role set an agent registers with. Besides the generic "backend" role, an
@@ -17,6 +19,32 @@ func AgentRoles(id string, caps map[string]string) []string {
 		roles = append(roles, os)
 	}
 	return roles
+}
+
+// hasRecipient reports whether a directed address (agent:<id> / role:<name>) would reach any
+// registered agent other than the sender. Used to reject unaddressable sends so the sender is
+// notified instead of getting a false "sent".
+func (s *Server) hasRecipient(from string, addr bus.Addr) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, reg := range s.agents {
+		if id == from {
+			continue
+		}
+		switch addr.Kind {
+		case bus.ToAgent:
+			if id == addr.Value {
+				return true
+			}
+		case bus.ToRole:
+			for _, r := range reg.roles {
+				if r == addr.Value {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // registerListAgents exposes the roster so an agent can discover peers unprompted (#24) — find who

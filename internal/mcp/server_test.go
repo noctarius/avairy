@@ -144,3 +144,33 @@ func must(res *mcpgo.CallToolResult, err error) *mcpgo.CallToolResult {
 	}
 	return res
 }
+
+// A directed message that matches no recipient must be rejected so the sender knows (and can fix
+// the address) instead of getting a false "sent" — the silent drop is what hid the role:macos bug.
+func TestSendMessageRejectsUnaddressable(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.RegisterAgent("alice", AgentRoles("alice", map[string]string{"os": "linux"}), map[string]string{"os": "linux"})
+
+	if res := must(s.handleSendMessage(asAgent("alice"), call(map[string]any{"to": "agent:ghost", "body": "hi"}))); !res.IsError {
+		t.Fatalf("agent:ghost should be rejected (no such agent); got %q", resultText(res))
+	}
+	if res := must(s.handleSendMessage(asAgent("alice"), call(map[string]any{"to": "role:macos", "body": "hi"}))); !res.IsError {
+		t.Fatalf("role:macos should be rejected (no agent has that role); got %q", resultText(res))
+	}
+	// A role only the sender holds reaches nobody → reject too.
+	if res := must(s.handleSendMessage(asAgent("alice"), call(map[string]any{"to": "role:linux", "body": "hi"}))); !res.IsError {
+		t.Fatalf("role:linux (only the sender) should be rejected; got %q", resultText(res))
+	}
+
+	// A real recipient succeeds; broadcast is always allowed (fan-out, not a targeted address).
+	s.RegisterAgent("bob", AgentRoles("bob", map[string]string{"os": "linux"}), map[string]string{"os": "linux"})
+	if res := must(s.handleSendMessage(asAgent("alice"), call(map[string]any{"to": "agent:bob", "body": "hi"}))); res.IsError {
+		t.Fatalf("agent:bob should succeed: %s", resultText(res))
+	}
+	if res := must(s.handleSendMessage(asAgent("alice"), call(map[string]any{"to": "role:linux", "body": "hi"}))); res.IsError {
+		t.Fatalf("role:linux now reaches bob, should succeed: %s", resultText(res))
+	}
+	if res := must(s.handleSendMessage(asAgent("alice"), call(map[string]any{"to": "broadcast", "body": "hi"}))); res.IsError {
+		t.Fatalf("broadcast should always be allowed: %s", resultText(res))
+	}
+}

@@ -7,6 +7,7 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 
 	"avairy/internal/agent"
+	"avairy/internal/bus"
 )
 
 func (s *Server) registerSendMessage() {
@@ -37,6 +38,12 @@ func (s *Server) handleSendMessage(ctx context.Context, req mcpgo.CallToolReques
 	addr, err := parseAddr(to)
 	if err != nil {
 		return mcpgo.NewToolResultError("send_message: " + err.Error()), nil
+	}
+	// Reject a directed message that reaches no one, so the sender learns its address was wrong
+	// instead of getting a false "sent" (a silent drop is what hid the role:macos bug). Broadcast
+	// is a fan-out, not a targeted address, so it's always allowed.
+	if addr.Kind != bus.ToBroadcast && !s.hasRecipient(from, addr) {
+		return mcpgo.NewToolResultError("send_message: no agent matches " + to + " — call list_agents to see who's reachable (address a specific peer as agent:<id>)"), nil
 	}
 	delivery := agent.DeliverySteer
 	if req.GetString("delivery", "steer") == string(agent.DeliveryInterrupt) {
