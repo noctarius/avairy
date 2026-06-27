@@ -175,22 +175,20 @@ Ranked roughly by value-to-effort within each group.
     So it catches the classic back-to-back repeat (period 1), **A↔B oscillation** (period 2,
     e.g. ping-ponging between two fixes), and **interleaved retries** (reasoning between attempts
     no longer hides the repeat); two rounds of edit/test are *not* flagged (normal iteration).
-    On a hit the facilitator auto-runs a fresh look (#0). Both deterministic cycle cases are
-    covered; two loop *kinds* the period detector inherently can't see remain open:
+    On a hit the facilitator auto-runs a fresh look (#0).
 
-    - **(a) Circling without a clean period** — *deterministic, buildable now.* An agent churns
-      the same few actions in no fixed order (`A B C  A D B  A C B …`) — stuck, but no period, so
-      `trackLoop` stays silent. Fix is a **novelty/progress** signal (not periodicity): track the
-      set of distinct action signatures over a window and flag when the agent produces **no new
-      (never-seen) action** for N steps. Tune the window so a repetitive-but-productive phase
-      (edit many files, rerun the same test) doesn't trip it.
-    - **(b) Semantic loops** — *needs an LLM.* Detection is exact string match on
-      `tool:<name>:<arg>`, so conceptually-identical-but-textually-different steps slip through
-      (`go test ./a` ↔ `go test ./b`; the same fix in different files; "try X" ↔ "attempt X
-      again"). Catching "same intent, different surface form" needs judgment → an **LLM `Nudger`**
-      (the design's pluggable seam, `RuleNudger` today) periodically asked "is this agent making
-      progress or circling?". It's just another trigger feeding the existing fresh-look
-      intervention (#0), so the deterministic detector handles cheap cases and the LLM the rest.
+    - **(a) Circling without a clean period** — ✅ Done. `trackLoop` now also tracks a **novelty**
+      signal: an action never seen in the recent window is progress (resets); `circleN` (6)
+      consecutive actions that introduce nothing new fire a loop even with no period (`A B C  B A C
+      C A B …`). A new action every few steps (editing many files, productive churn) keeps
+      resetting it, so genuine iteration isn't flagged. Tests: `TestLoop_CirclingDetection`.
+    - **(b) Semantic loops** — addressed by **design**, not a continuous LLM. Rather than an
+      always-on LLM reading the whole transcript (token-heavy), the **deterministic detectors are
+      the cheap trigger**; on a hit the facilitator **hands off to a local agent** (the fresh-look
+      one-shot, #0) with a *summary* of the loop (the cycle's repeating block, or the circling
+      detector's list of churned actions) to analyze the situation and advise — not the full
+      history. So exact-string detection stays cheap, and the agent supplies the judgment for the
+      "same intent, different surface form" cases when it's actually invoked.
 
 ### Usability / driving work
 

@@ -183,6 +183,21 @@ func TestLoop_CycleDetection(t *testing.T) {
 	}
 }
 
+// Circling detection (#14a): an agent churning the same few actions in no fixed order has no
+// period (so the cycle detector stays silent), but introduces no new action for a stretch → a loop.
+func TestLoop_CirclingDetection(t *testing.T) {
+	a, b, c := toolEv("a"), toolEv("b"), toolEv("c")
+	// a b c b a c c a b — no period-≤4 ×3 repeat, but nothing new after the first three → circling.
+	if n := loopFires([]agent.Event{a, b, c, b, a, c, c, a, b}); n != 1 {
+		t.Fatalf("aperiodic circling should fire once, fired %d", n)
+	}
+	// Progress: a brand-new action every few steps keeps resetting the novelty counter — not a loop.
+	d, e, ff := toolEv("d"), toolEv("e"), toolEv("f")
+	if n := loopFires([]agent.Event{a, b, a, b, c, a, b, d, a, b, e, ff}); n != 0 {
+		t.Fatalf("introducing new actions is progress, should NOT fire, fired %d", n)
+	}
+}
+
 // On a detected loop, the facilitator runs a fresh look and delivers its answer to the agent.
 func TestObserve_LoopRunsFreshLook(t *testing.T) {
 	j := journal.NewMemory()

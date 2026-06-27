@@ -13,6 +13,7 @@ package facilitator
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -88,6 +89,7 @@ type Facilitator struct {
 
 	mu        sync.Mutex
 	recent    map[string][]string  // agent -> recent activity signatures
+	stale     map[string]int       // agent -> consecutive actions with nothing never-seen (circling, #14a)
 	lastNudge map[string]time.Time // (agent, trigger) -> when we last nudged it
 }
 
@@ -101,6 +103,7 @@ func New(b *bus.Bus, roster Roster, nudger Nudger) *Facilitator {
 		cooldown:  45 * time.Second,
 		now:       time.Now,
 		recent:    make(map[string][]string),
+		stale:     make(map[string]int),
 		lastNudge: make(map[string]time.Time),
 	}
 }
@@ -205,18 +208,58 @@ const loopMaxPeriod = 4
 func (f *Facilitator) trackLoop(agentID, sig string) (Trigger, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	w := append(f.recent[agentID], sig)
+	old := f.recent[agentID]
+	novel := !slices.Contains(old, sig) // a never-seen-this-window action = progress
+	w := append(old, sig)
 	if maxLen := loopMaxPeriod * f.loopN; len(w) > maxLen {
 		w = w[len(w)-maxLen:]
 	}
 	f.recent[agentID] = w
+
+	// Periodic cycle: a block of 1..loopMaxPeriod actions repeated loopN times (period-1 repeats,
+	// A↔B oscillation, interleaved retries).
 	for p := 1; p <= loopMaxPeriod && p*f.loopN <= len(w); p++ {
 		if isCycle(w[len(w)-p*f.loopN:], p) {
-			f.recent[agentID] = nil
+			f.resetLoop(agentID)
 			return Trigger{Kind: TriggerLoop, Agent: agentID, Detail: cycleDetail(w[len(w)-p:])}, true
 		}
 	}
+
+	// Aperiodic circling (#14a): the agent churns the same few actions in no fixed order, so there's
+	// no period — but it introduces no NEW action for circleN steps. A novel action means progress
+	// (resets); circleN consecutive non-novel steps means it's stuck recycling old moves.
+	if novel {
+		f.stale[agentID] = 0
+	} else if f.stale[agentID]++; f.stale[agentID] >= circleN {
+		detail := circlingDetail(w)
+		f.resetLoop(agentID)
+		return Trigger{Kind: TriggerLoop, Agent: agentID, Detail: detail}, true
+	}
 	return Trigger{}, false
+}
+
+// circleN is how many consecutive actions introducing nothing never-seen-this-window count as
+// circling. Kept below the window (loopMaxPeriod*loopN) so a still-in-window action stays non-novel.
+const circleN = 6
+
+func (f *Facilitator) resetLoop(agentID string) {
+	f.recent[agentID] = nil
+	delete(f.stale, agentID)
+}
+
+// circlingDetail summarizes the churn for the handoff to a fresh-look agent: the distinct actions
+// being recycled, in first-seen order. Enough context to analyze — without dumping the transcript.
+func circlingDetail(w []string) string {
+	seen := make(map[string]bool, len(w))
+	var distinct []string
+	for _, s := range w {
+		a := strings.TrimPrefix(s, "tool:")
+		if !seen[a] {
+			seen[a] = true
+			distinct = append(distinct, a)
+		}
+	}
+	return "circling these actions without progress: " + strings.Join(distinct, ", ")
 }
 
 // isCycle reports whether tail is a single block of length p repeated (tail[i] == tail[i-p]).
