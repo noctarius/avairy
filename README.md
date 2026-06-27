@@ -217,8 +217,15 @@ http://<control-addr>/operator/ui?token=<operator-token>
 
 The browser console shows the conversation, fleet, tasks, approvals, and conflicts, and lets you
 message agents (broadcast or a specific one), interrupt, allow/deny approvals, resolve/delegate
-conflicts, and `/commit` — the same actions as the TUI, over the same API. Both clients consume a
-live SSE journal stream; auth is the operator token. Single operator for now.
+conflicts, `/commit`, and spawn disposable consult agents (`/consult [@node]` … `/end`) — the same
+actions as the TUI, over the same API. Both clients consume a live SSE journal stream. Single
+operator for now.
+
+**Auth.** The operator token (above) is the default. Or authenticate by **mTLS client certificate**
+(under `-tls-auto`): `avairy mint-web-cert` issues an operator cert and writes a password-protected
+`operator.p12` (cert + key + CA) to import into your browser / OS keychain — then open the console
+with **no `?token=`** and the cert authenticates you (an operator cert carries a distinct SAN, so a
+node cert can't pose as an operator). Same for `avairy-tui` with `-ca` + a client cert.
 
 ## What's inside
 
@@ -262,7 +269,8 @@ live SSE journal stream; auth is the operator token. Single operator for now.
 | `-gate-edits` | off | Also require operator approval for file edits (not just risky commands). |
 | `-operator-token <tok>` | random | Bearer token for the remote operator API / web console. |
 
-Subcommands: `avairy mint-join -id <node> -core <https-url>` issues an mTLS client-cert join;
+Subcommands: `avairy mint-join -id <node> -core <https-url>` issues an mTLS client-cert join for a
+node; `avairy mint-web-cert` writes an `operator.p12` to import into a browser for mTLS console auth;
 `avairy hook …` is the internal PreToolUse shim Claude invokes per tool call (not run by hand).
 
 ### `avairy-node` (node daemon — one process per agent)
