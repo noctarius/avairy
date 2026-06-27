@@ -42,6 +42,7 @@ func (s *Server) Handler() http.Handler {
 	// Opt-in: only mounted with -web, so a headless/remote-TUI deployment needn't expose a page.
 	if s.web {
 		mux.HandleFunc(PathUI, handleUI)
+		mux.Handle(PathUI+"/vendor/", vendorHandler()) // markdown/sanitize/highlight libs (#23)
 	}
 	mux.HandleFunc(PathStream, s.auth(s.handleStream))
 	mux.HandleFunc(PathState, s.auth(s.handleState))

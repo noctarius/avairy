@@ -305,16 +305,15 @@ Ranked roughly by value-to-effort within each group.
       `TestNodeConflictListAndResolveUnlock`, `TestListConflictsTool`. (`list_conflicts` added to the
       role prompts so agents use it instead of grep.)
 
-23. **Markdown rendering in the operator console.** Agents emit markdown (headers, lists, **bold**,
-    and especially fenced code blocks); both the TUI and web currently show it raw. Render it:
-    - **TUI** → `github.com/charmbracelet/glamour` (same charm ecosystem). Render at *message*
-      boundaries (not stream deltas — markdown is block-level), width-aware (re-render on resize).
-    - **WebUI** → `markdown-it` (or `marked`) + **DOMPurify** (agent text → innerHTML is an XSS
-      surface — sanitization is mandatory), **vendored** (minified into the embedded page, no CDN —
-      keeps it self-contained / airgap-friendly; ~50KB is acceptable, operator-confirmed).
-    - **Syntax highlighting** for common languages **and diff files** (so conflict hunks / patches
-      read well) — glamour's chroma styles on the TUI side; a highlighter (highlight.js or
-      Shiki/Prism) behind the web renderer, also vendored.
+23. ~~**Markdown rendering in the operator console.**~~ ✅ Done.
+    - **TUI** → `charmbracelet/glamour`: agent text events render markdown→styled ANSI, width-wrapped,
+      renderer cached + rebuilt on width change, falling back to raw text on error. (Bumped
+      `x/cellbuf` to align glamour's transitive deps with the charm.land v2 stack.)
+    - **WebUI** → `marked` + **DOMPurify** (sanitized — agent text → innerHTML) + **highlight.js**
+      with the **diff** language, all **vendored** same-origin under `/operator/ui/vendor/` (embedded
+      via `go:embed`, no CDN — self-contained / airgap-friendly, ~200KB incl. the highlighter).
+      Messages and agent text render as markdown with fenced-code syntax highlighting (incl. diff);
+      tool/system lines stay plain. Falls back to plain text if the libs don't load.
 
 ### Single operator
 

@@ -4,6 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>avairy</title>
+<!-- Vendored, same-origin (no CDN): markdown + sanitize + syntax highlighting (incl. diff), #23 -->
+<link rel="stylesheet" href="/operator/ui/vendor/hljs-dark.min.css">
+<script src="/operator/ui/vendor/highlight.min.js"></script>
+<script src="/operator/ui/vendor/diff.min.js"></script>
+<script src="/operator/ui/vendor/purify.min.js"></script>
+<script src="/operator/ui/vendor/marked.min.js"></script>
 <style>
   :root{
     --bg:#0f1012; --panel:#17181b; --panel2:#1d1f23; --ink:#e9eaec; --muted:#8b919b;
@@ -61,6 +67,19 @@
   .row.me .msg{background:var(--accent);color:var(--accent-ink);border-color:transparent}
   .who{font-size:11px;font-weight:700;margin-bottom:3px;opacity:.95}
   .to{font-weight:500;opacity:.7}
+  /* rendered markdown inside a bubble */
+  .msg.md{white-space:normal}
+  .msg.md > .who{margin-bottom:5px}
+  .md p{margin:.4em 0} .md p:first-child{margin-top:0} .md p:last-child{margin-bottom:0}
+  .md ul,.md ol{margin:.4em 0;padding-left:1.3em} .md li{margin:.15em 0}
+  .md h1,.md h2,.md h3{margin:.5em 0 .3em;font-size:1.05em;line-height:1.3}
+  .md code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.92em;
+    background:rgba(127,127,127,.18);padding:.1em .35em;border-radius:5px}
+  .md pre{background:#0d1117;border:1px solid var(--line);border-radius:10px;padding:10px 12px;
+    overflow-x:auto;margin:.5em 0}
+  .md pre code{background:none;padding:0;font-size:12.5px;line-height:1.45}
+  .md a{color:var(--accent)} .md blockquote{margin:.4em 0;padding-left:.8em;border-left:3px solid var(--line);color:var(--muted)}
+  .md table{border-collapse:collapse;margin:.5em 0} .md th,.md td{border:1px solid var(--line);padding:3px 8px}
   .tool .msg{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;
     color:var(--muted);background:transparent;border-style:dashed}
   .err .msg{border-color:var(--err);color:var(--err)}
@@ -167,14 +186,24 @@ function toBottom(){ const l=$("log"); l.scrollTop = l.scrollHeight; }
 function colorFor(name){ let h=0; for(const c of name) h=(h*31+c.charCodeAt(0))%360; return `hsl(${h} 60% 62%)`; }
 function clearEmpty(){ const e=$("emptyChat"); if(e) e.remove(); }
 
-function bubble(author, to, text, cls){
+// mdInto renders markdown (with syntax highlighting incl. diff) into el, sanitized. Falls back to
+// plain text if the vendored libs didn't load — content is never lost. (#23)
+function mdInto(el, text){
+  if(window.marked && window.DOMPurify){
+    el.innerHTML = DOMPurify.sanitize(marked.parse(text, {breaks:true, gfm:true}));
+    if(window.hljs) el.querySelectorAll("pre code").forEach(b=>{ try{ hljs.highlightElement(b); }catch(e){} });
+  } else {
+    el.textContent = text;
+  }
+}
+function bubble(author, to, text, cls, md){
   clearEmpty();
   const stick = atBottom();
   const row = document.createElement("div");
   row.className = "row " + (cls||"");
   const me = author === "human";
   if(me) row.classList.add("me");
-  const m = document.createElement("div"); m.className="msg";
+  const m = document.createElement("div"); m.className="msg"+(md?" md":"");
   const label = me ? "you" : author;
   if(label){
     const w=document.createElement("div"); w.className="who"; w.textContent=label;
@@ -182,7 +211,9 @@ function bubble(author, to, text, cls){
     if(to){ const t=document.createElement("span"); t.className="to"; t.textContent=" → "+to; w.appendChild(t); }
     m.appendChild(w);
   }
-  const b=document.createElement("div"); b.textContent=text; m.appendChild(b);
+  const b=document.createElement("div");
+  if(md) mdInto(b, text); else b.textContent=text;
+  m.appendChild(b);
   row.appendChild(m); logwrap.appendChild(row);
   if(stick) toBottom();
 }
@@ -217,9 +248,9 @@ function applyRecord(rec){
   switch(rec.kind){
     case "message":
       if(d.Interrupt) return;
-      bubble(d.From, addrStr(d.To), d.Body); break;
+      bubble(d.From, addrStr(d.To), d.Body, "", true); break;
     case "agent_event":
-      if(d.Type==="text"){ setStatus(rec.actor,"working"); bubble(rec.actor, null, d.Text); }
+      if(d.Type==="text"){ setStatus(rec.actor,"working"); bubble(rec.actor, null, d.Text, "", true); }
       else if(d.Type==="tool_use"){ setStatus(rec.actor,"working"); bubble(rec.actor, null, "⚙ "+toolSummary(d.Tool), "tool"); }
       else if(d.Type==="turn_done"){ setStatus(rec.actor,"idle"); if(d.Usage){ cost += d.Usage.CostUSD||0; $("cost").textContent="$"+cost.toFixed(2); } }
       else if(d.Type==="error"){ bubble(rec.actor, null, "⚠ "+d.Text, "err"); }
