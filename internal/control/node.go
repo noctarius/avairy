@@ -41,11 +41,12 @@ type Node struct {
 	ignore      workspace.Ignore
 	conflicts   map[string]bool // paths holding unresolved conflict markers (locked from sync)
 
-	firstSync   bool            // true until the first SyncUp completes (startup-conflict detection, #21)
-	held        []SyncResult    // first-sync conflicts held for the operator's resync/resolve verdict
-	startupHeld map[string]bool // paths frozen awaiting that verdict — skipped from sync regardless of markers
-	directive   string          // latest operator directive from a heartbeat (TakeDirective drains it)
-	unlock      []string        // paths resolved via resolve_conflict to unlock + re-pull (#22)
+	firstSync   bool             // true until the first SyncUp completes (startup-conflict detection, #21)
+	held        []SyncResult     // first-sync conflicts held for the operator's resync/resolve verdict
+	startupHeld map[string]bool  // paths frozen awaiting that verdict — skipped from sync regardless of markers
+	directive   string           // latest operator directive from a heartbeat (TakeDirective drains it)
+	unlock      []string         // paths resolved via resolve_conflict to unlock + re-pull (#22)
+	consults    []ConsultCommand // open/close consult commands from core (#24); TakeConsults drains
 
 	reMu sync.Mutex // serializes re-enrollment so concurrent 401s don't stampede
 }
@@ -102,15 +103,25 @@ func (n *Node) Heartbeat() error {
 	if err := n.post(PathHeartbeat, n.sess(), HeartbeatRequest{NodeID: n.ID, Conflicts: n.ConflictPaths()}, &resp); err != nil {
 		return err
 	}
-	if resp.Directive != "" || len(resp.Unlock) > 0 {
+	if resp.Directive != "" || len(resp.Unlock) > 0 || len(resp.Consults) > 0 {
 		n.mu.Lock()
 		if resp.Directive != "" {
 			n.directive = resp.Directive
 		}
 		n.unlock = append(n.unlock, resp.Unlock...)
+		n.consults = append(n.consults, resp.Consults...)
 		n.mu.Unlock()
 	}
 	return nil
+}
+
+// TakeConsults returns and clears the open/close consult commands from core (#24).
+func (n *Node) TakeConsults() []ConsultCommand {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	c := n.consults
+	n.consults = nil
+	return c
 }
 
 // TakeUnlocks returns and clears paths the agent resolved via resolve_conflict (#22).

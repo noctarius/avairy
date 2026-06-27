@@ -330,13 +330,18 @@ Ranked roughly by value-to-effort within each group.
       → `consult-core`; `/consult @<node>` → `consult-<node>` (e.g. `consult-linux`); a second on the
       same target → `consult-linux-2`. Address with the normal `@id` semantics; ephemeral consults
       show in the fleet tagged (so they're discoverable) and `/close <id>` removes them.
-    - **Build order:** ✅ **core-local done** — `/consult [family]` spawns `consult-core` (deduped)
-      via `spawnLocalAgent` in `SessionEphemeral` mode; `/close <id>` cancels the session +
-      `mcp.Server.Unregister`s it. Lifecycle is **journaled** (`consult_opened`/`consult_closed`),
-      so the TUI and web both show it (not a TUI-local line); fleet tags consults with `⟳`. Wired
-      through `operator.Services` → `tui.Deps`. **Remaining:** node-targeted (core→node spawn/teardown
-      round-trip, like #21's directive channel) + triggering from the web/remote-TUI (operator API
-      `/operator/consult` + `/operator/close` endpoints) — both consoles already *render* the events.
+    - ✅ **core-local** — `/consult [family]` spawns `consult-core` (deduped) via `spawnLocalAgent` in
+      `SessionEphemeral`; `/close <id>` cancels the session + `mcp.Server.Unregister`s it. Lifecycle
+      is **journaled** (`consult_opened`/`consult_closed`) so the TUI and web both show it; fleet tags
+      consults with `⟳`. Wired through `operator.Services` → `tui.Deps`.
+    - ✅ **node-targeted** — `/consult @<node> [family]` registers the consult on the bus and queues
+      an open command to the node (`Core.QueueConsult` → `HeartbeatResponse.Consults`); the node
+      spawns it on its own ephemeral proxy (its OS/filesystem), ships events + pulls its inbox like
+      any agent, and tears it down on the close command. `Core.NodeOnline` gates with a clear error.
+      Tests: `TestConsultCommandDelivery`, `TestConsultCommands`.
+    - **Remaining:** triggering from the web / remote-TUI (operator API `/operator/consult` +
+      `/operator/close` endpoints) — both consoles already *render* the lifecycle; only the in-process
+      TUI can *open/close* one today.
     - Optional enabler: a `list_agents` roster MCP tool so agents can discover peers unprompted
       (today they learn ids from messages/tasks/the operator naming them).
 

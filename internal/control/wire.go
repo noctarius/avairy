@@ -106,6 +106,17 @@ type HeartbeatResponse struct {
 	// Unlock lists paths the operator/agent resolved via resolve_conflict (#22): the node drops its
 	// lock so the next SyncDown lands the merged canonical content (clearing the stale markers).
 	Unlock []string `json:"unlock,omitempty"`
+	// Consults are spawn/close commands for operator-targeted ephemeral consult agents on this node
+	// (#24): the node opens/closes them and wires each to the bus under its own id.
+	Consults []ConsultCommand `json:"consults,omitempty"`
+}
+
+// ConsultCommand tells a node to open or close an ephemeral consult agent (#24). For "open", Family
+// selects the agent family (empty = the node's default). ID is the bus identity (e.g. consult-linux).
+type ConsultCommand struct {
+	ID     string `json:"id"`
+	Action string `json:"action"` // "open" | "close"
+	Family string `json:"family,omitempty"`
 }
 
 // SyncChange is a node's proposed change to one path (content is base64 via []byte).

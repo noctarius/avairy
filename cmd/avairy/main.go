@@ -218,7 +218,7 @@ func main() {
 	consults := &consultMgr{
 		ctx: ctx, family: *family, model: *model, busURL: busURL, b: b, jrnl: jrnl,
 		approvals: approvals, mcpSrv: mcpSrv, gateEdits: *gateEdits,
-		cancel: map[string]context.CancelFunc{}, used: map[string]bool{},
+		cancel: map[string]context.CancelFunc{}, node: map[string]string{}, used: map[string]bool{},
 	}
 	svc.Consult = consults.Open
 	svc.CloseConsult = consults.Close
@@ -327,6 +327,7 @@ func main() {
 		svc.Commit = commitFn // operator /commit over the API/TUI (nil when no git repo)
 
 		core := control.NewCore(hub, jrnl)
+		consults.core = core                 // enable node-targeted consults (#24)
 		core.RequireClientCert = mtlsEnabled // reject token enrollment; nodes join by mTLS client cert
 		core.Approvals = approvals           // one broker feeds both node agents and the operator TUI
 		core.Bundle = bundleFn               // serve the repo as a bundle for node mirrors (nil if no repo)
@@ -628,21 +629,23 @@ type consultMgr struct {
 	approvals *control.Approvals
 	mcpSrv    *mcp.Server
 	gateEdits bool
+	core      *control.Core // set when the control API is up; needed for node-targeted consults
 
 	mu     sync.Mutex
-	cancel map[string]context.CancelFunc
+	cancel map[string]context.CancelFunc // id -> cancel (core-local consults only)
+	node   map[string]string             // id -> node id (node-targeted consults)
 	used   map[string]bool
 }
 
 // Open spawns an ephemeral consult agent and returns its bus id. target "" / "core" runs it on core;
-// node targeting is a follow-up. family overrides the operator's default live family.
+// otherwise it runs on that node (for OS-specific feedback). family overrides the default family.
 func (cm *consultMgr) Open(target, family string) (string, error) {
-	if target != "" && target != "core" {
-		return "", fmt.Errorf("node-targeted consults aren't wired yet — use /consult for a core-local agent")
-	}
 	fam := family
 	if fam == "" {
 		fam = cm.family
+	}
+	if target != "" && target != "core" {
+		return cm.openOnNode(target, fam)
 	}
 	id := cm.assignID("consult-core")
 	cctx, cancel := context.WithCancel(cm.ctx)
@@ -650,9 +653,7 @@ func (cm *consultMgr) Open(target, family string) (string, error) {
 	if err := spawnLocalAgent(cctx, id, consultRole, agent.SessionEphemeral, fam, cm.model, cm.busURL, cm.b, cm.jrnl, cm.approvals, cm.gateEdits); err != nil {
 		cancel()
 		cm.mcpSrv.Unregister(id)
-		cm.mu.Lock()
-		delete(cm.used, id)
-		cm.mu.Unlock()
+		cm.release(id)
 		return "", err
 	}
 	cm.mu.Lock()
@@ -664,20 +665,52 @@ func (cm *consultMgr) Open(target, family string) (string, error) {
 	return id, nil
 }
 
-// Close tears down a consult: cancel its session and drop it from the bus. Reports whether it existed.
+// openOnNode registers the consult on the bus and queues an open command for the node, which spawns
+// it (with that OS/filesystem) and wires it to the bus on its next heartbeat (#24).
+func (cm *consultMgr) openOnNode(node, family string) (string, error) {
+	if cm.core == nil {
+		return "", fmt.Errorf("node-targeted consults need the control API (-control-addr)")
+	}
+	if !cm.core.NodeOnline(node) {
+		return "", fmt.Errorf("node %q is not online", node)
+	}
+	id := cm.assignID("consult-" + node)
+	cm.mcpSrv.RegisterAgent(id, []string{"consult"}, map[string]string{"ephemeral": "true"})
+	cm.core.QueueConsult(node, control.ConsultCommand{ID: id, Action: "open", Family: family})
+	cm.mu.Lock()
+	cm.node[id] = node
+	cm.mu.Unlock()
+	cm.jrnl.Append(journal.KindSystem, "human", map[string]any{"event": "consult_opened", "id": id, "node": node})
+	return id, nil
+}
+
+// Close tears down a consult (local: cancel the session; node: queue a close command) and drops it
+// from the bus. Reports whether it existed.
 func (cm *consultMgr) Close(id string) bool {
 	cm.mu.Lock()
 	cancel := cm.cancel[id]
+	node := cm.node[id]
 	delete(cm.cancel, id)
+	delete(cm.node, id)
 	delete(cm.used, id)
 	cm.mu.Unlock()
-	if cancel == nil {
+	switch {
+	case cancel != nil: // core-local
+		cancel()
+	case node != "" && cm.core != nil: // on a node
+		cm.core.QueueConsult(node, control.ConsultCommand{ID: id, Action: "close"})
+	default:
 		return false
 	}
-	cancel()
 	cm.mcpSrv.Unregister(id)
 	cm.jrnl.Append(journal.KindSystem, "human", map[string]any{"event": "consult_closed", "id": id})
 	return true
+}
+
+func (cm *consultMgr) release(id string) {
+	cm.mu.Lock()
+	delete(cm.used, id)
+	cm.mu.Unlock()
 }
 
 // assignID returns base, or base-2, base-3, … if earlier consults already took it.

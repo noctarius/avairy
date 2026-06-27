@@ -54,6 +54,32 @@ func TestOnEnrollRunsBeforeJournal(t *testing.T) {
 	}
 }
 
+// Consult commands queued for a node are delivered on its next heartbeat, exactly once (#24).
+func TestConsultCommandDelivery(t *testing.T) {
+	core, srv := newCoreServer(t)
+	n := NewNode(srv.URL, "linux")
+	if err := n.Enroll(core.CurrentToken(), "linux", nil); err != nil {
+		t.Fatal(err)
+	}
+	if !core.NodeOnline("linux") {
+		t.Fatal("node should be online after enroll")
+	}
+	core.QueueConsult("linux", ConsultCommand{ID: "consult-linux", Action: "open", Family: "claude"})
+
+	if err := n.Heartbeat(); err != nil {
+		t.Fatal(err)
+	}
+	cmds := n.TakeConsults()
+	if len(cmds) != 1 || cmds[0].ID != "consult-linux" || cmds[0].Action != "open" || cmds[0].Family != "claude" {
+		t.Fatalf("consult commands = %+v, want one open consult-linux/claude", cmds)
+	}
+	// Delivered once: a second heartbeat carries nothing.
+	n.Heartbeat()
+	if c := n.TakeConsults(); len(c) != 0 {
+		t.Fatalf("commands should deliver once, got %+v", c)
+	}
+}
+
 // Enroll two nodes; a file synced up from one appears when the other syncs down — over HTTP,
 // through the canonical hub.
 func TestEnrollAndSyncAcrossNodes(t *testing.T) {

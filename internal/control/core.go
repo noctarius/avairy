@@ -68,10 +68,11 @@ type Core struct {
 	bound      map[string]string // enrollment token -> node id it's bound to (reusable for rejoin)
 	sessions   map[string]string // sessionToken -> nodeID
 	nodes      map[string]*NodeInfo
-	directives map[string]string   // nodeID -> pending heartbeat directive (resync/resolve)
-	startup    map[string]bool     // nodeID -> startup conflict already raised (dedup until resolved)
-	nConflicts map[string][]string // nodeID -> its currently-conflicted paths (reported on heartbeat, #22)
-	unlocks    map[string][]string // nodeID -> paths resolved via resolve_conflict to unlock (#22)
+	directives map[string]string           // nodeID -> pending heartbeat directive (resync/resolve)
+	startup    map[string]bool             // nodeID -> startup conflict already raised (dedup until resolved)
+	nConflicts map[string][]string         // nodeID -> its currently-conflicted paths (reported on heartbeat, #22)
+	unlocks    map[string][]string         // nodeID -> paths resolved via resolve_conflict to unlock (#22)
+	consults   map[string][]ConsultCommand // nodeID -> queued open/close consult commands (#24)
 }
 
 // NewCore returns a Core backed by hub, journaling lifecycle events to jrnl.
@@ -89,7 +90,25 @@ func NewCore(hub *workspace.Hub, jrnl journal.Log) *Core {
 		startup:         make(map[string]bool),
 		nConflicts:      make(map[string][]string),
 		unlocks:         make(map[string][]string),
+		consults:        make(map[string][]ConsultCommand),
 	}
+}
+
+// QueueConsult queues an open/close consult command for a node; it's delivered on the node's next
+// heartbeat (#24). NodeOnline reports whether the target node is currently enrolled+live, so the
+// operator gets a clear error instead of a command vanishing into a never-seen node.
+func (c *Core) QueueConsult(nodeID string, cmd ConsultCommand) {
+	c.mu.Lock()
+	c.consults[nodeID] = append(c.consults[nodeID], cmd)
+	c.mu.Unlock()
+}
+
+// NodeOnline reports whether nodeID is enrolled and live (heartbeating).
+func (c *Core) NodeOnline(nodeID string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	n := c.nodes[nodeID]
+	return n != nil && n.Live
 }
 
 // NodeConflicts returns the paths a node last reported as conflicted (marker-locked or startup-held).
@@ -345,8 +364,10 @@ func (c *Core) handleHeartbeat(nodeID string, w http.ResponseWriter, r *http.Req
 	delete(c.directives, nodeID) // deliver once
 	unlock := c.unlocks[nodeID]
 	delete(c.unlocks, nodeID)
+	consults := c.consults[nodeID]
+	delete(c.consults, nodeID)
 	c.mu.Unlock()
-	writeJSON(w, HeartbeatResponse{Directive: dir, Unlock: unlock})
+	writeJSON(w, HeartbeatResponse{Directive: dir, Unlock: unlock, Consults: consults})
 }
 
 func (c *Core) handlePush(nodeID string, w http.ResponseWriter, r *http.Request) {

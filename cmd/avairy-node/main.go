@@ -191,7 +191,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, "avairy-node: -family requires -core-mcp")
 			os.Exit(2)
 		}
-		if err := spawnAgent(ctx, n, *family, *id, *role, *model, *ws, *proxy, mirrorDir, *gateEdits); err != nil {
+		if err := spawnAgent(ctx, n, *family, *id, *role, *model, *ws, *proxy, mirrorDir, agent.SessionPersistent, *gateEdits); err != nil {
 			fmt.Fprintln(os.Stderr, "avairy-node: spawn agent:", err)
 			os.Exit(1)
 		}
@@ -222,6 +222,11 @@ func main() {
 		}
 	}
 
+	nodeConsults := &nodeConsultMgr{
+		n: n, coreMCP: *coreMCP, family: *family, model: *model, gateEdits: *gateEdits,
+		cancel: map[string]context.CancelFunc{},
+	}
+
 	ticker := time.NewTicker(*interval)
 	defer ticker.Stop()
 	for {
@@ -248,6 +253,10 @@ func main() {
 				if err := n.ApplyUnlocks(*ws, u); err != nil {
 					fmt.Fprintln(os.Stderr, "apply unlocks:", err)
 				}
+			}
+			// Operator-spawned ephemeral consults targeted at this node (#24).
+			for _, cmd := range n.TakeConsults() {
+				nodeConsults.apply(ctx, cmd)
 			}
 			syncUp()
 			if *ws != "" {
@@ -306,9 +315,89 @@ func mirrorRole(ws, mirrorDir string) string {
 		scratch + " (NOT the synced workspace), and commit via request_commit — you cannot push the mirror."
 }
 
+// nodeConsultRole is the persona for an operator-spawned ephemeral consult agent running ON a node
+// (#24) — same disposable contract as the core consult, but it answers from THIS machine's OS.
+const nodeConsultRole = "You are an ephemeral CONSULT agent in avairy, running on this node — so " +
+	"you answer from THIS machine's actual OS and filesystem (e.g. validating whether a path exists " +
+	"or is valid here). Be concise and direct. You have the avairy MCP tools — use send_message to " +
+	"ask other agents and read_inbox for replies. CRITICAL: this session is disposable and NOT saved " +
+	"— when it closes, everything here is gone. Anything worth keeping you MUST write to the shared " +
+	"blackboard with note(key, text) or open a task with post_task."
+
+// nodeConsultMgr spawns/tears down ephemeral consult agents on this node, on command from core
+// (#24). Each runs on its own local proxy (stamping its bus id) and is torn down on "close".
+type nodeConsultMgr struct {
+	n         *control.Node
+	coreMCP   string
+	family    string
+	model     string
+	gateEdits bool
+	cancel    map[string]context.CancelFunc // id -> cancel (loop-goroutine only; no mutex needed)
+}
+
+func (m *nodeConsultMgr) apply(parent context.Context, cmd control.ConsultCommand) {
+	switch cmd.Action {
+	case "open":
+		if m.coreMCP == "" {
+			fmt.Fprintln(os.Stderr, "consult: cannot spawn without -core-mcp")
+			return
+		}
+		fam := cmd.Family
+		if fam == "" {
+			fam = m.family
+		}
+		cctx, cancel := context.WithCancel(parent)
+		proxyAddr, err := startConsultProxy(cctx, m.n, m.coreMCP, cmd.ID, m.gateEdits)
+		if err != nil {
+			cancel()
+			fmt.Fprintln(os.Stderr, "consult proxy:", err)
+			return
+		}
+		ws, err := os.MkdirTemp("", "avairy-"+cmd.ID+"-")
+		if err != nil {
+			cancel()
+			fmt.Fprintln(os.Stderr, "consult workspace:", err)
+			return
+		}
+		if err := spawnAgent(cctx, m.n, fam, cmd.ID, nodeConsultRole, m.model, ws, proxyAddr, "", agent.SessionEphemeral, m.gateEdits); err != nil {
+			cancel()
+			fmt.Fprintln(os.Stderr, "consult spawn:", err)
+			return
+		}
+		m.cancel[cmd.ID] = cancel
+		fmt.Printf("opened ephemeral consult %q on this node\n", cmd.ID)
+	case "close":
+		if c := m.cancel[cmd.ID]; c != nil {
+			c()
+			delete(m.cancel, cmd.ID)
+			fmt.Printf("closed consult %q\n", cmd.ID)
+		}
+	}
+}
+
+// startConsultProxy serves a fresh local MCP proxy (stamping id) + gate on an ephemeral port for a
+// consult agent, torn down when ctx cancels. Returns the proxy's listen address.
+func startConsultProxy(ctx context.Context, n *control.Node, coreMCP, id string, gateEdits bool) (string, error) {
+	h, err := n.MCPProxy(coreMCP, id)
+	if err != nil {
+		return "", err
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return "", err
+	}
+	mux := http.NewServeMux()
+	mux.Handle("/gate", gating.HookHandler(gateDecider(n, id, gateEdits)))
+	mux.Handle("/", h)
+	srv := &http.Server{Handler: mux}
+	go srv.Serve(ln)
+	go func() { <-ctx.Done(); _ = srv.Close() }()
+	return ln.Addr().String(), nil
+}
+
 // spawnAgent starts an agent on this node wired to the local MCP proxy, ships its events to
 // the core journal, and injects inbound bus messages (pulled from core) into its session.
-func spawnAgent(ctx context.Context, n *control.Node, family, agentID, role, model, ws, proxy, mirrorDir string, gateEdits bool) error {
+func spawnAgent(ctx context.Context, n *control.Node, family, agentID, role, model, ws, proxy, mirrorDir string, mode agent.SessionMode, gateEdits bool) error {
 	if role == "" {
 		role = defaultRole
 	}
@@ -329,6 +418,7 @@ func spawnAgent(ctx context.Context, n *control.Node, family, agentID, role, mod
 	cfg := agent.SessionConfig{
 		AgentID:   agentID,
 		Role:      role,
+		Mode:      mode,
 		Workspace: ws,
 		Model:     model,
 		MCP:       []agent.MCPServer{{Name: "avairy", Type: "http", URL: proxyURL}},

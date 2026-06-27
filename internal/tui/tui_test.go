@@ -18,7 +18,10 @@ func TestConsultCommands(t *testing.T) {
 	j := journal.NewMemory()
 	d := depsFor(bus.New(j), board.New(j), j)
 	var gotTarget, gotFamily, closed string
-	d.Consult = func(target, family string) (string, error) { gotTarget, gotFamily = target, family; return "consult-" + orCore(target), nil }
+	d.Consult = func(target, family string) (string, error) {
+		gotTarget, gotFamily = target, family
+		return "consult-" + orCore(target), nil
+	}
 	d.CloseConsult = func(id string) bool { closed = id; return true }
 	m := NewModel(d)
 
