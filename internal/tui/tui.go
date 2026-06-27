@@ -202,17 +202,18 @@ type consultResultMsg struct {
 }
 
 var (
-	titleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12"))
-	activeTab  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Underline(true)
-	dimTab     = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
-	workingDot = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Render("●")
-	idleDot    = lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Render("○")
-	blockedDot = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Render("●")
-	offlineDot = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("⊘")
-	helpStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
-	sepStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
-	ctrlStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("13"))
-	warnStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
+	titleStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12"))
+	activeTab   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Underline(true)
+	dimTab      = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+	workingDot  = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Render("●")
+	idleDot     = lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Render("○")
+	blockedDot  = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Render("●")
+	offlineDot  = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("⊘")
+	sleepingDot = lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Render("◐")
+	helpStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+	sepStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
+	ctrlStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("13"))
+	warnStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
 )
 
 // NewModel builds the model, backfilling existing journal records and subscribing to new ones.
@@ -710,6 +711,16 @@ func (m *Model) apply(rec journal.Record) {
 			if id, _ := d["id"].(string); id != "" {
 				m.addConversation(helpStyle.Render("✓ closed " + id + " — gone (capture anything kept to the blackboard/tasks)"))
 			}
+		case "agent_sleeping":
+			// Idle teardown (#28): the subprocess is gone; the fleet entry persists as sleeping
+			// and the next directed message respawns it.
+			if a := m.agents[rec.Actor]; a != nil {
+				a.status = "sleeping"
+			}
+		case "agent_awake":
+			if a := m.touchAgent(rec.Actor); a != nil && a.status == "sleeping" {
+				a.status = "idle" // real status follows on its next event
+			}
 		case "budget_exceeded":
 			scope, _ := d["scope"].(string)
 			spent, _ := d["spent"].(float64)
@@ -885,6 +896,8 @@ func (m *Model) fleetLine() string {
 			dot = blockedDot
 		case "offline":
 			dot = offlineDot
+		case "sleeping":
+			dot = sleepingDot
 		}
 		tag := ""
 		if strings.HasPrefix(id, "consult-") {

@@ -270,6 +270,7 @@ node cert can't pose as an operator). Same for `avairy-tui` with `-ca` + a clien
 | `-operator-token <tok>` | random | Bearer token for the remote operator API / web console. |
 | `-budget <usd>` | 0 (off) | Fleet spend cap: cross it and the operator is warned and every agent is interrupted. |
 | `-agent-budget <usd>` | 0 (off) | Per-agent spend cap: cross it and that agent is warned and interrupted. |
+| `-idle-sleep <dur>` | 0 (off) | Tear an idle core agent's subprocess down to a **sleeping** state after this long quiet (e.g. `10m`); the next directed message respawns it. Frees credits/context while idle (it re-reads the blackboard/journal on wake). |
 
 Subcommands: `avairy mint-join -id <node> -core <https-url>` issues an mTLS client-cert join for a
 node; `avairy mint-web-cert` writes an `operator.p12` to import into a browser for mTLS console auth;

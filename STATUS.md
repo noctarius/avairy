@@ -384,10 +384,18 @@ Ranked roughly by value-to-effort within each group.
     (so it works in-process and remote, polled with the rest of the state). Test: round-trip asserts
     notes reach the client. (Read-only — agents still write via the `note` MCP tool.)
 
-28. **Idle teardown / lazy worker spawn.** Agents are resident-but-idle, holding context/credits
-    with nothing to do. Tear an idle agent down to a **"sleeping"** state (fleet shows it) and
-    lazily respawn it on the next directed message. Pairs with #26 (cost); the ephemeral-session
-    machinery from #24 is most of the plumbing.
+28. ~~**Idle teardown / lazy worker spawn.**~~ ✅ Done (core-local agents). New `internal/supervisor`
+    owns a core agent's session lifecycle: it holds the bus subscription and drives the session like
+    the runner, but adds an idle timer — after `-idle-sleep <dur>` quiet (and not mid-turn) it closes
+    the subprocess (journals `agent_sleeping`, fleet shows it via a `◐` dot / "sleeping" status) and
+    **lazily respawns** it (journals `agent_awake`) on the next wake-worthy directed message (same #25
+    Waker gate, so broadcast chatter doesn't wake a sleeper). `idle == 0` ⇒ never sleep ⇒ behaves
+    exactly like a runner, so all core-local agents (incl. #24 consults at `idle=0`) route through it;
+    the family adapter + gate server are built once and reused across respawns. A crashed subprocess
+    also drops to sleeping and respawns on demand. Default **off** (sleep drops in-session context;
+    the agent re-reads the blackboard/journal on wake). Tests: `supervisor_test.go` (deliver-as-runner,
+    sleep+respawn) with `-race`. **Follow-up:** wire the same supervisor into `avairy-node` (it still
+    uses the plain runner) so remote agents sleep too.
 
 29. **End-to-end distributed integration test.** No black-box test spins up core + a node + a mock
     agent over real HTTP and asserts a message round-trips, a file syncs, and a conflict resolves.

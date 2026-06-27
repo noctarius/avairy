@@ -37,6 +37,7 @@
   .dot{width:8px;height:8px;border-radius:50%;background:var(--idle);flex:none}
   .dot.ok{background:var(--ok)} .dot.warn{background:var(--warn)} .dot.work{background:var(--ok)}
   .dot.off{background:var(--idle);opacity:.45} .dot.blocked{background:var(--err)}
+  .dot.sleeping{background:#39a0ed;opacity:.7}
   .tok{font-family:ui-monospace,Menlo,monospace;cursor:pointer}
   /* sidebars */
   aside{overflow-y:auto;padding:16px 14px;background:var(--panel);min-height:0}
@@ -274,6 +275,8 @@ function applySystem(actor, d){
     case "conflict_raised": sysline(`conflict on ${d.path} needs resolution`); break;
     case "consult_opened": if(d.id) sysline(`opened ${d.id} (ephemeral) — @${d.id} to talk · /end ${d.id}`); break;
     case "consult_closed": if(d.id) sysline(`closed ${d.id} — gone`); break;
+    case "agent_sleeping": if(agents.has(actor)){ setStatus(actor,"sleeping"); sysline(`${actor} went to sleep (idle) — a message wakes it`); } break;
+    case "agent_awake": if(agents.get(actor)==="sleeping") setStatus(actor,"idle"); break;
     case "budget_exceeded": {
       const spent=(d.spent||0).toFixed(2);
       if(d.scope==="agent" && d.agent){ agentOver.add(d.agent); renderFleet(); sysline(`⚠ ${d.agent} exceeded its budget ($${spent}) — interrupted`); }
@@ -284,7 +287,7 @@ function applySystem(actor, d){
 }
 
 // ---- side panels ----
-function dotClass(st){ return st==="working"?"work":st==="blocked"?"blocked":st==="offline"?"off":st==="idle"?"ok":""; }
+function dotClass(st){ return st==="working"?"work":st==="blocked"?"blocked":st==="offline"?"off":st==="sleeping"?"sleeping":st==="idle"?"ok":""; }
 function renderFleet(){
   const el=$("fleet");
   if(agents.size===0){ el.innerHTML='<div class="empty">no agents yet</div>'; return; }

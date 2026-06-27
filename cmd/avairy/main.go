@@ -45,6 +45,7 @@ import (
 	"avairy/internal/mcp"
 	"avairy/internal/operator"
 	"avairy/internal/runner"
+	"avairy/internal/supervisor"
 	"avairy/internal/tui"
 	"avairy/internal/workspace"
 )
@@ -87,6 +88,7 @@ func main() {
 	web := flag.Bool("web", false, "serve the browser operator console at /operator/ui (#17); off by default")
 	budget := flag.Float64("budget", 0, "fleet spend cap in USD (#26): when total cost crosses this, warn the operator and interrupt; 0 = uncapped")
 	agentBudget := flag.Float64("agent-budget", 0, "per-agent spend cap in USD (#26): when an agent crosses this, warn the operator and interrupt that agent; 0 = uncapped")
+	idleSleep := flag.Duration("idle-sleep", 0, "tear an idle core agent's subprocess down to a \"sleeping\" state after this long with no activity, respawning it on the next directed message (#28); 0 = stay resident (loses in-session context on sleep)")
 	flag.Parse()
 
 	// -tls-auto self-manages a CA that both signs core's server cert and verifies node client certs,
@@ -535,7 +537,7 @@ func main() {
 
 	if runLiveAlice {
 		mcpSrv.RegisterAgent("alice", []string{"backend"}, caps)
-		startLiveAlice(ctx, *family, *model, busURL, b, jrnl, approvals, *gateEdits)
+		startLiveAlice(ctx, *family, *model, busURL, b, jrnl, approvals, *gateEdits, *idleSleep)
 	}
 	if runMockAlice {
 		mcpSrv.RegisterAgent("alice", []string{"backend"}, caps)
@@ -570,49 +572,64 @@ const aliceRole = "You are 'alice', a backend engineer agent in the avairy multi
 	"Collaborate ONLY through the avairy MCP tools: post_task, claim_task, list_tasks, " +
 	"send_message, read_inbox, list_agents, report_status, git_history, request_commit, scratch_worktree, list_conflicts, resolve_conflict, fresh_look, note, read_notes. Be terse and do exactly what you are asked, then stop."
 
-func startLiveAlice(ctx context.Context, family, model, busURL string, b *bus.Bus, jrnl journal.Log, approvals *control.Approvals, gateEdits bool) {
-	if err := spawnLocalAgent(ctx, "alice", aliceRole, agent.SessionPersistent, family, model, busURL, b, jrnl, approvals, gateEdits); err != nil {
+func startLiveAlice(ctx context.Context, family, model, busURL string, b *bus.Bus, jrnl journal.Log, approvals *control.Approvals, gateEdits bool, idle time.Duration) {
+	if err := spawnLocalAgent(ctx, "alice", aliceRole, agent.SessionPersistent, family, model, busURL, b, jrnl, approvals, gateEdits, idle); err != nil {
 		fail("start alice", err)
 	}
 }
 
 // spawnLocalAgent starts an agent on core wired to the bus: it builds the family adapter with real
-// §7 gating (keyed by id), starts the session in the given mode, and runs the runner under ctx.
-// Cancelling ctx closes the session — that's how an ephemeral consult agent (#24) is torn down.
-func spawnLocalAgent(ctx context.Context, id, role string, mode agent.SessionMode, family, model, busURL string, b *bus.Bus, jrnl journal.Log, approvals *control.Approvals, gateEdits bool) error {
-	ws, err := os.MkdirTemp("", "avairy-"+id+"-")
+// §7 gating (keyed by id) once, then hands a spawn closure to a supervisor that drives the session
+// and (when idle > 0) sleeps/respawns it on idle (#28). idle == 0 means never sleep — behaviorally a
+// plain runner, which is what ephemeral consults (#24) use (ctx-cancel still tears them down).
+func spawnLocalAgent(ctx context.Context, id, role string, mode agent.SessionMode, family, model, busURL string, b *bus.Bus, jrnl journal.Log, approvals *control.Approvals, gateEdits bool, idle time.Duration) error {
+	ad, err := buildLocalAdapter(family, id, approvals, gateEdits)
 	if err != nil {
 		return err
 	}
-	cfg := agent.SessionConfig{
-		AgentID:   id,
-		Role:      role,
-		Mode:      mode,
-		Workspace: ws,
-		Model:     model,
-		MCP: []agent.MCPServer{{
-			Name:    "avairy",
-			Type:    "http",
-			URL:     busURL,
-			Headers: map[string]string{"X-Avairy-Agent": id},
-		}},
-	}
-
-	var ad agent.Adapter
-	switch family {
-	case "codex":
-		if cfg.Model == "haiku" { // the claude-flavored default isn't a codex model
+	// Each (re)spawn gets a fresh temp workspace; the adapter (and any gate server) is reused.
+	spawn := func(sctx context.Context) (agent.Session, error) {
+		ws, err := os.MkdirTemp("", "avairy-"+id+"-")
+		if err != nil {
+			return nil, err
+		}
+		cfg := agent.SessionConfig{
+			AgentID:   id,
+			Role:      role,
+			Mode:      mode,
+			Workspace: ws,
+			Model:     model,
+			MCP: []agent.MCPServer{{
+				Name:    "avairy",
+				Type:    "http",
+				URL:     busURL,
+				Headers: map[string]string{"X-Avairy-Agent": id},
+			}},
+		}
+		if family == "codex" && cfg.Model == "haiku" { // the claude-flavored default isn't a codex model
 			cfg.Model = ""
 		}
+		return ad.Start(sctx, cfg)
+	}
+	go supervisor.New(id, []string{"backend"}, spawn, b, jrnl, idle).Run(ctx)
+	return nil
+}
+
+// buildLocalAdapter constructs the family adapter with real §7 gating keyed by id. For claude this
+// starts a long-lived local /gate server whose URL is baked into the PreToolUse hook settings —
+// built once and reused across respawns so sleep/wake cycles don't leak gate servers.
+func buildLocalAdapter(family, id string, approvals *control.Approvals, gateEdits bool) (agent.Adapter, error) {
+	switch family {
+	case "codex":
 		cx := codex.New()
 		// Real gating with a human in the loop: app-server approvals route through the §7
 		// policy; gated actions block on the operator's allow/deny in the TUI approvals view.
 		cx.Approve = codex.ApproverFromDecider(localGateDecider(approvals, id, gateEdits))
-		ad = cx
+		return cx, nil
 	case "copilot":
-		ad = copilot.New(localGateDecider(approvals, id, gateEdits)) // ACP; needs `copilot login`
+		return copilot.New(localGateDecider(approvals, id, gateEdits)), nil // ACP; needs `copilot login`
 	case "grok":
-		ad = grok.New(localGateDecider(approvals, id, gateEdits)) // ACP; needs xAI auth
+		return grok.New(localGateDecider(approvals, id, gateEdits)), nil // ACP; needs xAI auth
 	default: // claude
 		ca := claudecode.New()
 		// Real gating, same as a node: serve a local /gate and register a PreToolUse hook for
@@ -620,23 +637,15 @@ func spawnLocalAgent(ctx context.Context, id, role string, mode agent.SessionMod
 		// operator's Approvals tab). The hook is the permission system — no --allowedTools.
 		gateURL, err := startLocalGate(localGateDecider(approvals, id, gateEdits))
 		if err != nil {
-			return err
+			return nil, err
 		}
 		settings, err := gating.ClaudeHookSettings(gateURL)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		ca.ExtraArgs = []string{"--settings", settings}
-		ad = ca
+		return ca, nil
 	}
-
-	sess, err := ad.Start(ctx, cfg)
-	if err != nil {
-		return err
-	}
-	go func() { <-ctx.Done(); _ = sess.Close() }() // tear the session down when ctx cancels
-	go runner.New(runner.Agent{ID: id, Roles: []string{"backend"}}, sess, b, jrnl).Run(ctx)
-	return nil
 }
 
 // consultRole is the persona for an operator-spawned ephemeral consult agent (#24).
@@ -681,7 +690,7 @@ func (cm *consultMgr) Open(target, family string) (string, error) {
 	id := cm.assignID("consult-core")
 	cctx, cancel := context.WithCancel(cm.ctx)
 	cm.mcpSrv.RegisterAgent(id, []string{"consult"}, map[string]string{"os": runtime.GOOS, "ephemeral": "true"})
-	if err := spawnLocalAgent(cctx, id, consultRole, agent.SessionEphemeral, fam, cm.model, cm.busURL, cm.b, cm.jrnl, cm.approvals, cm.gateEdits); err != nil {
+	if err := spawnLocalAgent(cctx, id, consultRole, agent.SessionEphemeral, fam, cm.model, cm.busURL, cm.b, cm.jrnl, cm.approvals, cm.gateEdits, 0); err != nil {
 		cancel()
 		cm.mcpSrv.Unregister(id)
 		cm.release(id)
