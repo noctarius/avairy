@@ -419,6 +419,7 @@ function send(){
   if(text.startsWith("/end")){
     post("/operator/close",{ID:text.slice(4).trim().replace(/^@/,"")});
     ta.value=""; grow(); return; }
+  // A leading "@<id> " in the text addresses that agent (parsed server-side, same as the TUI).
   post("/operator/inject",{Target:$("to").value, Body:text});
   ta.value=""; grow();
 }

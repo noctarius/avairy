@@ -223,3 +223,42 @@ func eventually(t *testing.T, cond func() bool) bool {
 	}
 	return false
 }
+
+// A leading "@<id> " in an injected message addresses that agent over the bus, even with the
+// recipient selector on broadcast (the web composer's behavior). Reproducer for the bug where the
+// web sent "@macos …" as a broadcast: before Inject parsed the mention it published to everyone
+// with the "@macos" still in the body.
+func TestServicesInjectParsesLeadingMention(t *testing.T) {
+	j := journal.NewMemory()
+	b := bus.New(j)
+	macos, _ := b.Subscribe("macos") // direct recipient
+	all, _ := b.Subscribe("watcher") // a bystander, to confirm it is NOT a broadcast
+	svc := &operator.Services{Journal: j, Bus: b}
+
+	svc.Inject("", "@macos rebuild please") // selector on broadcast; mention should target macos
+
+	select {
+	case m := <-macos:
+		if m.Body != "rebuild please" || m.To.Kind != bus.ToAgent || m.To.Value != "macos" {
+			t.Fatalf("macos got %+v, want body %q addressed agent:macos", m, "rebuild please")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("mention did not reach macos")
+	}
+	select {
+	case m := <-all:
+		t.Fatalf("a leading @mention must not broadcast; watcher got %+v", m)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	// No leading mention → genuine broadcast (reaches the bystander).
+	svc.Inject("", "status update for everyone")
+	select {
+	case m := <-all:
+		if m.Body != "status update for everyone" || m.To.Kind != bus.ToBroadcast {
+			t.Fatalf("broadcast got %+v", m)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("plain message did not broadcast")
+	}
+}

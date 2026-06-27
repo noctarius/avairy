@@ -370,7 +370,7 @@ func main() {
 		// When a node enrolls, register its agent on the bus (identity, caps, inbox); deliver
 		// that agent's inbound bus messages back over the control channel.
 		core.OnEnroll = func(nodeID string, caps map[string]string) {
-			mcpSrv.RegisterAgent(nodeID, []string{"backend"}, caps) // node id == agent's bus identity
+			mcpSrv.RegisterAgent(nodeID, mcp.AgentRoles(nodeID, caps), caps) // node id == agent's bus identity
 		}
 		core.InboxDrainer = func(agentID string) []control.InboxMessage {
 			var out []control.InboxMessage
@@ -536,7 +536,7 @@ func main() {
 	}
 
 	if runLiveAlice {
-		mcpSrv.RegisterAgent("alice", []string{"backend"}, caps)
+		mcpSrv.RegisterAgent("alice", mcp.AgentRoles("alice", caps), caps)
 		startLiveAlice(ctx, *family, *model, busURL, b, jrnl, approvals, *gateEdits, *idleSleep)
 	}
 	if runMockAlice {

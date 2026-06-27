@@ -2,6 +2,7 @@ package operator
 
 import (
 	"fmt"
+	"strings"
 
 	"avairy/internal/agent"
 	"avairy/internal/board"
@@ -35,9 +36,28 @@ type Services struct {
 	CloseConsult func(id string) bool
 }
 
-// Inject publishes a human message: target "" broadcasts, else it's an agent id.
+// Inject publishes a human message: target "" broadcasts, else it's an agent id. A leading "@<id> "
+// in the body addresses that agent and overrides target — so typing "@macos …" reaches macos even
+// when the recipient selector is on broadcast (the web composer relies on this; the TUI also sends
+// a clean target, for which the parse is a no-op).
 func (s *Services) Inject(target, body string) {
+	if mention, rest := splitMention(body); mention != "" && rest != "" {
+		target, body = mention, rest
+	}
 	s.Bus.Publish("human", addrOf(target), body, agent.DeliverySteer)
+}
+
+// splitMention extracts a leading "@<id> " address from a message. "@id" with no following text is
+// not a mention (returns "", s) so a bare mention isn't swallowed.
+func splitMention(s string) (mention, rest string) {
+	if !strings.HasPrefix(s, "@") {
+		return "", s
+	}
+	body := s[1:]
+	if i := strings.IndexByte(body, ' '); i >= 0 {
+		return body[:i], strings.TrimLeft(body[i:], " ")
+	}
+	return "", s
 }
 
 // Interrupt stops whatever agents are running (broadcast interrupt).

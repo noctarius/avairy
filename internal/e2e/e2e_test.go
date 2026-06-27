@@ -54,7 +54,7 @@ func newCore(t *testing.T) *coreEnv {
 	core.LivenessTimeout = 10 * time.Second
 
 	core.OnEnroll = func(id string, caps map[string]string) {
-		msrv.RegisterAgent(id, []string{"backend"}, caps) // node id == the agent's bus identity
+		msrv.RegisterAgent(id, mcp.AgentRoles(id, caps), caps) // exactly as cmd/avairy registers a node
 	}
 	core.InboxDrainer = func(agentID string) []control.InboxMessage {
 		var out []control.InboxMessage
@@ -237,6 +237,58 @@ func TestE2E_ConflictRaisesAndResolves(t *testing.T) {
 	if paths := b.ConflictPaths(); len(paths) != 0 {
 		t.Fatalf("conflict not cleared after resync: %v", paths)
 	}
+}
+
+// Reproducer for the agent→agent delivery bug: an agent on one node messages an agent on another
+// node addressing it by role:<id> and role:<os> (the natural choices when peers are OS-named, and
+// what an agent actually did), plus agent:<id>. All three must land in the target's inbox, pulled
+// over HTTP. Before AgentRoles registered the id/os as roles, role:<id> matched no subscriber and
+// the message vanished — exactly the symptom observed (sender saw it sent; recipient's inbox empty).
+func TestE2E_AgentToAgentAcrossNodesDelivers(t *testing.T) {
+	env := newCore(t)
+	linux := control.NewNode(env.ctrlURL, "linux")
+	if err := linux.Enroll(env.core.CurrentToken(), "linux", map[string]string{"os": "linux"}); err != nil {
+		t.Fatalf("enroll linux: %v", err)
+	}
+	macos := control.NewNode(env.ctrlURL, "macos")
+	if err := macos.Enroll(env.core.CurrentToken(), "darwin", map[string]string{"os": "darwin"}); err != nil {
+		t.Fatalf("enroll macos: %v", err)
+	}
+
+	// Each form is what the linux agent's send_message would publish (handleSendMessage does exactly
+	// s.bus.Publish(from, addr, body, delivery)). macos must receive every one via PullInbox.
+	cases := []struct {
+		name string
+		addr bus.Addr
+		body string
+	}{
+		{"role:id", bus.Role("macos"), "via role:macos"},   // the form that used to vanish
+		{"role:os", bus.Role("darwin"), "via role:darwin"}, // OS capability as a role
+		{"agent:id", bus.Agent("macos"), "via agent:macos"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env.b.Publish("linux", tc.addr, tc.body, agent.DeliverySteer)
+			msgs := pullInbox(t, macos, "macos")
+			if len(msgs) != 1 || msgs[0].From != "linux" || msgs[0].Body != tc.body {
+				t.Fatalf("%s: macos inbox = %+v, want one %q from linux", tc.name, msgs, tc.body)
+			}
+		})
+	}
+}
+
+// pullInbox polls the node's inbox over HTTP until a message arrives (or it gives up).
+func pullInbox(t *testing.T, n *control.Node, agentID string) []control.InboxMessage {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		msgs, err := n.PullInbox(agentID)
+		if err == nil && len(msgs) > 0 {
+			return msgs
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return nil
 }
 
 // A node reporting its agent's idle-teardown lifecycle over the events channel lands as the

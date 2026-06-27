@@ -13,7 +13,8 @@ func (s *Server) registerSendMessage() {
 	s.mcp.AddTool(mcpgo.NewTool("send_message",
 		mcpgo.WithDescription("Send a message to another agent, a role, or everyone, over the avairy bus."),
 		mcpgo.WithString("to", mcpgo.Required(),
-			mcpgo.Description("Recipient: \"broadcast\", \"agent:<id>\", or \"role:<name>\"")),
+			mcpgo.Description("Recipient: \"broadcast\", \"agent:<id>\" (use an id from list_agents), or \"role:<name>\". "+
+				"To reach a specific agent prefer agent:<id>; an agent is also addressable as role:<its id> and role:<its os>.")),
 		mcpgo.WithString("body", mcpgo.Required(), mcpgo.Description("Message text")),
 		mcpgo.WithString("delivery",
 			mcpgo.Description("\"steer\" (default; deliver at next turn boundary) or \"interrupt\" (mid-reasoning)")),

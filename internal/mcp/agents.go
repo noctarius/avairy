@@ -7,6 +7,18 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 )
 
+// AgentRoles is the bus role set an agent registers with. Besides the generic "backend" role, an
+// agent is reachable by its own id AND its OS as roles — so a peer that addresses send_message to
+// role:<id> (a natural choice when agents are OS-named, e.g. "macos") or role:<os> reaches it, not
+// only agent:<id>. Without the id/os roles, such a message matched no subscriber and vanished.
+func AgentRoles(id string, caps map[string]string) []string {
+	roles := []string{"backend", id}
+	if os := caps["os"]; os != "" && os != id {
+		roles = append(roles, os)
+	}
+	return roles
+}
+
 // registerListAgents exposes the roster so an agent can discover peers unprompted (#24) — find who
 // to send_message instead of guessing ids (e.g. "who's on linux?" via caps.os).
 func (s *Server) registerListAgents() {
