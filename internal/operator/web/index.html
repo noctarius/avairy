@@ -70,7 +70,7 @@
   .who{font-size:11px;font-weight:700;margin-bottom:3px;opacity:.95}
   .to{font-weight:500;opacity:.7}
   .mention{font-weight:700;background:rgba(125,130,180,.20);border-radius:4px;padding:0 3px}
-  .row.me .mention{background:rgba(255,255,255,.22)}
+  .row.me .mention{background:rgba(0,0,0,.22);color:#fff}
   /* rendered markdown inside a bubble */
   .msg.md{white-space:normal}
   .msg.md > .who{margin-bottom:5px}
@@ -196,7 +196,7 @@ function colorFor(name){ let h=0; for(const c of name) h=(h*31+c.charCodeAt(0))%
 // highlightMentions wraps @<agent> tokens (known agents, or @all/@everyone) in a styled span so
 // mentions pop in any message. Walks text nodes only — skips code/pre/links — to avoid touching
 // code or false-matching @media/@param; restricting to known ids guards prose too.
-function highlightMentions(root){
+function highlightMentions(root, me){
   const skip={CODE:1,PRE:1,A:1}, re=/@([A-Za-z0-9_.-]+)/g, hasRe=/@[A-Za-z0-9_.-]/;
   const known=id=>agents.has(id)||id==="all"||id==="everyone";
   const walker=document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
@@ -214,7 +214,9 @@ function highlightMentions(root){
       any=true;
       if(mm.index>last) frag.appendChild(document.createTextNode(s.slice(last,mm.index)));
       const span=document.createElement("span"); span.className="mention"; span.textContent=mm[0];
-      if(agents.has(mm[1])) span.style.color=colorFor(mm[1]);
+      // In a "me" bubble (accent background) the per-agent hue clashes — let it inherit the white
+      // ink and lean on the chip instead; elsewhere tint known agents with their own color.
+      if(!me && agents.has(mm[1])) span.style.color=colorFor(mm[1]);
       frag.appendChild(span); last=mm.index+mm[0].length;
     }
     if(!any) continue;
@@ -251,7 +253,7 @@ function bubble(author, to, text, cls, md){
   }
   const b=document.createElement("div");
   if(md) mdInto(b, text); else b.textContent=text;
-  highlightMentions(b);
+  highlightMentions(b, me);
   m.appendChild(b);
   row.appendChild(m); logwrap.appendChild(row);
   if(stick) toBottom();
