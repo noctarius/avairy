@@ -351,11 +351,19 @@ Ranked roughly by value-to-effort within each group.
 ### Robustness / scale (next)
 
 25. **Bus hardening — stop reply-storms.** Today every inbound message wakes the recipient and is
-    sent straight into a turn, so a broadcast/role message can trigger reply-all cascades (and burn
-    credits) — there's no hop/TTL, dedup, reply budget, or quiescence. Make delivery
-    address-aware: a **direct** message wakes & acts; **broadcast/role** delivers as *context* (no
-    auto-turn) — plus a per-conversation reply budget, message dedup, and idle quiescence so chatter
-    converges instead of amplifying. (Requirements under discussion.)
+    sent straight into a turn (the runner + the node pull-loop subscribe to id **and roles** and
+    `Send` every message), so a broadcast/role message triggers reply-all cascades (and burns
+    credits). Decouple **delivered** from **triggers a turn** — agreed design:
+    - **Direct** (`to: agent`) → wake & act. **Broadcast/role** → *context-only* (delivered to the
+      inbox, no auto-turn) **except from `human`/`facilitator`**, which still wake (sender-aware: the
+      storm source is agent→broadcast loops; operator/facilitator broadcasts stay bounded).
+    - **Reply budget** — per-agent cap on *autonomous* (agent-originated) direct wakes within a
+      window; beyond it, further agent messages are context-only until it goes quiet. (Realizes the
+      "hop budget" intent without per-message reply-lineage threading, which the architecture doesn't
+      carry — same runaway protection, simpler.)
+    - **Dedup** — drop identical `(from,to,body)` within a short window.
+    - Enforced at the **activation points** (a per-agent `Waker` in the runner + node pull-loop) for
+      the wake policy + budget; **dedup at the bus**. Direct semantics and `read_inbox` unchanged.
 
 26. **Cost overview + budget guardrails.** Cost is summed in the fleet line, but there's no
     per-agent breakdown or ceiling. Add per-agent spend (and tokens), an **overview** the operator
@@ -376,6 +384,14 @@ Ranked roughly by value-to-effort within each group.
     agent over real HTTP and asserts a message round-trips, a file syncs, and a conflict resolves.
     Cheap (mock adapter, no credits) and would catch regressions across the whole channel now that
     the surface is large.
+
+30. **Browser-client mTLS + install option.** The web operator console authenticates with the
+    operator token in the URL (`?token=`) — fine, but a leak-prone credential. Give browser clients
+    the **same client-certificate (mTLS) auth nodes have** (a CA-signed cert presented by the
+    browser, verified like a node's), so the token isn't the only path. Plus an **installation
+    option** for browser clients: a smooth flow to install the client cert into the browser/OS
+    keychain, and/or make the console **PWA-installable** so it's a first-class app rather than a
+    URL. Reuses the self-managed CA (#8) + `mint-join`-style issuance.
 
 ### Single operator
 
