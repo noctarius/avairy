@@ -52,6 +52,11 @@ type Deps struct {
 	// Commit signs a commit of the canonical repo on the operator's behalf (DESIGN.md §9, the
 	// human-commits-via-TUI path). Returns the new short hash. Nil when core has no git repo.
 	Commit func(message string) (string, error)
+
+	// Consult spawns a disposable ephemeral consult agent (#24) — target "" / "core" on core, else a
+	// node id — returning its bus id. CloseConsult tears one down. Nil disables the /consult command.
+	Consult      func(target, family string) (string, error)
+	CloseConsult func(id string) bool
 }
 
 // ApprovalItem is one pending gated action awaiting the operator's verdict.
@@ -185,6 +190,12 @@ type commitResultMsg struct {
 	err  error
 }
 
+// consultResultMsg carries the outcome of an operator-initiated /consult back into the loop.
+type consultResultMsg struct {
+	id  string
+	err error
+}
+
 var (
 	titleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12"))
 	activeTab  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Underline(true)
@@ -279,9 +290,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case commitResultMsg:
 		if msg.err != nil {
-			m.addConv(warnStyle.Render("⚠ commit failed: " + msg.err.Error()))
+			m.addConversation(warnStyle.Render("⚠ commit failed: " + msg.err.Error()))
 		} else {
-			m.addConv("✓ committed " + msg.hash)
+			m.addConversation("✓ committed " + msg.hash)
+		}
+		return m, nil
+
+	case consultResultMsg:
+		// Success is journaled (consult_opened) so it shows in the TUI and web alike; only the error
+		// — which isn't an event — is surfaced locally here.
+		if msg.err != nil {
+			m.addConversation(warnStyle.Render("⚠ consult: " + msg.err.Error()))
 		}
 		return m, nil
 
@@ -361,6 +380,13 @@ func (m *Model) submit() tea.Cmd {
 	if rest, ok := strings.CutPrefix(text, "/commit"); ok {
 		return m.commitCmd(strings.TrimSpace(rest))
 	}
+	if rest, ok := strings.CutPrefix(text, "/consult"); ok {
+		return m.consultCmd(strings.TrimSpace(rest))
+	}
+	if rest, ok := strings.CutPrefix(text, "/close"); ok {
+		m.closeConsult(strings.TrimSpace(rest))
+		return nil
+	}
 	if m.deps.Inject == nil {
 		return nil
 	}
@@ -375,17 +401,45 @@ func (m *Model) submit() tea.Cmd {
 // commitCmd runs an operator-initiated signed commit off the UI thread (signing can block).
 func (m *Model) commitCmd(message string) tea.Cmd {
 	if m.deps.Commit == nil {
-		m.addConv(helpStyle.Render("(commit unavailable — core has no git repo)"))
+		m.addConversation(helpStyle.Render("(commit unavailable — core has no git repo)"))
 		return nil
 	}
 	if message == "" {
-		m.addConv(helpStyle.Render("usage: /commit <message>"))
+		m.addConversation(helpStyle.Render("usage: /commit <message>"))
 		return nil
 	}
 	commit := m.deps.Commit
 	return func() tea.Msg {
 		hash, err := commit(message)
 		return commitResultMsg{hash: hash, err: err}
+	}
+}
+
+// consultCmd spawns an ephemeral consult agent (#24). Args: "[@node] [family]" — e.g. "/consult",
+// "/consult @linux", "/consult @linux codex". Runs off-thread (spawning a session can block).
+func (m *Model) consultCmd(arg string) tea.Cmd {
+	if m.deps.Consult == nil {
+		m.addConversation(helpStyle.Render("(consult unavailable)"))
+		return nil
+	}
+	target, _ := splitMention(arg) // leading @node → target; else core
+	family := strings.TrimSpace(strings.TrimPrefix(arg, "@"+target))
+	consult := m.deps.Consult
+	return func() tea.Msg {
+		id, err := consult(target, family)
+		return consultResultMsg{id: id, err: err}
+	}
+}
+
+// closeConsult tears down a consult by id (leading @ optional).
+func (m *Model) closeConsult(arg string) {
+	id := strings.TrimPrefix(arg, "@")
+	if id == "" || m.deps.CloseConsult == nil {
+		m.addConversation(helpStyle.Render("usage: /close <consult-id>"))
+		return
+	}
+	if !m.deps.CloseConsult(id) { // success is journaled (consult_closed); only report the miss
+		m.addConversation(helpStyle.Render("(no consult named " + id + ")"))
 	}
 }
 
@@ -583,7 +637,7 @@ func (m *Model) apply(rec journal.Record) {
 	switch rec.Kind {
 	case journal.KindMessage:
 		if msg, ok := rec.Data.(bus.Message); ok {
-			m.addConv(fmt.Sprintf("%s → %s: %s", msg.From, addrStr(msg.To), msg.Body))
+			m.addConversation(fmt.Sprintf("%s → %s: %s", msg.From, addrStr(msg.To), msg.Body))
 		}
 	case journal.KindAgentEvent:
 		if ev, ok := rec.Data.(agent.Event); ok {
@@ -591,17 +645,17 @@ func (m *Model) apply(rec journal.Record) {
 			switch ev.Type {
 			case agent.EventText:
 				a.status = "working"
-				m.addConv(rec.Actor + ":\n" + m.markdown(ev.Text)) // agents emit markdown — render it (#23)
+				m.addConversation(rec.Actor + ":\n" + m.markdown(ev.Text)) // agents emit markdown — render it (#23)
 			case agent.EventToolUse:
 				a.status = "working"
-				m.addConv(fmt.Sprintf("%s ⚙ %s", rec.Actor, agent.ToolSummary(ev.Tool)))
+				m.addConversation(fmt.Sprintf("%s ⚙ %s", rec.Actor, agent.ToolSummary(ev.Tool)))
 			case agent.EventTurnDone:
 				a.status = "idle"
 				if ev.Usage != nil {
 					m.cost += ev.Usage.CostUSD
 				}
 			case agent.EventError:
-				m.addConv(fmt.Sprintf("%s ⚠ %s", rec.Actor, ev.Text))
+				m.addConversation(fmt.Sprintf("%s ⚠ %s", rec.Actor, ev.Text))
 			}
 		}
 	case journal.KindHandover:
@@ -642,11 +696,19 @@ func (m *Model) apply(rec journal.Record) {
 			if a := m.agents[rec.Actor]; a != nil && a.status == "offline" {
 				a.status = "idle" // back in contact; real status follows on its next event
 			}
+		case "consult_opened":
+			if id, _ := d["id"].(string); id != "" {
+				m.addConversation(helpStyle.Render("✓ opened " + id + " (ephemeral) — talk to it with @" + id + " · /close " + id + " when done"))
+			}
+		case "consult_closed":
+			if id, _ := d["id"].(string); id != "" {
+				m.addConversation(helpStyle.Render("✓ closed " + id + " — gone (capture anything kept to the blackboard/tasks)"))
+			}
 		}
 	}
 }
 
-func (m *Model) addConv(line string) {
+func (m *Model) addConversation(line string) {
 	m.conv = append(m.conv, line)
 	if len(m.conv) > 500 {
 		m.conv = m.conv[len(m.conv)-500:]
@@ -806,7 +868,11 @@ func (m *Model) fleetLine() string {
 		case "offline":
 			dot = offlineDot
 		}
-		parts = append(parts, fmt.Sprintf("%s %s[%s]", dot, id, a.status))
+		tag := ""
+		if strings.HasPrefix(id, "consult-") {
+			tag = helpStyle.Render("⟳") // ephemeral consult (#24)
+		}
+		parts = append(parts, fmt.Sprintf("%s%s %s[%s]", tag, dot, id, a.status))
 	}
 	return "fleet: " + strings.Join(parts, "  ") + fmt.Sprintf("   cost $%.2f", m.cost)
 }

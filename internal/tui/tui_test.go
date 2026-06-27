@@ -13,6 +13,48 @@ import (
 	"avairy/internal/journal"
 )
 
+// /consult spawns via the Consult dep (parsing an optional @target + family); /close tears down.
+func TestConsultCommands(t *testing.T) {
+	j := journal.NewMemory()
+	d := depsFor(bus.New(j), board.New(j), j)
+	var gotTarget, gotFamily, closed string
+	d.Consult = func(target, family string) (string, error) { gotTarget, gotFamily = target, family; return "consult-" + orCore(target), nil }
+	d.CloseConsult = func(id string) bool { closed = id; return true }
+	m := NewModel(d)
+
+	// "/consult @linux codex" → target "linux", family "codex".
+	m.input.SetValue("/consult @linux codex")
+	if cmd := m.submit(); cmd != nil {
+		cmd() // run the async consult off-thread closure
+	}
+	if gotTarget != "linux" || gotFamily != "codex" {
+		t.Fatalf("consult args = (%q,%q), want (linux,codex)", gotTarget, gotFamily)
+	}
+
+	// bare "/consult" → core, no family.
+	m.input.SetValue("/consult")
+	if cmd := m.submit(); cmd != nil {
+		cmd()
+	}
+	if gotTarget != "" || gotFamily != "" {
+		t.Fatalf("bare consult args = (%q,%q), want empty", gotTarget, gotFamily)
+	}
+
+	// "/close consult-core" tears it down.
+	m.input.SetValue("/close consult-core")
+	m.submit()
+	if closed != "consult-core" {
+		t.Fatalf("close id = %q, want consult-core", closed)
+	}
+}
+
+func orCore(s string) string {
+	if s == "" {
+		return "core"
+	}
+	return s
+}
+
 // Scrollback: at the tail the latest line shows and the oldest is off-screen; scrolling up reveals
 // older lines and hides the latest; a new record while scrolled up keeps the viewport anchored.
 func TestScrollback(t *testing.T) {

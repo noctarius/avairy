@@ -317,6 +317,29 @@ Ranked roughly by value-to-effort within each group.
       Messages and agent text render as markdown with fenced-code syntax highlighting (incl. diff);
       tool/system lines stay plain. Falls back to plain text if the libs don't load.
 
+24. **Operator-spawned ephemeral consult agents.** The operator can spin up a disposable agent to
+    ask questions / get feedback (e.g. OS-specific path validation) — on **core** or, for OS-specific
+    answers, on a **node** (runs there, with that OS/filesystem). Design (agreed):
+    - **Disposable, multi-turn, never persisted.** A real bus participant you converse with
+      (`@consult-…`), running in `SessionMode: Ephemeral` (no session id on disk); `/close` tears it
+      down and it's *gone*. Since the transcript vanishes, **outcomes must be captured deliberately**
+      to the blackboard (`note`) or task board (`post_task`) — nothing is auto-saved.
+    - **Full bus citizen.** Has the normal MCP tools, so it can ask other agents
+      (`@consult-linux ask @macos whether …`) and read replies.
+    - **Naming/addressing** — location-encoded, deduped ids handed back at creation: `/consult`
+      → `consult-core`; `/consult @<node>` → `consult-<node>` (e.g. `consult-linux`); a second on the
+      same target → `consult-linux-2`. Address with the normal `@id` semantics; ephemeral consults
+      show in the fleet tagged (so they're discoverable) and `/close <id>` removes them.
+    - **Build order:** ✅ **core-local done** — `/consult [family]` spawns `consult-core` (deduped)
+      via `spawnLocalAgent` in `SessionEphemeral` mode; `/close <id>` cancels the session +
+      `mcp.Server.Unregister`s it. Lifecycle is **journaled** (`consult_opened`/`consult_closed`),
+      so the TUI and web both show it (not a TUI-local line); fleet tags consults with `⟳`. Wired
+      through `operator.Services` → `tui.Deps`. **Remaining:** node-targeted (core→node spawn/teardown
+      round-trip, like #21's directive channel) + triggering from the web/remote-TUI (operator API
+      `/operator/consult` + `/operator/close` endpoints) — both consoles already *render* the events.
+    - Optional enabler: a `list_agents` roster MCP tool so agents can discover peers unprompted
+      (today they learn ids from messages/tasks/the operator naming them).
+
 ### Single operator
 
 13. The TUI is single-operator by design (v1). Multi-operator is out of scope for now.

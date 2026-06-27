@@ -132,6 +132,19 @@ func (s *Server) RegisterAgent(id string, roles []string, caps map[string]string
 	s.mu.Unlock()
 }
 
+// Unregister removes an agent from the bus (unsubscribes + drops its inbox). Used to tear down an
+// ephemeral consult agent (#24) when the operator closes it — so it stops receiving messages and
+// vanishes from the roster.
+func (s *Server) Unregister(id string) {
+	s.mu.Lock()
+	reg := s.agents[id]
+	delete(s.agents, id)
+	s.mu.Unlock()
+	if reg != nil && reg.cancel != nil {
+		reg.cancel()
+	}
+}
+
 // DrainInbox non-blockingly returns and clears the bus messages buffered for an agent. Used
 // by the control channel to deliver inbound messages to a remote agent's daemon.
 func (s *Server) DrainInbox(agentID string) []bus.Message {

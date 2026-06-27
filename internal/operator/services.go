@@ -27,6 +27,11 @@ type Services struct {
 	// NodeDirective delivers the operator's verdict on a node's held startup conflict (#21) back to
 	// that node (resync/resolve). nil when there's no control API.
 	NodeDirective func(nodeID, decision string)
+	// Consult / CloseConsult spawn and tear down operator-requested ephemeral consult agents (#24):
+	// Consult returns the new agent's bus id; CloseConsult reports whether one was torn down. nil
+	// disables the feature.
+	Consult      func(target, family string) (string, error)
+	CloseConsult func(id string) bool
 }
 
 // Inject publishes a human message: target "" broadcasts, else it's an agent id.
@@ -88,6 +93,8 @@ func (s *Services) Deps() tui.Deps {
 		Interrupt:       s.Interrupt,
 		ResolveApproval: s.ResolveApproval,
 		ResolveConflict: s.ResolveConflict,
+		Consult:         s.Consult,
+		CloseConsult:    s.CloseConsult,
 		Commit:          s.Commit,
 		PendingApprovals: func() []tui.ApprovalItem {
 			ps := s.Approvals.Pending()
