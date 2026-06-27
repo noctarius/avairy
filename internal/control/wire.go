@@ -55,6 +55,7 @@ type InboxMessage struct {
 	Body      string `json:"body"`
 	Delivery  string `json:"delivery"`
 	Interrupt bool   `json:"interrupt,omitempty"` // cancel the agent's current turn
+	ToKind    string `json:"toKind,omitempty"`    // "agent" | "role" | "broadcast" — for the node's wake policy (#25)
 }
 
 // InboxPullRequest asks core for messages buffered for agentId.

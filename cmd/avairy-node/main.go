@@ -26,6 +26,7 @@ import (
 	"avairy/internal/adapter/copilot"
 	"avairy/internal/adapter/grok"
 	"avairy/internal/agent"
+	"avairy/internal/bus"
 	"avairy/internal/control"
 	"avairy/internal/gating"
 	"avairy/internal/git"
@@ -467,6 +468,7 @@ func spawnAgent(ctx context.Context, n *control.Node, family, agentID, role, mod
 	}()
 
 	// Pull inbound bus messages from core and inject them into the agent (the node-side runner).
+	waker := bus.NewWaker()
 	go func() {
 		t := time.NewTicker(time.Second)
 		defer t.Stop()
@@ -483,6 +485,11 @@ func spawnAgent(ctx context.Context, n *control.Node, family, agentID, role, mod
 				for _, m := range msgs {
 					if m.Interrupt {
 						_ = sess.Interrupt(ctx)
+						continue
+					}
+					// Bus hardening (#25): only wake the agent for messages that should trigger a
+					// turn (direct, or human/facilitator, within the autonomous-wake budget).
+					if !waker.Wake(m.From, bus.ToKind(m.ToKind), false, time.Now()) {
 						continue
 					}
 					_ = sess.Send(ctx, m.Body, agent.DeliverySteer)

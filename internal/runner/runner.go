@@ -6,6 +6,7 @@ package runner
 
 import (
 	"context"
+	"time"
 
 	"avairy/internal/agent"
 	"avairy/internal/bus"
@@ -25,6 +26,7 @@ type Runner struct {
 	b      *bus.Bus
 	jrnl   journal.Log
 	inbox  <-chan bus.Message
+	waker  *bus.Waker
 	cancel func()
 }
 
@@ -32,7 +34,7 @@ type Runner struct {
 // agent's inbox exists before Run starts (no lost messages).
 func New(a Agent, sess agent.Session, b *bus.Bus, jrnl journal.Log) *Runner {
 	inbox, cancel := b.Subscribe(a.ID, a.Roles...)
-	return &Runner{a: a, sess: sess, b: b, jrnl: jrnl, inbox: inbox, cancel: cancel}
+	return &Runner{a: a, sess: sess, b: b, jrnl: jrnl, inbox: inbox, waker: bus.NewWaker(), cancel: cancel}
 }
 
 // Run pumps messages in / events out until ctx is cancelled or the session's event stream
@@ -62,6 +64,13 @@ func (r *Runner) Run(ctx context.Context) {
 			}
 			if msg.Interrupt {
 				_ = r.sess.Interrupt(ctx) // cancel the agent's current turn (no-op if idle)
+				continue
+			}
+			// Bus hardening (#25): only WAKE the agent for messages that should trigger a turn —
+			// a direct message, or a human/facilitator broadcast, within the autonomous-wake budget.
+			// Context-only messages (agent broadcast/role, or over budget) aren't pushed into a turn;
+			// the agent still sees them via read_inbox (separate mcp subscription).
+			if !r.waker.Wake(msg.From, msg.To.Kind, false, time.Now()) {
 				continue
 			}
 			// Deliver to the agent; if interrupt isn't supported, Send errors and we
