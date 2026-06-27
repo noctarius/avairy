@@ -14,17 +14,19 @@ import (
 	"bytes"
 	"io/fs"
 	"sync"
+	"time"
 )
 
 // FileState is the canonical state of one path at the hub. The json tags pin the on-disk
 // snapshot format (see persist.go) so it stays stable across Go field renames.
 type FileState struct {
-	Path    string      `json:"path"`
-	Content []byte      `json:"content,omitempty"`
-	Mode    fs.FileMode `json:"mode"`
-	Version uint64      `json:"version"` // hub version; bumps on every accepted write
-	Writer  string      `json:"writer,omitempty"`
-	Deleted bool        `json:"deleted,omitempty"`
+	Path     string      `json:"path"`
+	Content  []byte      `json:"content,omitempty"`
+	Mode     fs.FileMode `json:"mode"`
+	Version  uint64      `json:"version"` // hub version; bumps on every accepted write
+	Writer   string      `json:"writer,omitempty"`
+	Deleted  bool        `json:"deleted,omitempty"`
+	Modified time.Time   `json:"modified,omitempty"` // when this version was stored (for "age" in a resync overview)
 }
 
 // Change is a node's proposed write to one path, edited from base version Base
@@ -111,15 +113,41 @@ func (h *Hub) store(node string, c Change, v uint64) uint64 {
 		mode = 0o644
 	}
 	h.files[c.Path] = &FileState{
-		Path:    c.Path,
-		Content: c.Content,
-		Mode:    mode,
-		Version: v,
-		Writer:  node,
-		Deleted: c.Deleted,
+		Path:     c.Path,
+		Content:  c.Content,
+		Mode:     mode,
+		Version:  v,
+		Writer:   node,
+		Deleted:  c.Deleted,
+		Modified: time.Now(),
 	}
 	h.dirty = true
 	return v
+}
+
+// ManifestEntry is one path's canonical fingerprint, for a node to reconcile its tree against the
+// hub without trusting its tracked versions (item #21): the content checksum drives the delta, the
+// version re-syncs the node's base, and Modified gives the operator's overview a real "age".
+type ManifestEntry struct {
+	Path     string    `json:"path"`
+	Checksum uint64    `json:"checksum"`
+	Version  uint64    `json:"version"`
+	Modified time.Time `json:"modified"`
+}
+
+// Manifest returns a fingerprint of every live (non-deleted) path. A node diffs this against its
+// local files and pulls only what differs — far cheaper than re-downloading the whole tree.
+func (h *Hub) Manifest() []ManifestEntry {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := make([]ManifestEntry, 0, len(h.files))
+	for _, f := range h.files {
+		if f.Deleted {
+			continue
+		}
+		out = append(out, ManifestEntry{Path: f.Path, Checksum: HashContent(f.Content), Version: f.Version, Modified: f.Modified})
+	}
+	return out
 }
 
 // Pull returns the files whose hub version differs from the node's known base (i.e. updates

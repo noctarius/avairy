@@ -167,6 +167,51 @@ func TestResumeFromHubAvoidsSpuriousConflicts(t *testing.T) {
 	}
 }
 
+// Resync reconciles a node's divergent/stale tree against the hub manifest: matching files stay,
+// locally-diverged files are overwritten with canonical, hub-deleted files are removed, and missing
+// canonical files are fetched — and only the delta is pulled.
+func TestResyncReconcilesAgainstManifest(t *testing.T) {
+	core, srv := newCoreServer(t)
+	t.Cleanup(srv.Close)
+
+	// Seed canonical: a.go, b.go, c.go.
+	dirSeed := t.TempDir()
+	writeFile(t, dirSeed, "a.go", "AAA")
+	writeFile(t, dirSeed, "b.go", "BBB")
+	writeFile(t, dirSeed, "c.go", "CCC")
+	seed := NewNode(srv.URL, "seed")
+	seed.Enroll(core.CurrentToken(), "linux", nil)
+	seed.SyncUp(dirSeed)
+
+	// A node with a divergent tree: a.go matches, b.go diverged, c.go missing, x.go is local-only.
+	dir := t.TempDir()
+	writeFile(t, dir, "a.go", "AAA")        // matches canonical → must not be re-pulled
+	writeFile(t, dir, "b.go", "B-local")    // diverged → must be overwritten with canonical
+	writeFile(t, dir, "x.go", "X-local")    // not in hub → must be deleted
+	node := NewNode(srv.URL, "macos")
+	node.Enroll(core.CurrentToken(), "darwin", nil)
+
+	if err := node.Resync(dir); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(t, dir, "a.go"); got != "AAA" {
+		t.Fatalf("a.go = %q, want AAA (unchanged)", got)
+	}
+	if got := read(t, dir, "b.go"); got != "BBB" {
+		t.Fatalf("b.go = %q, want canonical BBB", got)
+	}
+	if got := read(t, dir, "c.go"); got != "CCC" {
+		t.Fatalf("c.go = %q, want fetched CCC", got)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "x.go")); !os.IsNotExist(err) {
+		t.Fatal("x.go (not in hub) should have been deleted")
+	}
+	// Base is in lockstep now: a no-op sync neither conflicts nor changes anything.
+	if c, _ := node.SyncUp(dir); len(c) != 0 {
+		t.Fatalf("post-resync sync should be clean, got %+v", c)
+	}
+}
+
 // newConflict notifies once per (agent, path, hub version): a node re-pushing the same stale
 // edit doesn't re-notify until the hub moves on.
 func TestNewConflictDedup(t *testing.T) {

@@ -14,6 +14,7 @@ const (
 	PathEvents    = "/events"
 	PathApprove   = "/approve"
 	PathBundle    = "/repo/bundle"
+	PathManifest  = "/sync/manifest"
 )
 
 // ApprovalRequest asks core to route a gated action to the human operator (DESIGN.md §7). The
@@ -139,4 +140,18 @@ type PullFile struct {
 // PullResponse carries the updates.
 type PullResponse struct {
 	Files []PullFile `json:"files"`
+}
+
+// ManifestEntry is one path's canonical fingerprint (checksum + version + age) — see
+// workspace.ManifestEntry. The node diffs it against its local tree to resync only the delta (#21).
+type ManifestEntry struct {
+	Path     string `json:"path"`
+	Checksum uint64 `json:"checksum"`
+	Version  uint64 `json:"version"`
+	Modified string `json:"modified"` // RFC3339; "" if unknown (pre-timestamp version)
+}
+
+// ManifestResponse is the full canonical fingerprint set.
+type ManifestResponse struct {
+	Files []ManifestEntry `json:"files"`
 }

@@ -121,7 +121,24 @@ func (c *Core) Handler() http.Handler {
 	mux.Handle(PathEvents, c.auth(c.handleEvents))
 	mux.Handle(PathApprove, c.auth(c.handleApprove))
 	mux.Handle(PathBundle, c.auth(c.handleBundle))
+	mux.Handle(PathManifest, c.auth(c.handleManifest))
 	return mux
+}
+
+// handleManifest returns the hub's canonical fingerprint (checksum + version + age per path) so a
+// node can reconcile its tree against it and pull only the delta (item #21).
+func (c *Core) handleManifest(nodeID string, w http.ResponseWriter, r *http.Request) {
+	c.touch(nodeID)
+	entries := c.hub.Manifest()
+	out := make([]ManifestEntry, 0, len(entries))
+	for _, e := range entries {
+		mod := ""
+		if !e.Modified.IsZero() {
+			mod = e.Modified.Format(time.RFC3339)
+		}
+		out = append(out, ManifestEntry{Path: e.Path, Checksum: e.Checksum, Version: e.Version, Modified: mod})
+	}
+	writeJSON(w, ManifestResponse{Files: out})
 }
 
 // handleBundle streams an (incremental) git bundle of the canonical repo to an enrolled node as

@@ -200,6 +200,54 @@ func (n *Node) ResumeFromHub(dir string) error {
 	return nil
 }
 
+// Resync reconciles dir against the hub's canonical manifest (item #21 — the operator's "full
+// resync"). It pulls only the paths whose content differs from the hub, deletes local paths the hub
+// no longer has, and rebuilds the node's base from the manifest — discarding any local divergence
+// (markers/locks included). Only the delta crosses the wire, so it scales to large repos.
+func (n *Node) Resync(dir string) error {
+	var resp ManifestResponse
+	if err := n.post(PathManifest, n.sess(), struct{}{}, &resp); err != nil {
+		return err
+	}
+	manifest := make(map[string]ManifestEntry, len(resp.Files))
+	for _, e := range resp.Files {
+		manifest[e.Path] = e
+	}
+
+	// One scan gives both the local path set and each file's content hash.
+	ig := workspace.IgnoreFor(dir)
+	_, stampOf, seen, err := workspace.ScanChanges(dir, ig, workspace.Stamps{})
+	if err != nil {
+		return err
+	}
+
+	n.mu.Lock()
+	n.base = make(map[string]uint64)
+	n.stamps = make(workspace.Stamps)
+	n.conflicts = make(map[string]bool)
+	for path, e := range manifest {
+		if st, ok := stampOf[path]; ok && st.Hash == e.Checksum {
+			// Local copy already matches canonical → adopt the version, skip the download.
+			n.base[path] = e.Version
+			n.stamps[path] = st
+		}
+		// else leave base[path] unset (0) so the SyncDown below fetches the hub version.
+	}
+	n.mu.Unlock()
+
+	// Delete local files the hub no longer has (ApplyFile prunes now-empty dirs).
+	for path := range seen {
+		if _, ok := manifest[path]; ok {
+			continue
+		}
+		if err := workspace.ApplyFile(dir, workspace.FileState{Path: path, Deleted: true}); err != nil {
+			return err
+		}
+	}
+	// Pull the differing/new files (base 0 for them → returned by Pull).
+	return n.SyncDown(dir)
+}
+
 // SyncDown pulls updates the node hasn't seen and applies them to dir.
 func (n *Node) SyncDown(dir string) error {
 	n.mu.Lock()
