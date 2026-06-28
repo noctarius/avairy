@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"strings"
 
 	"avairy/internal/buildinfo"
 	"avairy/internal/control"
@@ -39,16 +38,7 @@ func main() {
 	// (the same bundle machinery nodes use, written by core to .avairy/operator-join).
 	var joinCA []byte
 	if *join != "" || *joinFile != "" {
-		raw := *join
-		if raw == "" {
-			b, err := os.ReadFile(*joinFile)
-			if err != nil {
-				fmt.Fprintln(os.Stderr, "avairy-tui: join-file:", err)
-				os.Exit(1)
-			}
-			raw = strings.TrimSpace(string(b))
-		}
-		jb, err := control.DecodeJoin(raw)
+		jb, err := control.ReadJoin(*join, *joinFile)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "avairy-tui:", err)
 			os.Exit(1)

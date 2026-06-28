@@ -22,10 +22,8 @@ import (
 	"syscall"
 	"time"
 
+	"avairy/internal/adapter"
 	"avairy/internal/adapter/claudecode"
-	"avairy/internal/adapter/codex"
-	"avairy/internal/adapter/copilot"
-	"avairy/internal/adapter/grok"
 	"avairy/internal/agent"
 	"avairy/internal/buildinfo"
 	"avairy/internal/bus"
@@ -70,16 +68,7 @@ func main() {
 	// individual flags (DESIGN.md §4). It carries either an enrollment token or an mTLS client cert.
 	var clientCertPEM, clientKeyPEM, joinCA []byte
 	if *join != "" || *joinFile != "" {
-		raw := *join
-		if raw == "" {
-			b, err := os.ReadFile(*joinFile)
-			if err != nil {
-				fmt.Fprintln(os.Stderr, "avairy-node: join-file:", err)
-				os.Exit(1)
-			}
-			raw = strings.TrimSpace(string(b))
-		}
-		jb, err := control.DecodeJoin(raw)
+		jb, err := control.ReadJoin(*join, *joinFile)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "avairy-node:", err)
 			os.Exit(1)
@@ -586,30 +575,21 @@ func spawnAgent(ctx context.Context, n *control.Node, family, agentID, role, mod
 }
 
 func buildAdapter(family, gateURL string, dec gating.Decider) (agent.Adapter, error) {
-	switch family {
-	case "claude":
-		ca := claudecode.New()
-		// The agent runs headless (-p, stream-json) with no interactive prompt, so the
-		// PreToolUse hook must decide every tool call: it returns allow for free actions
-		// (no prompt) and deny for gated ones (DESIGN.md §7). With the hook governing all
-		// tools we don't bypass permissions — the hook *is* the permission system.
-		settings, err := gating.ClaudeHookSettings(gateURL)
-		if err != nil {
-			return nil, err
-		}
-		ca.ExtraArgs = []string{"--settings", settings}
-		return ca, nil
-	case "codex":
-		cx := codex.New()
-		cx.Approve = codex.ApproverFromDecider(dec)
-		return cx, nil
-	case "copilot":
-		return copilot.New(dec), nil
-	case "grok":
-		return grok.New(dec), nil
-	default:
+	if ad, ok := adapter.NewGated(family, dec); ok {
+		return ad, nil
+	}
+	if family != "claude" {
 		return nil, fmt.Errorf("unknown family %q (want claude|codex|copilot|grok)", family)
 	}
+	// The agent runs headless (-p, stream-json) with no interactive prompt, so the PreToolUse hook
+	// decides every tool call (allow free actions, deny gated ones) — the hook is the permission system.
+	settings, err := gating.ClaudeHookSettings(gateURL)
+	if err != nil {
+		return nil, err
+	}
+	ca := claudecode.New()
+	ca.ExtraArgs = []string{"--settings", settings}
+	return ca, nil
 }
 
 // gateDecider is the node's §7 enforcement decision. Free actions pass; gated actions

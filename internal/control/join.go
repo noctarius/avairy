@@ -4,6 +4,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"os"
+	"strings"
 )
 
 // JoinBundle is the single artifact an operator hands a new node: where core is, how to trust
@@ -41,4 +43,22 @@ func DecodeJoin(s string) (JoinBundle, error) {
 		return JoinBundle{}, fmt.Errorf("control: join bundle missing core URL")
 	}
 	return b, nil
+}
+
+// ReadJoin resolves a join bundle from an inline string (join) or, when that's empty, a file
+// (joinFile), then decodes it — the read+decode shared by the node and operator clients. Each
+// caller applies the bundle fields it cares about. Returns the zero bundle if neither is set.
+func ReadJoin(join, joinFile string) (JoinBundle, error) {
+	raw := strings.TrimSpace(join)
+	if raw == "" {
+		if joinFile == "" {
+			return JoinBundle{}, nil
+		}
+		b, err := os.ReadFile(joinFile)
+		if err != nil {
+			return JoinBundle{}, fmt.Errorf("control: read join-file: %w", err)
+		}
+		raw = strings.TrimSpace(string(b))
+	}
+	return DecodeJoin(raw)
 }

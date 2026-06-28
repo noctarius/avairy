@@ -28,10 +28,8 @@ import (
 	"syscall"
 	"time"
 
+	"avairy/internal/adapter"
 	"avairy/internal/adapter/claudecode"
-	"avairy/internal/adapter/codex"
-	"avairy/internal/adapter/copilot"
-	"avairy/internal/adapter/grok"
 	"avairy/internal/adapter/mock"
 	"avairy/internal/agent"
 	"avairy/internal/board"
@@ -683,33 +681,23 @@ func spawnLocalAgent(ctx context.Context, id, role string, mode agent.SessionMod
 // starts a long-lived local /gate server whose URL is baked into the PreToolUse hook settings —
 // built once and reused across respawns so sleep/wake cycles don't leak gate servers.
 func buildLocalAdapter(family, id string, approvals *control.Approvals, gateEdits bool) (agent.Adapter, error) {
-	switch family {
-	case "codex":
-		cx := codex.New()
-		// Real gating with a human in the loop: app-server approvals route through the §7
-		// policy; gated actions block on the operator's allow/deny in the TUI approvals view.
-		cx.Approve = codex.ApproverFromDecider(localGateDecider(approvals, id, gateEdits))
-		return cx, nil
-	case "copilot":
-		return copilot.New(localGateDecider(approvals, id, gateEdits)), nil // ACP; needs `copilot login`
-	case "grok":
-		return grok.New(localGateDecider(approvals, id, gateEdits)), nil // ACP; needs xAI auth
-	default: // claude
-		ca := claudecode.New()
-		// Real gating, same as a node: serve a local /gate and register a PreToolUse hook for
-		// every tool call (free actions allowed without a prompt, gated ones routed to the
-		// operator's Approvals tab). The hook is the permission system — no --allowedTools.
-		gateURL, err := startLocalGate(localGateDecider(approvals, id, gateEdits))
-		if err != nil {
-			return nil, err
-		}
-		settings, err := gating.ClaudeHookSettings(gateURL)
-		if err != nil {
-			return nil, err
-		}
-		ca.ExtraArgs = []string{"--settings", settings}
-		return ca, nil
+	dec := localGateDecider(approvals, id, gateEdits) // gated actions block on the operator's allow/deny
+	if ad, ok := adapter.NewGated(family, dec); ok {
+		return ad, nil
 	}
+	// claude (the default family): serve a local /gate and register a PreToolUse hook for every
+	// tool call — the hook is the permission system, so we don't bypass permissions.
+	gateURL, err := startLocalGate(dec)
+	if err != nil {
+		return nil, err
+	}
+	settings, err := gating.ClaudeHookSettings(gateURL)
+	if err != nil {
+		return nil, err
+	}
+	ca := claudecode.New()
+	ca.ExtraArgs = []string{"--settings", settings}
+	return ca, nil
 }
 
 // consultRole is the persona for an operator-spawned ephemeral consult agent (#24).
@@ -899,20 +887,12 @@ func denyAll(context.Context, gating.Request) (gating.Decision, error) { return 
 
 // freshLookAdapter builds a plain, bus-less, tool-denied adapter for one-shot thinking.
 func freshLookAdapter(family string) agent.Adapter {
-	switch family {
-	case "codex":
-		cx := codex.New()
-		cx.Approve = codex.ApproverFromDecider(denyAll)
-		return cx
-	case "copilot":
-		return copilot.New(denyAll)
-	case "grok":
-		return grok.New(denyAll)
-	default: // claude
-		ca := claudecode.New()
-		ca.ExtraArgs = []string{"--allowedTools", ""} // no tools — pure reasoning
-		return ca
+	if ad, ok := adapter.NewGated(family, denyAll); ok {
+		return ad
 	}
+	ca := claudecode.New() // claude (default): no tools — pure reasoning
+	ca.ExtraArgs = []string{"--allowedTools", ""}
+	return ca
 }
 
 // dispatchRole steers the ephemeral picker used by @facilitator: choose ONE agent by capability.
