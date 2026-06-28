@@ -215,7 +215,6 @@ func runCore(_ context.Context, cmd *cli.Command, headlessMode bool) error {
 	if opToken == "" {
 		opToken = operator.RandomToken()
 	}
-	var operatorJoinFile string // path to the .avairy/operator-join bundle (set when serving)
 
 	// Self-managed TLS material (DESIGN.md §4), shared by the MCP bus and the control channel, so
 	// both encrypted listeners use one cert and the CA travels to nodes in the join bundle.
@@ -273,191 +272,18 @@ func runCore(_ context.Context, cmd *cli.Command, headlessMode bool) error {
 	svc.Consult = consults.Open
 	svc.CloseConsult = consults.Close
 
-	// Optionally serve the node control API so remote avairy-node daemons can enroll and sync.
-	var commitFn func(string) (string, error)                    // operator-initiated /commit; nil unless git is enabled
-	var bundleFn func(context.Context, []string) ([]byte, error) // repo bundle for node mirrors; nil unless git is enabled
+	// Optionally serve the node control + operator API so remote daemons enroll/sync and remote
+	// consoles attach. All of it (hub, seed sync, control.Core, servers, join bundles) lives in
+	// serveControlAPI; it returns a cleanup to run at exit.
 	if *controlAddr != "" {
-		// Restore the canonical hub from disk so a core restart doesn't lose state (DESIGN.md
-		// §9); persist it periodically and on clean shutdown.
-		hubPath := filepath.Join(".avairy", "hub.json")
-		hub, err := workspace.LoadHub(hubPath)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "avairy: load hub (starting empty):", err)
-			hub = workspace.NewHub()
-		}
-		defer func() {
-			if err := hub.Save(hubPath); err != nil {
-				fmt.Fprintln(os.Stderr, "avairy: persist hub:", err)
-			}
-		}()
-		go func() {
-			t := time.NewTicker(5 * time.Second)
-			defer t.Stop()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-t.C:
-					if _, err := hub.SaveIfDirty(hubPath); err != nil {
-						fmt.Fprintln(os.Stderr, "avairy: persist hub:", err)
-					}
-				}
-			}
-		}()
-		// Seed the canonical hub from the operator's project dir (synced both ways) and, if it's a
-		// git repo, wire history/commit/bundle. Returns the /commit + bundle hooks (nil if no repo).
-		if *workspaceDir != "" {
-			var seedCleanup func()
-			commitFn, bundleFn, seedCleanup = setupSeedWorkspace(ctx, mcpSrv, hub, *workspaceDir, conflictBroker, approvals, jrnl)
-			defer seedCleanup()
-		}
-		svc.Commit = commitFn // operator /commit over the API/TUI (nil when no git repo)
-
-		core := control.NewCore(hub, jrnl)
-		consults.core = core                 // enable node-targeted consults (#24)
-		core.RequireClientCert = mtlsEnabled // reject token enrollment; nodes join by mTLS client cert
-		core.Approvals = approvals           // one broker feeds both node agents and the operator TUI
-		core.Bundle = bundleFn               // serve the repo as a bundle for node mirrors (nil if no repo)
-		core.OnConflict = func(agentID, path string, hubVersion uint64, hubContent, yourContent []byte) {
-			body := fmt.Sprintf("CONFLICT on %s — another agent changed it (now hub v%d). Your working copy now has git-style conflict markers (<<<<<<< your edit / ======= / >>>>>>> hub); edit %s to resolve them and remove the markers — it will then sync as the next version. (Or submit a merge directly with resolve_conflict.)",
-				path, hubVersion, path)
-			b.Publish("avairy", bus.Agent(agentID), body, agent.DeliverySteer)
-		}
-		// A node's first-sync (startup) conflicts have no owning agent — surface the operator's
-		// choice (resync / resolve / overview) on the Conflicts surface; the verdict rides back to
-		// the node on its heartbeat (#21). One entry per node; Path carries the node id.
-		core.OnNodeConflict = func(nodeID, summary string, paths []string) {
-			conflictBroker.Raise(control.OperatorConflict{Path: nodeID, Source: "node-startup", Detail: summary})
-		}
-		svc.NodeDirective = core.SetNodeDirective
-		// Conflict reconciliation (DESIGN.md §9): agents resolve divergent edits via resolve_conflict
-		// (merged content → next canonical version). For a node agent, also unlock the path so the
-		// node drops its stale markers and pulls the merged content (#22 — closes the gap where the
-		// tool only advanced the hub and left the node locked).
-		mcpSrv.EnableConflicts(func(agentID, path string, content []byte) (uint64, error) {
-			v := hub.Resolve(agentID, path, content).Version
-			core.ResolveNodeConflict(agentID, path)
-			return v, nil
-		})
-		// list_conflicts (#22): the agent's authoritative conflicted-file list, from what its node
-		// reports on heartbeat — so it never greps for markers (agent id == node id).
-		mcpSrv.EnableConflictList(core.NodeConflicts)
-		// When a node enrolls, register its agent on the bus (identity, caps, inbox); deliver
-		// that agent's inbound bus messages back over the control channel.
-		core.OnEnroll = func(nodeID string, caps map[string]string) {
-			mcpSrv.RegisterAgent(nodeID, mcp.AgentRoles(nodeID, caps), caps) // node id == agent's bus identity
-		}
-		core.InboxDrainer = func(agentID string) []control.InboxMessage {
-			var out []control.InboxMessage
-			for _, m := range mcpSrv.DrainInbox(agentID) {
-				out = append(out, control.InboxMessage{ID: m.ID, From: m.From, Body: m.Body, Delivery: string(m.Delivery), Interrupt: m.Interrupt, ToKind: string(m.To.Kind)})
-			}
-			return out
-		}
-		// Serve the operator API (#18) alongside the node control API on one listener (shared TLS):
-		// /operator/* → remote TUI/web clients; everything else → the node channel.
-		rootHandler := func() http.Handler {
-			mux := http.NewServeMux()
-			mux.Handle("/operator/", operator.NewServer(svc, opToken, *web).Handler())
-			mux.Handle("/", core.Handler())
-			return mux
-		}
-		ctrlScheme := "http"
-		ctrlSrv := &http.Server{Addr: *controlAddr, Handler: rootHandler(), ErrorLog: httpLog}
-		serve := func() error {
-			return ctrlSrv.ListenAndServe()
-		}
-		switch {
-		case *tlsAuto:
-			ctrlScheme = "https"
-			ctrlSrv.TLSConfig = &tls.Config{
-				Certificates: []tls.Certificate{serverCert}, // shared self-CA cert (built above)
-				ClientAuth:   tls.VerifyClientCertIfGiven,   // verify a node's client cert (mTLS) if presented; the operator API on this listener presents none
-				ClientCAs:    ca.Pool(),
-			}
-			serve = func() error {
-				return ctrlSrv.ListenAndServeTLS("", "")
-			}
-		case *tlsCert != "" && *tlsKey != "":
-			ctrlScheme = "https"
-			serve = func() error {
-				return ctrlSrv.ListenAndServeTLS(*tlsCert, *tlsKey)
-			}
-		}
-		go func() {
-			if err := serve(); err != nil {
-				fmt.Fprintln(os.Stderr, "control server:", err)
-			}
-		}()
-		go core.RunLiveness(ctx) // mark nodes offline when heartbeats lapse
-
-		ctrlURL := ctrlScheme + "://" + advertised(*advertise, *controlAddr)
-		busBase := busScheme + "://" + advertised(*advertise, ln.Addr().String())
-		warn := ""
-		if unreachableHost(hostOf(advertised(*advertise, ln.Addr().String()))) {
-			warn = "host not reachable from other machines — pass -advertise <ip/host> and bind -control-addr/-mcp-addr to 0.0.0.0:PORT"
-		}
-		// Token enrollment: write a one-string join bundle (core URL + CA + token) for the next
-		// node, refreshed whenever the token is read or rotated. Skipped under -mtls-only, where
-		// nodes authenticate by client cert (mint a join with `avairy mint-join`) and the shared
-		// token would only be a weaker credential to leak.
-		joinPath := filepath.Join(".avairy", "join")
-		writeJoin := func(tok string) {
-			jb := control.EncodeJoin(control.JoinBundle{Core: ctrlURL, Bus: busBase, CA: caPEM, Token: tok})
-			_ = os.WriteFile(joinPath, []byte(jb), 0o600)
-		}
-		curToken := func() string {
-			if mtlsEnabled {
-				return ""
-			}
-			t := core.CurrentToken()
-			writeJoin(t)
-			return t
-		}
-		var newTokenFn func() string
-		if !mtlsEnabled {
-			newTokenFn = func() string {
-				t := core.NewPendingToken()
-				writeJoin(t)
-				return t
-			}
-		}
-		// A remote operator (#18) attaches the same TUI from another machine. Bundle core URL + CA +
-		// the operator token into one .avairy/operator-join string (reusing the node join machinery),
-		// so `avairy-tui -join-file .avairy/operator-join` is a single argument (documented, not shown
-		// in the UI). This is the operator API credential, NOT a node credential — unaffected by mTLS.
-		operatorJoinFile = filepath.Join(".avairy", "operator-join")
-		_ = os.WriteFile(operatorJoinFile, []byte(control.EncodeJoin(control.JoinBundle{Core: ctrlURL, CA: caPEM, Token: opToken})), 0o600)
-		// Feed the operator surface so both the local TUI and remote clients see endpoints/token.
-		// The web console URL is only meaningful when -web actually serves the page.
-		webURL := ""
-		if *web {
-			webURL = ctrlURL + operator.PathUI + "?token=" + opToken
-		}
-		joinFileShown := joinPath
-		if mtlsEnabled {
-			joinFileShown = "" // no token join under mTLS-only
-		}
-		svc.Control = func() *operator.ControlState {
-			return &operator.ControlState{ControlURL: ctrlURL, BusBase: busBase, Warn: warn, Token: curToken(), JoinFile: joinFileShown, OperatorJoin: operatorJoinFile, WebURL: webURL, MTLSOnly: mtlsEnabled}
-		}
-		svc.NewToken = newTokenFn
-		// Under the TUI's alt-screen, stdout is hidden — so the token/join is shown in the TUI.
-		// Only print here when there's no TUI (headless serve, or a one-shot -send).
-		if *headless || *send != "" {
-			fmt.Printf("control API:  %s\nMCP bus base: %s\n", ctrlURL, busBase)
-			// Token enrollment only — under mTLS nodes join by client cert (see docs); show nothing.
-			if !mtlsEnabled {
-				fmt.Printf("enroll token: %s\nnode join:    %s\n", curToken(), joinPath)
-			}
-			fmt.Printf("operator token: %s\n", opToken)
-			if webURL != "" {
-				fmt.Printf("web console:  %s\n", webURL)
-			}
-			if warn != "" {
-				fmt.Println("warning:", warn)
-			}
-		}
+		defer serveControlAPI(controlDeps{
+			ctx: ctx, jrnl: jrnl, b: b, mcpSrv: mcpSrv, svc: svc,
+			approvals: approvals, conflicts: conflictBroker, consults: consults,
+			ca: ca, serverCert: serverCert, caPEM: caPEM, busScheme: busScheme, busLn: ln,
+			opToken: opToken, httpLog: httpLog, mtlsEnabled: mtlsEnabled,
+			controlAddr: controlAddr, workspaceDir: workspaceDir, tlsCert: tlsCert, tlsKey: tlsKey,
+			advertise: advertise, send: send, tlsAuto: tlsAuto, web: web, headless: headless,
+		})()
 	}
 
 	// Background services: the facilitator nudges stuck agents and routes @facilitator requests; the
@@ -508,6 +334,230 @@ func runCore(_ context.Context, cmd *cli.Command, headlessMode bool) error {
 	}
 	// The attached TUI runs in-process against the same operator surface a remote client uses.
 	return tui.Run(svc.Deps())
+}
+
+// controlDeps are the built components + flag pointers serveControlAPI needs. Flags are passed as
+// pointers so the (verbatim) wiring below dereferences them exactly as it did inside main().
+type controlDeps struct {
+	ctx         context.Context
+	jrnl        journal.Log
+	b           *bus.Bus
+	mcpSrv      *mcp.Server
+	svc         *operator.Services
+	approvals   *control.Approvals
+	conflicts   *control.Conflicts
+	consults    *consultMgr
+	ca          *control.CA
+	serverCert  tls.Certificate
+	caPEM       []byte
+	busScheme   string
+	busLn       net.Listener
+	opToken     string
+	httpLog     *log.Logger
+	mtlsEnabled bool
+
+	controlAddr, workspaceDir, tlsCert, tlsKey, advertise, send *string
+	tlsAuto, web, headless                                      *bool
+}
+
+// serveControlAPI stands up the node control API + operator API on one listener: restores/persists
+// the canonical hub, seeds the workspace, wires the control.Core callbacks, serves (TLS per config),
+// and writes the join bundles. Returns a cleanup to run at exit (persist hub, prune worktrees).
+func serveControlAPI(d controlDeps) func() {
+	ctx, jrnl, b, mcpSrv, svc := d.ctx, d.jrnl, d.b, d.mcpSrv, d.svc
+	approvals, conflictBroker, consults := d.approvals, d.conflicts, d.consults
+	ca, serverCert, caPEM := d.ca, d.serverCert, d.caPEM
+	busScheme, ln, opToken, httpLog, mtlsEnabled := d.busScheme, d.busLn, d.opToken, d.httpLog, d.mtlsEnabled
+	controlAddr, workspaceDir, tlsCert, tlsKey, advertise, send := d.controlAddr, d.workspaceDir, d.tlsCert, d.tlsKey, d.advertise, d.send
+	tlsAuto, web, headless := d.tlsAuto, d.web, d.headless
+
+	var commitFn func(string) (string, error)                    // operator-initiated /commit; nil unless git is enabled
+	var bundleFn func(context.Context, []string) ([]byte, error) // repo bundle for node mirrors; nil unless git is enabled
+	var operatorJoinFile string
+	var cleanups []func()
+
+	// Restore the canonical hub from disk so a core restart doesn't lose state (DESIGN.md §9);
+	// persist it periodically and on clean shutdown.
+	hubPath := filepath.Join(".avairy", "hub.json")
+	hub, err := workspace.LoadHub(hubPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "avairy: load hub (starting empty):", err)
+		hub = workspace.NewHub()
+	}
+	cleanups = append(cleanups, func() {
+		if err := hub.Save(hubPath); err != nil {
+			fmt.Fprintln(os.Stderr, "avairy: persist hub:", err)
+		}
+	})
+	go func() {
+		t := time.NewTicker(5 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				if _, err := hub.SaveIfDirty(hubPath); err != nil {
+					fmt.Fprintln(os.Stderr, "avairy: persist hub:", err)
+				}
+			}
+		}
+	}()
+	// Seed the canonical hub from the operator's project dir (synced both ways) and, if it's a git
+	// repo, wire history/commit/bundle. Returns the /commit + bundle hooks (nil if no repo).
+	if *workspaceDir != "" {
+		var seedCleanup func()
+		commitFn, bundleFn, seedCleanup = setupSeedWorkspace(ctx, mcpSrv, hub, *workspaceDir, conflictBroker, approvals, jrnl)
+		cleanups = append(cleanups, seedCleanup)
+	}
+	svc.Commit = commitFn // operator /commit over the API/TUI (nil when no git repo)
+
+	core := control.NewCore(hub, jrnl)
+	consults.core = core                 // enable node-targeted consults (#24)
+	core.RequireClientCert = mtlsEnabled // reject token enrollment; nodes join by mTLS client cert
+	core.Approvals = approvals           // one broker feeds both node agents and the operator TUI
+	core.Bundle = bundleFn               // serve the repo as a bundle for node mirrors (nil if no repo)
+	core.OnConflict = func(agentID, path string, hubVersion uint64, hubContent, yourContent []byte) {
+		body := fmt.Sprintf("CONFLICT on %s — another agent changed it (now hub v%d). Your working copy now has git-style conflict markers (<<<<<<< your edit / ======= / >>>>>>> hub); edit %s to resolve them and remove the markers — it will then sync as the next version. (Or submit a merge directly with resolve_conflict.)",
+			path, hubVersion, path)
+		b.Publish("avairy", bus.Agent(agentID), body, agent.DeliverySteer)
+	}
+	// A node's first-sync (startup) conflicts have no owning agent — surface the operator's choice
+	// (resync / resolve / overview) on the Conflicts surface; the verdict rides back to the node on
+	// its heartbeat (#21). One entry per node; Path carries the node id.
+	core.OnNodeConflict = func(nodeID, summary string, paths []string) {
+		conflictBroker.Raise(control.OperatorConflict{Path: nodeID, Source: "node-startup", Detail: summary})
+	}
+	svc.NodeDirective = core.SetNodeDirective
+	// Conflict reconciliation (DESIGN.md §9): agents resolve divergent edits via resolve_conflict
+	// (merged content → next canonical version). For a node agent, also unlock the path so the node
+	// drops its stale markers and pulls the merged content (#22).
+	mcpSrv.EnableConflicts(func(agentID, path string, content []byte) (uint64, error) {
+		v := hub.Resolve(agentID, path, content).Version
+		core.ResolveNodeConflict(agentID, path)
+		return v, nil
+	})
+	// list_conflicts (#22): the agent's authoritative conflicted-file list, from what its node
+	// reports on heartbeat — so it never greps for markers (agent id == node id).
+	mcpSrv.EnableConflictList(core.NodeConflicts)
+	// When a node enrolls, register its agent on the bus (identity, caps, inbox); deliver that
+	// agent's inbound bus messages back over the control channel.
+	core.OnEnroll = func(nodeID string, caps map[string]string) {
+		mcpSrv.RegisterAgent(nodeID, mcp.AgentRoles(nodeID, caps), caps) // node id == agent's bus identity
+	}
+	core.InboxDrainer = func(agentID string) []control.InboxMessage {
+		var out []control.InboxMessage
+		for _, m := range mcpSrv.DrainInbox(agentID) {
+			out = append(out, control.InboxMessage{ID: m.ID, From: m.From, Body: m.Body, Delivery: string(m.Delivery), Interrupt: m.Interrupt, ToKind: string(m.To.Kind)})
+		}
+		return out
+	}
+	// Serve the operator API (#18) alongside the node control API on one listener (shared TLS):
+	// /operator/* → remote TUI/web clients; everything else → the node channel.
+	rootHandler := func() http.Handler {
+		mux := http.NewServeMux()
+		mux.Handle("/operator/", operator.NewServer(svc, opToken, *web).Handler())
+		mux.Handle("/", core.Handler())
+		return mux
+	}
+	ctrlScheme := "http"
+	ctrlSrv := &http.Server{Addr: *controlAddr, Handler: rootHandler(), ErrorLog: httpLog}
+	serve := func() error {
+		return ctrlSrv.ListenAndServe()
+	}
+	switch {
+	case *tlsAuto:
+		ctrlScheme = "https"
+		ctrlSrv.TLSConfig = &tls.Config{
+			Certificates: []tls.Certificate{serverCert}, // shared self-CA cert (built above)
+			ClientAuth:   tls.VerifyClientCertIfGiven,   // verify a node's client cert (mTLS) if presented; the operator API on this listener presents none
+			ClientCAs:    ca.Pool(),
+		}
+		serve = func() error {
+			return ctrlSrv.ListenAndServeTLS("", "")
+		}
+	case *tlsCert != "" && *tlsKey != "":
+		ctrlScheme = "https"
+		serve = func() error {
+			return ctrlSrv.ListenAndServeTLS(*tlsCert, *tlsKey)
+		}
+	}
+	go func() {
+		if err := serve(); err != nil {
+			fmt.Fprintln(os.Stderr, "control server:", err)
+		}
+	}()
+	go core.RunLiveness(ctx) // mark nodes offline when heartbeats lapse
+
+	ctrlURL := ctrlScheme + "://" + advertised(*advertise, *controlAddr)
+	busBase := busScheme + "://" + advertised(*advertise, ln.Addr().String())
+	warn := ""
+	if unreachableHost(hostOf(advertised(*advertise, ln.Addr().String()))) {
+		warn = "host not reachable from other machines — pass --advertise <ip/host> and bind --control-addr/--mcp-addr to 0.0.0.0:PORT"
+	}
+	// Token enrollment (opt-in, temporary): write a one-string join bundle (core URL + CA + token)
+	// for the next node, refreshed when the token is read or rotated. Skipped when token joins are
+	// off (the default) — nodes authenticate by minted mTLS client cert (`avairy core add-node`).
+	joinPath := filepath.Join(".avairy", "join")
+	writeJoin := func(tok string) {
+		jb := control.EncodeJoin(control.JoinBundle{Core: ctrlURL, Bus: busBase, CA: caPEM, Token: tok})
+		_ = os.WriteFile(joinPath, []byte(jb), 0o600)
+	}
+	curToken := func() string {
+		if mtlsEnabled {
+			return ""
+		}
+		t := core.CurrentToken()
+		writeJoin(t)
+		return t
+	}
+	var newTokenFn func() string
+	if !mtlsEnabled {
+		newTokenFn = func() string {
+			t := core.NewPendingToken()
+			writeJoin(t)
+			return t
+		}
+	}
+	// A remote operator attaches the same TUI from another machine. Bundle core URL + CA + the
+	// operator token into one .avairy/operator-join string so `avairy tui connect --join-file` is a
+	// single argument. (For mTLS, `core add-operator` mints a cert-carrying join instead.)
+	operatorJoinFile = filepath.Join(".avairy", "operator-join")
+	_ = os.WriteFile(operatorJoinFile, []byte(control.EncodeJoin(control.JoinBundle{Core: ctrlURL, CA: caPEM, Token: opToken})), 0o600)
+	// The web console URL is only meaningful when --web actually serves the page.
+	webURL := ""
+	if *web {
+		webURL = ctrlURL + operator.PathUI + "?token=" + opToken
+	}
+	joinFileShown := joinPath
+	if mtlsEnabled {
+		joinFileShown = "" // no token join when token enrollment is off
+	}
+	svc.Control = func() *operator.ControlState {
+		return &operator.ControlState{ControlURL: ctrlURL, BusBase: busBase, Warn: warn, Token: curToken(), JoinFile: joinFileShown, OperatorJoin: operatorJoinFile, WebURL: webURL, MTLSOnly: mtlsEnabled}
+	}
+	svc.NewToken = newTokenFn
+	// Under the TUI's alt-screen, stdout is hidden — so the token/join is shown in the TUI. Only
+	// print here when there's no TUI (headless serve, or a one-shot --send).
+	if *headless || *send != "" {
+		fmt.Printf("control API:  %s\nMCP bus base: %s\n", ctrlURL, busBase)
+		if !mtlsEnabled {
+			fmt.Printf("enroll token: %s\nnode join:    %s\n", curToken(), joinPath)
+		}
+		fmt.Printf("operator token: %s\n", opToken)
+		if webURL != "" {
+			fmt.Printf("web console:  %s\n", webURL)
+		}
+		if warn != "" {
+			fmt.Println("warning:", warn)
+		}
+	}
+
+	return func() {
+		for i := len(cleanups) - 1; i >= 0; i-- {
+			cleanups[i]()
+		}
+	}
 }
 
 // setupSeedWorkspace seeds the canonical hub from the operator's project dir and keeps it synced
