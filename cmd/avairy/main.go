@@ -447,6 +447,9 @@ func serveControlAPI(d controlDeps) func() {
 	core.OnEnroll = func(nodeID string, caps map[string]string) {
 		mcpSrv.RegisterAgent(nodeID, mcp.AgentRoles(nodeID, caps), caps) // node id == agent's bus identity
 	}
+	core.OnForget = func(nodeID string) {
+		mcpSrv.Unregister(nodeID) // ephemeral node dropped on disconnect → remove its agent from the roster
+	}
 	core.InboxDrainer = func(agentID string) []control.InboxMessage {
 		var out []control.InboxMessage
 		for _, m := range mcpSrv.DrainInbox(agentID) {

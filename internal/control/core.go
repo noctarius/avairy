@@ -19,11 +19,12 @@ import (
 
 // NodeInfo is the core's record of an enrolled node (its ID is also the agent's bus identity).
 type NodeInfo struct {
-	ID       string
-	OS       string
-	Caps     map[string]string
-	LastSeen time.Time
-	Live     bool // false once heartbeats lapse past LivenessTimeout (see RunLiveness)
+	ID        string
+	OS        string
+	Caps      map[string]string
+	LastSeen  time.Time
+	Live      bool // false once heartbeats lapse past LivenessTimeout (see RunLiveness)
+	Ephemeral bool // joined by a temporary token (not a cert): forgotten on disconnect, not kept
 }
 
 // Core is the server side of the node↔core channel: enrollment, node registry, and
@@ -35,6 +36,9 @@ type Core struct {
 	// OnEnroll, if set, runs when a node enrolls — used to register it on the bus (the node id
 	// is the agent's bus identity).
 	OnEnroll func(nodeID string, caps map[string]string)
+	// OnForget, if set, runs when an ephemeral (token-joined) node is dropped after going offline
+	// — used to unregister its agent from the bus/roster (a cert node is kept, just marked offline).
+	OnForget func(nodeID string)
 	// InboxDrainer, if set, returns and clears bus messages buffered for an agent.
 	InboxDrainer func(agentID string) []InboxMessage
 	// Approvals routes a node agent's gated actions to the operator (DESIGN.md §7). NewCore
@@ -288,7 +292,7 @@ func (c *Core) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	session := randToken()
 	if accepted {
 		c.sessions[session] = req.NodeID
-		c.nodes[req.NodeID] = &NodeInfo{ID: req.NodeID, OS: req.OS, Caps: req.Caps, LastSeen: time.Now(), Live: true}
+		c.nodes[req.NodeID] = &NodeInfo{ID: req.NodeID, OS: req.OS, Caps: req.Caps, LastSeen: time.Now(), Live: true, Ephemeral: certID == ""}
 	}
 	c.mu.Unlock()
 	if !accepted {
@@ -526,26 +530,41 @@ func (c *Core) RunLiveness(ctx context.Context) {
 // journal (done outside the lock so journal subscribers can't deadlock on c.mu).
 func (c *Core) sweepLiveness() {
 	now := time.Now()
-	type change struct {
-		id   string
-		live bool
-	}
+	type change struct{ id, event string }
 	var changes []change
+	var forgotten []string
 	c.mu.Lock()
 	for id, n := range c.nodes {
 		live := now.Sub(n.LastSeen) < c.LivenessTimeout
-		if live != n.Live {
-			n.Live = live
-			changes = append(changes, change{id, live})
+		if live == n.Live {
+			continue
 		}
-	}
-	c.mu.Unlock()
-	for _, ch := range changes {
+		if !live && n.Ephemeral {
+			// A token-joined node is ephemeral: on disconnect, forget it (free its slot, roster,
+			// and pending state) rather than holding it as offline. A cert node is kept.
+			delete(c.nodes, id)
+			delete(c.nConflicts, id)
+			delete(c.directives, id)
+			delete(c.startup, id)
+			forgotten = append(forgotten, id)
+			changes = append(changes, change{id, "node_forgotten"})
+			continue
+		}
+		n.Live = live
 		event := "node_offline"
-		if ch.live {
+		if live {
 			event = "node_online"
 		}
-		c.jrnl.Append(journal.KindSystem, ch.id, map[string]any{"event": event})
+		changes = append(changes, change{id, event})
+	}
+	c.mu.Unlock()
+	for _, id := range forgotten {
+		if c.OnForget != nil {
+			c.OnForget(id) // unregister the agent from the bus/roster
+		}
+	}
+	for _, ch := range changes {
+		c.jrnl.Append(journal.KindSystem, ch.id, map[string]any{"event": ch.event})
 	}
 }
 

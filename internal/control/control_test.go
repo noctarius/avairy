@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"avairy/internal/journal"
 	"avairy/internal/workspace"
@@ -228,5 +229,32 @@ func TestEnrollHookInboxAndEvents(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("agent event was not journaled at core")
+	}
+}
+
+// An ephemeral (token-joined) node is forgotten when its heartbeats lapse — dropped from the roster
+// and OnForget fired — while a non-ephemeral node would be kept. (Cert-joined durability is covered
+// by the mTLS tests; here we drive the liveness sweep directly with a tiny timeout.)
+func TestEphemeralNodeForgottenOnDisconnect(t *testing.T) {
+	core, srv := newCoreServer(t)
+	core.LivenessTimeout = 20 * time.Millisecond
+	var forgot []string
+	core.OnForget = func(id string) { forgot = append(forgot, id) }
+
+	if err := NewNode(srv.URL, "temp").Enroll(core.CurrentToken(), "linux", nil); err != nil {
+		t.Fatalf("enroll: %v", err)
+	}
+	if len(core.Nodes()) != 1 {
+		t.Fatalf("want 1 node after enroll, got %d", len(core.Nodes()))
+	}
+
+	time.Sleep(40 * time.Millisecond) // let LastSeen lapse past the timeout
+	core.sweepLiveness()
+
+	if len(core.Nodes()) != 0 {
+		t.Fatalf("ephemeral node should be forgotten, still have %d", len(core.Nodes()))
+	}
+	if len(forgot) != 1 || forgot[0] != "temp" {
+		t.Fatalf("OnForget = %v, want [temp]", forgot)
 	}
 }

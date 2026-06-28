@@ -308,6 +308,7 @@ function applySystem(actor, d){
       break;
     case "node_offline": if(agents.has(actor)) setStatus(actor,"offline"); break;
     case "node_online": if(agents.get(actor)==="offline") setStatus(actor,"idle"); break;
+    case "node_forgotten": if(agents.delete(actor)){ renderFleet(); sysline(`⊘ ${actor} left (ephemeral node forgotten)`); } break;
     case "conflict_raised": sysline(`conflict on ${d.path} needs resolution`); break;
     case "consult_opened": if(d.id) sysline(`opened ${d.id} (ephemeral) — @${d.id} to talk · /end ${d.id}`); break;
     case "consult_closed": if(d.id) sysline(`closed ${d.id} — gone`); break;

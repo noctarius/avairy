@@ -725,6 +725,18 @@ func (m *Model) applySystem(actor string, d map[string]any) {
 		if a := m.agents[actor]; a != nil && a.status == "offline" {
 			a.status = "idle" // back in contact; real status follows on its next event
 		}
+	case "node_forgotten":
+		// An ephemeral (token-joined) node disconnected — drop it from the fleet entirely.
+		if _, ok := m.agents[actor]; ok {
+			delete(m.agents, actor)
+			for i, id := range m.agentOrder {
+				if id == actor {
+					m.agentOrder = append(m.agentOrder[:i], m.agentOrder[i+1:]...)
+					break
+				}
+			}
+			m.addConversation(helpStyle.Render("⊘ " + actor + " left (ephemeral node forgotten)"))
+		}
 	case "consult_opened":
 		if id, _ := d["id"].(string); id != "" {
 			m.addConversation(helpStyle.Render("✓ opened " + id + " (ephemeral) — talk to it with @" + id + " · /end " + id + " when done"))
