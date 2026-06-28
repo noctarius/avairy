@@ -1,256 +1,286 @@
 # avairy
 
-Orchestration for AI coding agents. Run multiple agents — same family or across families
-(**Claude Code**, **Codex**, **Copilot**, **Grok**), local or on **remote machines/VMs** — collaborating over one
-shared bus on the same project: messaging each other, working a capability-gated task board,
-sharing a synced workspace, with a human able to steer at any moment.
+**Orchestrate a fleet of AI coding agents — across families and across machines — collaborating on one shared project, with a human in the loop.**
 
-Two use cases it's built for:
-1. **Distributed apps** — agents each own a slice (backend / iOS / a service) across machines.
-2. **Cross-OS work on one codebase** — multi-platform apps or OS-specific bugs, where you need
-   an agent actually *on* each OS instead of ferrying context between a Mac and a Linux VM.
+avairy runs many AI coding agents at once and lets them work together: messaging each other,
+claiming work from a shared task board, editing a synced workspace, and handing off through a
+durable log. The agents can be the **same family or a mix** — Claude Code, Codex, Copilot, Grok —
+and they can run **on your machine or on remote machines and VMs**. A single operator (you) watches
+the whole fleet, steers any agent at any moment, and approves the risky stuff.
 
-See [DESIGN.md](DESIGN.md) for the architecture and [ADAPTERS.md](ADAPTERS.md) for how each
-agent family is driven.
+The channels between machines are **secure by default**: avairy can stand up its own certificate
+authority and use **mutual TLS** so every node and operator proves its identity — no secrets to copy
+around, no plaintext on the wire.
 
-## Requirements
+> avairy never touches your model credentials. Each agent CLI uses its own login (`claude`, `codex`,
+> `copilot`, `grok`); avairy just drives them and routes their messages.
 
-- Go 1.26+
-- For live agents: the relevant CLI installed and logged in — `claude`, `codex`, `copilot`
-  (`copilot login`), and/or `grok` (xAI auth). avairy uses each CLI's own auth; it never
-  handles your credentials.
+---
 
-## Build & test
+## Why avairy
+
+A single agent is stuck on one machine, one OS, one context window. Real work spills past that:
+
+- A bug only reproduces **on Linux**, but your agent is on a Mac (or vice-versa).
+- A feature spans a **backend, an iOS app, and a service** — different repos, different machines.
+- You want a **second model's opinion**, or to split a big change across **several agents in parallel**.
+- The thing you need is **where the hardware/network/license is** — a GPU box, an ARM machine, a
+  staging database behind a VPN.
+
+The usual workaround is *you* ferrying context between machines and chat windows. avairy removes the
+ferrying: it puts an agent **on each machine that matters**, gives them a shared bus, a shared
+workspace, and a shared memory, and keeps you in command of all of it from one console.
+
+## Highlights
+
+- **Mix and match agents.** Claude Code and Codex on native adapters; Copilot and Grok through a
+  generic ACP engine. Run one, or a dozen, same family or mixed.
+- **Local or remote.** Each node dials *out* to core (NAT/firewall-friendly) and serves the agent a
+  **localhost-only** MCP endpoint — the agent never sees the network.
+- **One shared workspace.** A canonical file-sync hub keeps every node's working copy in step, with
+  cross-OS normalization (line endings, mode bits) and conflicts surfaced for reconciliation.
+- **Coordinate, don't stampede.** Address one agent, the whole **team** (exactly one claims the
+  request), or a **facilitator** that triages and assigns the best-suited agent.
+- **Human in the loop.** Destructive commands, git pushes, installs (and optionally file edits) gate
+  for your approval; safe actions run freely. Commits to the canonical repo are signed by you.
+- **Secure by default.** Self-managed CA + mutual TLS between machines; identity baked into client
+  certificates. Bearer tokens are the simpler *fallback*, not the default.
+- **Cost-aware.** Per-agent and fleet spend in view, budget caps that interrupt runaways, and idle
+  agents that sleep and respawn on demand.
+- **Durable and auditable.** Every message, tool call, decision, and handoff is appended to an
+  event-sourced journal you can replay.
+
+## How it works
+
+```
+        operator (you)                         core  —  your machine
+   ┌──────────────────────┐         ┌──────────────────────────────────────────┐
+   │  TUI  ·  browser UI   │◀──mTLS──▶│  message bus · capability task board       │
+   │  (local or remote)    │  /token │  blackboard · file-sync hub · journal      │
+   └──────────────────────┘         │  facilitator · human-in-the-loop gating    │
+                                     └───────▲────────────────────────▲───────────┘
+                                       mTLS  │                  mTLS   │
+                              ┌──────────────┴───────┐   ┌─────────────┴────────────┐
+                              │ node  ·  linux-box    │   │ node  ·  macos-box        │
+                              │  MCP proxy (localhost)│   │  MCP proxy (localhost)    │
+                              │  agent: Claude Code   │   │  agent: Codex             │
+                              │  workspace ⇄ hub sync │   │  workspace ⇄ hub sync     │
+                              └───────────────────────┘   └───────────────────────────┘
+```
+
+**Core** runs the bus, the task board, the blackboard (shared memory), the file-sync hub, the
+event journal, the facilitator, and the gating broker. **Nodes** are a single cross-platform daemon:
+each enrolls with core, syncs a workspace directory both ways, and serves one agent a private MCP
+endpoint on localhost. **You** attach a console — locally, from another machine, or in a browser.
+
+See **[DESIGN.md](DESIGN.md)** for the full architecture and **[ADAPTERS.md](ADAPTERS.md)** for how
+each agent family is driven.
+
+## Quick start
+
+### Requirements
+
+- **Go 1.26+** to build.
+- For *live* agents, the relevant CLI installed and logged in: `claude`, `codex`,
+  `copilot` (`copilot login`), and/or `grok` (xAI auth). avairy uses each CLI's own auth.
+
+### Build
 
 ```sh
 go build ./...
 go test ./...
 ```
 
-Produces three commands: `avairy` (core + TUI), `avairy-node` (the node daemon), and
-`avairy-tui` (the operator console as a standalone client that attaches to a remote core, #18).
+This produces three commands: **`avairy`** (core + operator TUI), **`avairy-node`** (the node
+daemon — one per agent), and **`avairy-tui`** (the operator console as a standalone remote client).
+See **[BUILD.md](BUILD.md)** for packaging details.
 
-## Run it — single machine
+### Try it with zero credits
 
-**Mock agents (zero credits)** — the fastest way to see the loop:
+The fastest way to see the loop — two mock agents, no API calls:
 
 ```sh
 go run ./cmd/avairy -demo
 ```
 
-A TUI opens with two mock agents, `alice` and `bob`. (Without `-demo`, avairy starts **no
-local agents** — you bring them via `avairy-node` or `-live`.)
+A TUI opens with `alice` and `bob`. Type to talk to them, watch the conversation, tasks, and
+handovers. Without `-demo`, avairy starts **no agents** — you bring them with `-live` or a node.
 
-- Type `@alice <message>` to address an agent; a bare line broadcasts to everyone. Three group addresses coordinate *how* the fleet responds: `@all` (everyone answers), `@team` (everyone sees it but exactly one **claims** it and answers — the rest stand down), and `@facilitator` (a coordinator triages and auto-assigns the best-suited agent, or opens a `@team` claim). The recipient selector (`ctrl+t` in the TUI / dropdown on the web) lists them.
-- **Enter** sends; **Shift+Enter** (Kitty-protocol terminals) / **Option·Alt+Enter** / **Ctrl+J** insert a newline.
-- `tab` cycles **Conversation / Handovers / Tasks / Approvals / Conflicts**; **Esc** stops running agents; **Ctrl+C twice** quits.
-- On the **Approvals** tab, `↑/↓` (or `j/k`) selects a pending gated action; **`y`** allows it once, **`a`** allows that kind from that agent for the rest of the session, **`n`** denies. The tab shows a `(N)` badge while any are waiting.
-- On the **Conflicts** tab, owner-less conflicts (your seed workspace diverging from a node's edit) appear with a `(N)` badge; `↑/↓` selects, **`m`** takes it yourself (the file already has git-style markers — fix it in your editor and the next sync picks it up), **`d`** delegates it to the selected recipient agent (`ctrl+t` picks who).
-- The fleet line shows each agent's status (working / idle / blocked / offline), its running spend, and the fleet total. Set `-budget`/`-agent-budget` (USD) to have core warn you and interrupt an agent (or the whole fleet) when it crosses the cap; an over-budget agent's spend turns amber with a `⚠`.
-- Type `/commit <message>` to sign a commit of the canonical repo yourself (when core has one).
-
-**A real Claude agent on the bus:**
+### One real agent
 
 ```sh
-go run ./cmd/avairy -live                       # alice = real Claude Code
-go run ./cmd/avairy -live -family codex          # alice = real Codex
-go run ./cmd/avairy -live -model sonnet          # pick the model (default: haiku, cheapest)
+go run ./cmd/avairy -live                  # alice = real Claude Code (default, cheapest model)
+go run ./cmd/avairy -live -family codex     # alice = real Codex
+go run ./cmd/avairy -live -model sonnet     # pick the model
 ```
 
-Live agents launch lean (temp workspace, cheap model) to keep cost down. A one-shot,
-non-interactive run that prints the event log and exits:
+A non-interactive one-shot — send a message, print the journal, exit (handy for scripts/CI):
 
 ```sh
 go run ./cmd/avairy -live -send "create a task titled ping that requires os=linux"
 ```
 
-`-headless` is a different thing: run core **without the TUI** (serve the bus/control and block),
-for a host that nodes connect to with no local operator console. Attach to it later from a remote
-TUI or the browser — see [Remote operator console](#remote-operator-console-tui-or-browser).
+Everything that happens is appended to `.avairy/journal.jsonl`.
 
-Add **`-gate-edits`** to also require operator approval for file edits (not just risky commands);
-combined with **`a`** (allow-for-session) in the Approvals tab you approve an agent's edits once
-and the rest auto-allow.
+## Across machines (secure by default)
 
-Everything that happens is appended to an event-sourced journal at `.avairy/journal.jsonl`.
+The recommended path uses a **self-managed CA and mutual TLS** — every node authenticates with a
+client certificate, so there's no shared secret to leak and the channel is encrypted end to end.
 
-## Run it — across machines
-
-On the **operator machine**, start core with the node control API bound to a reachable
-interface, and advertise the host/IP remote nodes should dial:
+**1. On your machine, start core** with its own CA and a project to share:
 
 ```sh
-avairy -control-addr 0.0.0.0:7700 -mcp-addr 0.0.0.0:7701 -advertise <operator-ip> -workspace ./myproject
+avairy -control-addr 0.0.0.0:7700 -mcp-addr 0.0.0.0:7702 \
+       -advertise <your-ip> -tls-auto -workspace ./project
 ```
 
-`-workspace ./myproject` seeds the **canonical workspace** from your project and keeps it
-synced both ways — so each remote node receives a working copy on its first sync, and node
-edits flow back to your directory. (Without it the hub starts empty and nodes get nothing
-until some node pushes content.)
+`-tls-auto` creates and persists a CA under `.avairy/` and serves **both** the control channel and
+the MCP bus over HTTPS. `-workspace ./project` seeds the canonical workspace and keeps it synced
+both ways, so every node gets a working copy and node edits flow back to your directory.
 
-The TUI header shows the **control URL**, the **MCP bus base**, and an **enroll token**. The
-token **auto-regenerates each time a node uses it**, so each new node gets its own; the token
-a node first enrolls with is **bound to that node** and stays valid for it — so a restarted
-daemon (e.g. under systemd) **rejoins with the same `-token`** with no operator action.
-(`ctrl+e` rotates the current token manually; omit `-advertise` for local-only, and the TUI
-warns when the bus host isn't reachable.)
-On each **remote machine/VM**, run the daemon (a single cross-platform binary):
+**2. Issue a per-node join** — one bundled string carrying the core URL, the CA to trust, and a
+client certificate (no token):
 
 ```sh
-avairy-node \
-  -core    http://<operator>:7700 \       # control URL
-  -core-mcp http://<operator>:<busport> \  # MCP bus base
-  -token   <enroll-token> \
-  -id      linux-box \
-  -workspace ./repo \
-  -proxy   127.0.0.1:7800 \
-  -family  claude                          # optional: spawn & drive the agent here
+avairy mint-join -id linux-box -core https://<your-ip>:7700 > linux-box.join
 ```
 
-The daemon enrolls (node→core, NAT-friendly), continuously syncs `./repo` to/from the
-canonical workspace on core, heartbeats, and serves a local MCP endpoint at
-`http://127.0.0.1:7800/mcp` — the agent only ever sees localhost. (Tune `-os` to advertise a
-capability other than the host OS, and `-interval` for the sync/heartbeat cadence.)
+**3. On the remote machine, join** with that single string and let the daemon run the agent:
 
-With **`-family claude`** (or `codex`, `copilot`, `grok`) the daemon **spawns and drives the agent for you**:
-core registers it on the bus at enrollment, inbound messages are pulled from core and fed to
-the agent, and its activity is shipped back to the core journal/TUI. **Omit `-family`** to run
-proxy-only and launch the agent yourself against `http://127.0.0.1:7800/mcp`. Use `-model` /
-`-role` to tune the spawned agent, and `-gate-edits` to gate its file edits like the core flag.
+```sh
+avairy-node -join-file linux-box.join -workspace ./repo -family claude
+```
 
-### Security & TLS
+The node enrolls over mTLS (its identity is the certificate, not a shared token), syncs `./repo`
+to/from the hub, and spawns the agent against a localhost-only MCP proxy. Because certificate auth
+is **stateless**, the node transparently **re-enrolls if core restarts** — no operator action.
 
-avairy never handles your agent credentials (each CLI uses its own login), and it can secure the
-channels between machines itself.
+<details>
+<summary><b>Simpler alternative: enrollment tokens</b></summary>
 
-- **Enrollment.** Core mints an enroll token that **auto-regenerates each time a node uses it**, so
-  every node gets its own; the token a node first joins with is **bound to that node id** and stays
-  valid for it, so a restarted daemon **rejoins with the same `-token`/`-id`**. `ctrl+e` rotates the
-  current operator-facing token manually.
-- **TLS, self-managed (`-tls-auto`).** Core creates and persists a CA under `.avairy/ca.{crt,key}`
-  and a server cert covering the advertised control + bus hosts (and loopback). It encrypts **both**
-  the control channel and the remote-facing MCP bus; the CA is written into the join bundle so nodes
-  trust it **automatically** — no copying cert files. (Local agents always use a plain loopback bus,
-  TLS or not.)
-- **TLS, bring-your-own.** `-tls-cert` / `-tls-key` serve the control channel with your own PEM cert
-  instead. On a node without a bundled CA, point it at the cert to trust with `-ca` (or `-insecure`
-  to skip verification — dev only, exposes the channel to MITM).
-- **mTLS (client-cert auth).** Instead of a token, a node can authenticate with a client certificate
-  whose identity is its node id (carried in the cert's URI SAN, `avairy:<id>`). `avairy mint-join
-  -id <node> -core <https-url>` issues one from the self-managed CA, bundled into a join string.
-  Cert auth is **stateless** on core, so an mTLS node transparently **re-enrolls** if core restarts
-  and forgets its session (a token node can't — its binding is gone).
-- **Join strings.** One base64 string bundles the core URL + the CA to trust + the credential
-  (token *or* client cert+key), so "the pubcert travels with the token." Core writes `.avairy/join`
-  for nodes (refreshed as the token rotates) and `.avairy/operator-join` for the operator console;
-  pass either with `-join-file` (or `-join <string>`):
+If you don't need per-node certificates, core also mints an **enrollment token** (shown in the TUI /
+printed when headless, and written to `.avairy/join`). It auto-regenerates each time a node uses it,
+and the token a node first joins with is **bound to that node** so a restarted daemon rejoins with
+the same `-token`/`-id`.
+
+```sh
+avairy -control-addr 0.0.0.0:7700 -mcp-addr 0.0.0.0:7702 -advertise <your-ip> -workspace ./project
+avairy-node -core http://<your-ip>:7700 -core-mcp http://<your-ip>:7702 \
+            -token <enroll-token> -id linux-box -workspace ./repo -family claude
+```
+
+Prefer mTLS for anything beyond a trusted LAN — a token is a bearer credential; a certificate is an
+identity.
+</details>
+
+Omit `-family` on the node to run **proxy-only** and launch the agent yourself against
+`http://127.0.0.1:7800/mcp`.
+
+## Security
+
+avairy is built so that **the more secure option is the default, and the recommended path**. The
+channels between machines support, in order of preference:
+
+1. **Mutual TLS (recommended).** With `-tls-auto`, core runs its own CA and every participant
+   authenticates with a client certificate. A node's identity is its node id, carried in the
+   certificate's URI SAN (`avairy:<id>`); an **operator** certificate carries a *distinct* SAN, so a
+   node can never pose as an operator. Cert auth is stateless, enabling transparent re-enrollment.
+   Mint node certs with `avairy mint-join`, operator certs with `avairy mint-web-cert`.
+2. **TLS + enrollment token.** Encrypted channel, token-based join (per-node bound, auto-rotating).
+   Good for a trusted network; the token is still a bearer secret.
+3. **Bring-your-own certificate.** `-tls-cert` / `-tls-key` to serve the control channel with your
+   own PEM cert (point nodes at the CA to trust with `-ca`).
+4. **Plaintext / `-insecure`** — development only, on localhost. `-insecure` skips verification and
+   exposes the channel to MITM; never use it off your own machine.
+
+Other guarantees regardless of transport:
+
+- **No credential handling.** Agent CLIs use their own logins; avairy stores none.
+- **Human-gated risk.** Destructive commands, git mutations, and installs (and optionally edits)
+  block on your approval and **fail closed** if unanswered.
+- **Signed, operator-authored commits.** Agents *request* commits; you sign them.
+- **Join bundles** package the URL + CA + credential into one string so the public CA always travels
+  with the credential — never paste a token next to an untrusted endpoint.
+
+## Coordinating the fleet
+
+From the console you address the fleet by *intent*, so a question doesn't make every agent answer at
+once:
+
+| Address | Behavior |
+|---------|----------|
+| `@<id>` | One specific agent — wakes it and expects it to act. |
+| `@all` | Everyone answers (a true broadcast). |
+| `@team` | Everyone sees it, but exactly **one** claims it and answers; the rest stand down. |
+| `@facilitator` | A coordinator triages the request and **auto-assigns** the best-suited agent (or opens a `@team` claim), so you don't have to know who's free. |
+
+Agents have the same vocabulary over MCP (`send_message`, `claim_response`, …), and a directed
+message that matches no one is **rejected** so the sender knows — no silent drops.
+
+**Approvals.** Gated actions appear on the **Approvals** tab: allow once, allow that kind from that
+agent for the session, or deny. **Budgets.** `-budget` / `-agent-budget` (USD) warn you and interrupt
+an agent (or the whole fleet) when spend crosses a cap. **Idle sleep.** `-idle-sleep` parks an idle
+agent (freeing its subprocess) and respawns it on the next directed message.
+
+## Use cases
+
+- **Cross-OS / multi-platform development.** Keep an agent *on* each OS — macOS and Linux (and more)
+  — working the same codebase. No more ferrying context between a Mac and a Linux VM for
+  platform-specific code.
+- **Reproduce and bisect OS-specific bugs.** The agent on the failing OS reproduces locally, and uses
+  its on-node **read-only git mirror + scratch worktrees** to build and bisect past commits *on that
+  machine* — without commit rights to the canonical repo.
+- **Distributed applications.** Each agent owns a slice — backend, mobile app, a microservice — on
+  its own machine/repo, coordinating over the bus and handing off through the journal.
+- **Heterogeneous model ensembles.** Run Claude, Codex, and Grok on the same problem for diverse
+  takes; ask any agent for a clean-context **`fresh_look`** second opinion; let the facilitator route
+  by capability.
+- **Environment- and hardware-bound work.** Put the agent where the resource is — a GPU box, an ARM
+  machine, a license-locked toolchain, or a host with VPN access to a staging database.
+- **Supervised parallel fan-out.** Several agents claim tasks from a capability-gated board and work
+  in parallel while you watch spend, approve risky steps, and keep an auditable trail of every move.
+
+## The operator console
+
+One console, three ways to run it — all over the same operator API, all streaming the live journal:
+
+- **Local TUI** — opens with core (unless `-headless`). Tabs for Conversation, Handovers, Tasks,
+  Notes, Approvals, and Conflicts; a fleet line with per-agent status and spend; a command line with
+  `@`-addressing, `/commit`, and `/consult … /end` for disposable consult agents.
+- **Remote TUI** (`avairy-tui`) — the same interface attached over the network:
 
   ```sh
-  avairy-node -join-file path/to/join -id linux-box      # node: URL + CA + token/cert in one arg
-  avairy mint-join -id linux-box -core https://core:7700  # issue an mTLS client-cert join (no token)
+  avairy-tui -join-file .avairy/operator-join          # URL + CA + token in one bundle
   ```
 
-#### Walkthrough: a TLS node with `-tls-auto`
+- **Browser** — a chat-first console mirroring the TUI. Core prints the URL; open it and you get the
+  conversation, fleet, tasks, notes, approvals, and conflicts.
 
-**1. On the operator machine**, start core with TLS on and a workspace to share:
+**Operator auth** is the operator token by default, or — preferred — an **mTLS operator
+certificate**: `avairy mint-web-cert` writes a password-protected `operator.p12` (cert + key + CA) to
+import into your browser or OS keychain; then open the console with no token in the URL and the
+certificate authenticates you.
 
-```sh
-avairy -control-addr 0.0.0.0:7700 -mcp-addr 0.0.0.0:7701 -advertise <operator-ip> \
-       -tls-auto -workspace ./myproject
-```
+## Concepts
 
-Core generates a CA + server cert under `.avairy/` (persisted across restarts) and serves the
-control channel **and** the MCP bus over `https`. It writes a join bundle to `.avairy/join`
-carrying the `https` core URL, the CA to trust, and the current enroll token. (Headless prints the
-URLs/token/join paths; the attached TUI shows them in its control line.)
-
-**2. Get the join string to the node.** It's one line of text — copy it however you like:
-
-```sh
-cat .avairy/join        # → a long base64 string; scp it, paste it, etc.
-```
-
-**3. On the remote machine**, join with that one string — no `-core`/`-token`/`-ca` needed, and the
-node trusts core's self-signed CA automatically because it travels in the bundle:
-
-```sh
-avairy-node -join-file ./join -id linux-box -workspace ./repo -family claude
-```
-
-That's it — the node enrolls over TLS, syncs `./repo`, and (with `-family`) spawns the agent.
-
-**mTLS variant (no token).** Mint a client-cert join on core and hand *that* to the node instead;
-it authenticates by certificate (identity = `-id`) and auto-re-enrolls if core restarts:
-
-```sh
-# on core:
-avairy mint-join -id linux-box -core https://<operator-ip>:7700 > linux-box.join
-# on the node:
-avairy-node -join-file ./linux-box.join -workspace ./repo -family claude
-```
-
-> Dev shortcut: for a quick `https` test without distributing the CA, a node can use
-> `-core https://… -token <tok> -insecure` to skip verification — never do this off localhost.
-
-## Remote operator console (TUI or browser)
-
-The operator console isn't tied to the core machine. When core serves the control API
-(`-control-addr`, with or without `-headless`), it also serves an **operator API** on the same
-listener (sharing its TLS), and you can attach from anywhere two ways. Core mints an **operator
-token** (`-operator-token <tok>`, else a random one) and writes an `.avairy/operator-join` bundle
-(core URL + CA + token); both the attached TUI's control line and the headless startup output show
-the token, the join file, and the ready-to-open **web URL**.
-
-**Standalone TUI** — the same interface as the local one, attached over the network:
-
-```sh
-avairy-tui -join-file .avairy/operator-join          # one argument: URL + CA + token bundled
-avairy-tui -core https://core:7700 -token <op-token> -ca core-ca.pem
-avairy-tui -core http://localhost:7700 -token <op-token>   # plain HTTP (dev)
-```
-
-**Browser** — open the URL core prints (chat-first console mirroring the TUI):
-
-```
-http://<control-addr>/operator/ui?token=<operator-token>
-```
-
-The browser console shows the conversation, fleet, tasks, approvals, and conflicts, and lets you
-message agents (broadcast or a specific one), interrupt, allow/deny approvals, resolve/delegate
-conflicts, `/commit`, and spawn disposable consult agents (`/consult [@node]` … `/end`) — the same
-actions as the TUI, over the same API. Both clients consume a live SSE journal stream. Single
-operator for now.
-
-**Auth.** The operator token (above) is the default. Or authenticate by **mTLS client certificate**
-(under `-tls-auto`): `avairy mint-web-cert` issues an operator cert and writes a password-protected
-`operator.p12` (cert + key + CA) to import into your browser / OS keychain — then open the console
-with **no `?token=`** and the cert authenticates you (an operator cert carries a distinct SAN, so a
-node cert can't pose as an operator). Same for `avairy-tui` with `-ca` + a client cert.
-
-## What's inside
-
-- **Bus + task board** — agents `send_message`, `post_task`, `claim_task` over MCP; claims are
-  gated by node capabilities (e.g. `os=linux`).
-- **Blackboard** — durable shared memory: agents (and the operator) `note(key, text)` /
-  `read_notes(prefix?)` to seed context, decisions, and findings that survive restarts and feed
-  `fresh_look` second opinions.
-- **File-sync hub** — a canonical workspace on core; nodes sync diffs, with cross-OS
-  normalization (LF, mode bits) and conflicts surfaced for reconciliation: an agent's lost push is
-  routed to that agent, while owner-less ones (your seed workspace vs. a node's edit) go to the
-  operator's **Conflicts** tab to resolve or delegate.
-- **Facilitator** — watches for stuck agents and nudges (e.g. "the Linux agent is better
-  positioned to reproduce this") — it reminds, never commands.
-- **Gating** — risky actions (destructive commands, git pushes, installs, optionally edits) are
-  gated; safe actions run freely. Gated actions block and surface in the operator's **Approvals**
-  tab for allow/deny (Claude via its PreToolUse hook, Codex via app-server approvals, Copilot/Grok
-  via ACP); unanswered requests fail closed.
-- **Operator console** — fleet/progress, conversation, handover timeline, task board, approvals,
-  and conflicts, plus your command line — as a local TUI, a remote TUI (`avairy-tui`), or a
-  browser console, all over one operator API.
+- **Bus** — the message router. Agents and the operator exchange addressed messages; everything is
+  journaled.
+- **Task board** — `post_task` / `claim_task`, with claims gated by node **capabilities** (e.g.
+  `requires: os=linux`), so only a fitting agent can take a task.
+- **Blackboard** — durable shared memory: `note(key, text)` / `read_notes(prefix?)` for context,
+  decisions, and findings that survive restarts and feed `fresh_look`.
+- **File-sync hub** — the canonical workspace on core. Nodes sync diffs both ways; conflicts route to
+  the responsible agent, or to the operator's **Conflicts** tab when there's no clear owner.
+- **Facilitator** — watches for stuck or looping agents and *nudges*; on `@facilitator`, triages and
+  assigns. It reminds and routes — it never commands.
+- **Gating** — the human-in-the-loop policy: safe actions run free, risky ones block for approval
+  (Claude via its PreToolUse hook, Codex via app-server approvals, Copilot/Grok via ACP).
+- **Journal** — an append-only, event-sourced log at `.avairy/journal.jsonl`. The board, blackboard,
+  and console history all rebuild from it; it replays on restart.
 
 ## Command reference
 
-### `avairy` (core + TUI)
+### `avairy` (core + operator TUI)
 
 | Flag | Default | What it does |
 |------|---------|--------------|
@@ -259,28 +289,29 @@ node cert can't pose as an operator). Same for `avairy-tui` with `-ca` + a clien
 | `-family` | `claude` | Live agent family: `claude` \| `codex` \| `copilot` \| `grok`. |
 | `-model` | `haiku` | Model for the live agent (kept cheap by default). |
 | `-send <msg>` | — | One-shot: send to a local `alice`, wait for the turn, print the journal, exit. |
-| `-headless` | off | Serve the bus/control with no TUI; block until interrupted (attach remotely). |
+| `-headless` | off | Serve bus/control with no TUI; block until interrupted (attach remotely). |
 | `-control-addr <addr>` | — | Serve the node control + operator API here (e.g. `0.0.0.0:7700`). |
-| `-mcp-addr <addr>` | `127.0.0.1:0` | MCP bus listen address (`0.0.0.0:PORT` to allow remote nodes). |
+| `-mcp-addr <addr>` | `127.0.0.1:7702` | MCP bus listen address (`0.0.0.0:7702` to allow remote nodes). |
 | `-advertise <host>` | listen host | Host/IP remote nodes use to reach this core. |
 | `-workspace <dir>` | — | Project dir to seed/sync into the canonical hub. |
-| `-tls-auto` | off | Self-manage a CA under `.avairy` and serve control + bus over TLS (enables mTLS). |
+| `-tls-auto` | off | **Recommended:** self-manage a CA and serve control + bus over TLS (enables mTLS). |
 | `-tls-cert` / `-tls-key` | — | Serve the control channel with your own PEM cert/key instead. |
 | `-gate-edits` | off | Also require operator approval for file edits (not just risky commands). |
 | `-operator-token <tok>` | random | Bearer token for the remote operator API / web console. |
-| `-budget <usd>` | 0 (off) | Fleet spend cap: cross it and the operator is warned and every agent is interrupted. |
-| `-agent-budget <usd>` | 0 (off) | Per-agent spend cap: cross it and that agent is warned and interrupted. |
-| `-idle-sleep <dur>` | 0 (off) | Tear an idle core agent's subprocess down to a **sleeping** state after this long quiet (e.g. `10m`); the next directed message respawns it. Frees credits/context while idle (it re-reads the blackboard/journal on wake). |
+| `-budget <usd>` | 0 (off) | Fleet spend cap: cross it and every agent is interrupted (you're warned). |
+| `-agent-budget <usd>` | 0 (off) | Per-agent spend cap: cross it and that agent is interrupted. |
+| `-idle-sleep <dur>` | 0 (off) | Park an idle core agent (e.g. `10m`); the next directed message respawns it. |
 
-Subcommands: `avairy mint-join -id <node> -core <https-url>` issues an mTLS client-cert join for a
-node; `avairy mint-web-cert` writes an `operator.p12` to import into a browser for mTLS console auth;
-`avairy hook …` is the internal PreToolUse shim Claude invokes per tool call (not run by hand).
+Subcommands: **`avairy mint-join -id <node> -core <https-url>`** issues an mTLS client-cert join;
+**`avairy mint-web-cert`** writes an `operator.p12` for browser/TUI mTLS auth; `avairy hook …` is the
+internal PreToolUse shim Claude invokes per tool call (not run by hand).
 
 ### `avairy-node` (node daemon — one process per agent)
 
 | Flag | Default | What it does |
 |------|---------|--------------|
-| `-core <url>` | — | Core control API URL (or supplied by `-join`/`-join-file`). |
+| `-join <str>` / `-join-file <path>` | — | **Recommended:** one bundled string — core URL + CA + token/cert. |
+| `-core <url>` | — | Core control API URL (if not using a join). |
 | `-core-mcp <url>` | — | Core MCP bus base URL for the local proxy. |
 | `-token <tok>` | — | Enrollment token (or a client cert via a join bundle). |
 | `-id <name>` | — | Node id — also the agent's bus identity. **Required.** |
@@ -291,9 +322,8 @@ node; `avairy mint-web-cert` writes an `operator.p12` to import into a browser f
 | `-family <fam>` | — | Spawn & drive the agent here (`claude`/`codex`/`copilot`/`grok`); empty = proxy-only. |
 | `-model` / `-role` | — | Tune the spawned agent. |
 | `-gate-edits` | off | Gate the spawned agent's file edits. |
-| `-idle-sleep <dur>` | 0 (off) | Tear this node's idle agent down to a **sleeping** state after this long quiet; the next directed message respawns it (resuming its session). |
+| `-idle-sleep <dur>` | 0 (off) | Park the idle agent; the next directed message respawns it (resuming its session). |
 | `-ca <file>` / `-insecure` | — | Trust a PEM CA for an https core / skip verification (dev only). |
-| `-join <str>` / `-join-file <path>` | — | One bundled string: core URL + CA + token/cert. |
 
 ### `avairy-tui` (remote operator console)
 
@@ -304,17 +334,21 @@ node; `avairy mint-web-cert` writes an `operator.p12` to import into a browser f
 | `-token <tok>` | Operator API token. |
 | `-ca <file>` / `-insecure` | Trust a PEM CA for an https core / skip verification (dev only). |
 
-## Status
+## Project status
 
-Working end-to-end: **four agent families** verified live on the bus — Claude Code and Codex
-on native adapters, **Copilot and Grok via a generic ACP engine** (a new ACP agent is just a
-small profile) — plus single-machine and distributed paths, fsnotify-driven file sync (deletes,
-moves, symlinks, empty-dir pruning, content-hash change detection), agent- and operator-reconciled
-conflicts, the **blackboard** + `fresh_look`, facilitator (with loop detection), **human-in-the-loop
-gating** across all families (PreToolUse hook / app-server / ACP approvals → operator Approvals tab,
-with allow-for-session and optional per-edit gating), **git** (history reads, gated signed commits,
-on-node read-only mirror + scratch worktrees for cross-OS bisect/build), **TLS** on both the control
-channel and the MCP bus (self-managed CA + mTLS), journal **state-resume**, and a **remote operator
-console** — standalone TUI (`avairy-tui`) and a browser UI over one operator API. See
-[STATUS.md](STATUS.md) for the full picture and remaining work (semantic loop detection, live
-PreToolUse hook validation).
+avairy works end to end: four agent families verified live on the bus (Claude Code and Codex on
+native adapters, Copilot and Grok via a generic ACP engine), single-machine and distributed paths,
+fsnotify-driven cross-OS file sync, agent- and operator-reconciled conflicts, the blackboard +
+`fresh_look`, the facilitator with loop detection, human-in-the-loop gating across all families, git
+(history, gated signed commits, on-node read-only mirror + scratch worktrees), TLS + self-managed CA
++ mTLS on both the control channel and the MCP bus, journal state-resume, team/facilitator
+coordination, and a remote operator console (standalone TUI and browser).
+
+See **[STATUS.md](STATUS.md)** for the detailed picture and remaining work.
+
+## Further reading
+
+- **[DESIGN.md](DESIGN.md)** — architecture and the reasoning behind it.
+- **[ADAPTERS.md](ADAPTERS.md)** — how each agent family is driven and gated.
+- **[BUILD.md](BUILD.md)** — building and packaging the binaries.
+- **[STATUS.md](STATUS.md)** — what's built and what's next.
