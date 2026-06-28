@@ -15,6 +15,12 @@ around, no plaintext on the wire.
 > avairy never touches your model credentials. Each agent CLI uses its own login (`claude`, `codex`,
 > `copilot`, `grok`); avairy just drives them and routes their messages.
 
+<p align="center">
+  <img src="assets/webui.png" width="900"
+       alt="The avairy operator console in a browser: a fleet of agents with live spend, a task board and shared blackboard, the conversation, and approvals + conflicts queues.">
+</p>
+<p align="center"><sub>The operator console — fleet, tasks, blackboard, conversation, and the approvals/conflicts queues, all in one view.</sub></p>
+
 ---
 
 ## Why avairy
@@ -288,6 +294,12 @@ once:
 Agents have the same vocabulary over MCP (`send_message`, `claim_response`, …), and a directed
 message that matches no one is **rejected** so the sender knows — no silent drops.
 
+<p align="center">
+  <img src="assets/agent-handover.png" width="760"
+       alt="One agent validating a fix on Linux, recording progress, and handing the cross-OS check off to the macOS agent.">
+</p>
+<p align="center"><sub>Agents coordinating: the Linux agent validates its fix, records progress, and hands the macOS-specific check to its peer.</sub></p>
+
 **Approvals.** Gated actions appear on the **Approvals** tab: allow once, allow that kind from that
 agent for the session, or deny. **Budgets.** `-budget` / `-agent-budget` (USD) warn you and interrupt
 an agent (or the whole fleet) when spend crosses a cap. **Idle sleep.** `-idle-sleep` parks an idle
@@ -318,6 +330,13 @@ One console, three ways to run it — all over the same operator API, all stream
 - **Local TUI** — opens with core (unless `-headless`). Tabs for Conversation, Handovers, Tasks,
   Notes, Approvals, and Conflicts; a fleet line with per-agent status and spend; a command line with
   `@`-addressing, `/commit`, and `/consult … /end` for disposable consult agents.
+
+  <p align="center">
+    <img src="assets/tui.png" width="820"
+         alt="The avairy terminal console: header with control URL and enroll token, a fleet line, the conversation with rendered markdown, and the tab bar.">
+  </p>
+  <p align="center"><sub>The same console in the terminal — control/enroll details up top, fleet line, conversation, and tabs.</sub></p>
+
 - **Remote TUI** (`avairy-tui`) — the same interface attached over the network:
 
   ```sh
@@ -329,6 +348,12 @@ One console, three ways to run it — all over the same operator API, all stream
   with **`-web`** (off by default). Core prints the ready-to-open URL; you get the conversation,
   fleet, tasks, notes, approvals, and conflicts, all over the same operator API and live journal
   stream as the TUI.
+
+  <p align="center">
+    <img src="assets/webui2.png" width="820"
+         alt="The browser console mid-conversation: agents exchanging messages with @-mentions, alongside the fleet, tasks, and blackboard rails.">
+  </p>
+  <p align="center"><sub>The browser console mid-conversation — agent messages with highlighted <code>@</code>-mentions.</sub></p>
 
 **Operator auth** is the operator token by default, or — preferred — an **mTLS operator
 certificate**: `avairy mint-web-cert` writes a password-protected `operator.p12` (cert + key + CA) to
