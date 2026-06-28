@@ -304,75 +304,12 @@ func runCore(_ context.Context, cmd *cli.Command, headlessMode bool) error {
 				}
 			}
 		}()
-		// Seed the canonical hub from the operator's project dir and keep it synced both ways,
-		// so remote nodes receive a working copy on their first SyncDown.
+		// Seed the canonical hub from the operator's project dir (synced both ways) and, if it's a
+		// git repo, wire history/commit/bundle. Returns the /commit + bundle hooks (nil if no repo).
 		if *workspaceDir != "" {
-			seed := workspace.NewNodeView("core")
-			seed.ResumeFromHub(hub, *workspaceDir) // adopt restored versions; don't re-conflict/delete
-			// seedSyncUp pushes the operator's edits, and for any that lost a race with a node's edit
-			// writes git-style markers into the local file + routes the (owner-less) conflict to the
-			// TUI. A path that was held last tick but isn't now → its markers were removed and it
-			// synced → clear the notification.
-			seedSyncUp := func() {
-				before := seed.LockedPaths()
-				conflicts, serr := seed.SyncUp(hub, *workspaceDir, workspace.IgnoreFor(*workspaceDir))
-				if serr != nil {
-					fmt.Fprintln(os.Stderr, "avairy: seed workspace:", serr)
-					return
-				}
-				for _, c := range conflicts {
-					if mErr := seed.MarkConflict(*workspaceDir, c); mErr != nil {
-						continue
-					}
-					conflictBroker.Raise(control.OperatorConflict{
-						Path: c.Path, HubVersion: c.Hub.Version, Source: "seed",
-						Detail: "a node changed it while you were editing — your copy now has markers",
-					})
-				}
-				for _, p := range before {
-					if !seed.IsLocked(p) {
-						conflictBroker.ClearPath(p)
-					}
-				}
-			}
-			seedSyncUp()
-			var seedWatch <-chan struct{}
-			if ch, werr := workspace.Watch(ctx, *workspaceDir, workspace.IgnoreFor(*workspaceDir)); werr != nil {
-				fmt.Fprintln(os.Stderr, "avairy: watch (falling back to poll):", werr)
-			} else {
-				seedWatch = ch
-			}
-			go func() {
-				t := time.NewTicker(2 * time.Second)
-				defer t.Stop()
-				for {
-					select {
-					case <-ctx.Done():
-						return
-					case <-seedWatch: // operator edited the project → push now
-						seedSyncUp()
-					case <-t.C: // fallback poll + pull remote changes (no server→node push)
-						seedSyncUp()
-						_ = seed.SyncDown(hub, *workspaceDir)
-					}
-				}
-			}()
-			// If the operator's workspace is a git repo, expose history reads + gated signed
-			// commits over the bus (DESIGN.md §9: the canonical repo lives only on core).
-			if repo, gerr := git.Open(ctx, *workspaceDir, true); gerr != nil {
-				fmt.Fprintln(os.Stderr, "avairy: git tools disabled:", gerr)
-			} else {
-				mcpSrv.EnableGit(repo, gitApprover(approvals))
-				defer repo.PruneWorktrees(context.Background()) // disposable: clean up scratch checkouts on exit
-				commitFn = func(message string) (string, error) {
-					hash, cerr := repo.Commit(context.Background(), nil, message)
-					if cerr == nil {
-						jrnl.Append(journal.KindSystem, "human", map[string]any{"event": "git_commit", "hash": hash, "message": message})
-					}
-					return hash, cerr
-				}
-				bundleFn = repo.Bundle
-			}
+			var seedCleanup func()
+			commitFn, bundleFn, seedCleanup = setupSeedWorkspace(ctx, mcpSrv, hub, *workspaceDir, conflictBroker, approvals, jrnl)
+			defer seedCleanup()
 		}
 		svc.Commit = commitFn // operator /commit over the API/TUI (nil when no git repo)
 
@@ -571,6 +508,81 @@ func runCore(_ context.Context, cmd *cli.Command, headlessMode bool) error {
 	}
 	// The attached TUI runs in-process against the same operator surface a remote client uses.
 	return tui.Run(svc.Deps())
+}
+
+// setupSeedWorkspace seeds the canonical hub from the operator's project dir and keeps it synced
+// both ways (so nodes get a working copy on their first SyncDown), routing seed conflicts to the
+// operator's Conflicts view. If the dir is a git repo it also wires history/commit/bundle over the
+// bus. Returns the operator /commit and repo-bundle hooks (nil when there's no repo) and a cleanup
+// to run at exit.
+func setupSeedWorkspace(ctx context.Context, mcpSrv *mcp.Server, hub *workspace.Hub, dir string, conflicts *control.Conflicts, approvals *control.Approvals, jrnl journal.Log) (commitFn func(string) (string, error), bundleFn func(context.Context, []string) ([]byte, error), cleanup func()) {
+	cleanup = func() {}
+	seed := workspace.NewNodeView("core")
+	seed.ResumeFromHub(hub, dir) // adopt restored versions; don't re-conflict/delete
+	// seedSyncUp pushes the operator's edits; for any that lost a race with a node's edit it writes
+	// git-style markers locally + routes the owner-less conflict to the operator. A path held last
+	// tick but not now → its markers were removed and it synced → clear the notification.
+	seedSyncUp := func() {
+		before := seed.LockedPaths()
+		raised, serr := seed.SyncUp(hub, dir, workspace.IgnoreFor(dir))
+		if serr != nil {
+			fmt.Fprintln(os.Stderr, "avairy: seed workspace:", serr)
+			return
+		}
+		for _, cf := range raised {
+			if mErr := seed.MarkConflict(dir, cf); mErr != nil {
+				continue
+			}
+			conflicts.Raise(control.OperatorConflict{
+				Path: cf.Path, HubVersion: cf.Hub.Version, Source: "seed",
+				Detail: "a node changed it while you were editing — your copy now has markers",
+			})
+		}
+		for _, p := range before {
+			if !seed.IsLocked(p) {
+				conflicts.ClearPath(p)
+			}
+		}
+	}
+	seedSyncUp()
+	var seedWatch <-chan struct{}
+	if ch, werr := workspace.Watch(ctx, dir, workspace.IgnoreFor(dir)); werr != nil {
+		fmt.Fprintln(os.Stderr, "avairy: watch (falling back to poll):", werr)
+	} else {
+		seedWatch = ch
+	}
+	go func() {
+		t := time.NewTicker(2 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-seedWatch: // operator edited the project → push now
+				seedSyncUp()
+			case <-t.C: // fallback poll + pull remote changes (no server→node push)
+				seedSyncUp()
+				_ = seed.SyncDown(hub, dir)
+			}
+		}
+	}()
+	// If the operator's workspace is a git repo, expose history reads + gated signed commits over
+	// the bus (DESIGN.md §9: the canonical repo lives only on core).
+	if repo, gerr := git.Open(ctx, dir, true); gerr != nil {
+		fmt.Fprintln(os.Stderr, "avairy: git tools disabled:", gerr)
+	} else {
+		mcpSrv.EnableGit(repo, gitApprover(approvals))
+		cleanup = func() { repo.PruneWorktrees(context.Background()) } // disposable scratch checkouts
+		commitFn = func(message string) (string, error) {
+			hash, cerr := repo.Commit(context.Background(), nil, message)
+			if cerr == nil {
+				jrnl.Append(journal.KindSystem, "human", map[string]any{"event": "git_commit", "hash": hash, "message": message})
+			}
+			return hash, cerr
+		}
+		bundleFn = repo.Bundle
+	}
+	return commitFn, bundleFn, cleanup
 }
 
 // serverTLS builds the self-managed CA + one server cert covering the advertised control/bus hosts
