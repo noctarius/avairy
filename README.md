@@ -475,7 +475,8 @@ See **[STATUS.md](STATUS.md)** for the detailed picture and remaining work.
 
 ## Further reading
 
-- **[DESIGN.md](DESIGN.md)** — architecture and the reasoning behind it.
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** — how avairy is built: subsystems, data flows, and the map of the code.
+- **[DESIGN.md](DESIGN.md)** — the original design intent and the reasoning behind it.
 - **[ADAPTERS.md](ADAPTERS.md)** — how each agent family is driven and gated.
 - **[BUILD.md](BUILD.md)** — building and packaging the binaries.
 - **[STATUS.md](STATUS.md)** — what's built and what's next.

@@ -44,8 +44,8 @@ all three intervention sources (peer message / facilitator nudge / human injecti
 ```
    [worker]◄──MCP bus──►[worker]◄──MCP bus──►[worker]
        ▲          (peers talk directly)           ▲
-       └──────── facilitator nudges (on trigger) ─┘
-                         ▲
+       └───── facilitator nudges (on trigger) ────┘
+                          ▲
                   [human injection]
 ```
 
@@ -168,10 +168,10 @@ coordinator trigger — not a persistent watcher.
 The human is a **first-class bus participant**. The TUI command line can address the
 facilitator, a specific worker, or broadcast — at any time. Two delivery modes:
 
-| Mode          | Behavior                                                       | Support                                                                  |
-|---------------|----------------------------------------------------------------|--------------------------------------------------------------------------|
+| Mode          | Behavior                                                       | Support                                                                                                                                            |
+|---------------|----------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------|
 | **interrupt** | cancel current generation, inject, resume — true mid-reasoning | adapters with `supports_interrupt` (Claude **Agent SDK**, Codex **app-server** — *not* the bare `claude -p` / `codex exec` modes; see ADAPTERS.md) |
-| **steer**     | queue, deliver at next turn/tool boundary                      | any agent                                                                |
+| **steer**     | queue, deliver at next turn/tool boundary                      | any agent                                                                                                                                          |
 
 The bus carries `delivery: interrupt | steer`; the TUI **shows which will happen before
 you send**.
