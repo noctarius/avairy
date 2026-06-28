@@ -40,9 +40,14 @@ test:
 vet:
 	go vet ./...
 
-## fmt: format sources
+## fmt: format Go sources (gofmt) and the web console HTML/CSS/JS (prettier)
 fmt:
 	gofmt -w ./internal ./cmd
+	@if command -v npx >/dev/null 2>&1; then \
+		npx --yes prettier@3.9.1 --write internal/operator/web/ ; \
+	else \
+		echo "fmt: prettier skipped — install Node (npx) to format the web console"; \
+	fi
 
 ## tidy: tidy modules
 tidy:

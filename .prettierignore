@@ -1,0 +1,7 @@
+# Vendored, third-party browser libs — never reformat (they're minified, not ours).
+internal/operator/web/vendor/
+**/*.min.js
+**/*.min.css
+
+# Build output.
+dist/

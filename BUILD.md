@@ -110,3 +110,10 @@ CGO_ENABLED=0 GOOS=windows GOARCH=arm64 \
 
 To stamp a version, add e.g. `-ldflags="-s -w -X main.version=$(git describe --tags --always)"`
 (requires a `var version string` in the command's `main`).
+
+## Formatting
+
+`make fmt` formats everything: **gofmt** for Go, and **Prettier** for the web console
+(`internal/operator/web/index.html` — the vendored `web/vendor/*.min.*` libs are ignored via
+`.prettierignore`). Prettier runs via `npx prettier@3.9.1`, so the web part needs Node installed; if
+`npx` is absent, `make fmt` formats Go and skips the web with a note. Config is in `.prettierrc.json`.
