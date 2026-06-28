@@ -54,18 +54,18 @@ workspace, and a shared memory, and keeps you in command of all of it from one c
 
 ```
         operator (you)                         core  —  your machine
-   ┌──────────────────────┐         ┌──────────────────────────────────────────┐
-   │  TUI  ·  browser UI   │◀──mTLS──▶│  message bus · capability task board       │
-   │  (local or remote)    │  /token │  blackboard · file-sync hub · journal      │
-   └──────────────────────┘         │  facilitator · human-in-the-loop gating    │
-                                     └───────▲────────────────────────▲───────────┘
-                                       mTLS  │                  mTLS   │
-                              ┌──────────────┴───────┐   ┌─────────────┴────────────┐
-                              │ node  ·  linux-box    │   │ node  ·  macos-box        │
-                              │  MCP proxy (localhost)│   │  MCP proxy (localhost)    │
-                              │  agent: Claude Code   │   │  agent: Codex             │
-                              │  workspace ⇄ hub sync │   │  workspace ⇄ hub sync     │
-                              └───────────────────────┘   └───────────────────────────┘
+   ┌───────────────────────┐          ┌─────────────────────────────────────────────┐
+   │  TUI  ·  browser UI   │◀──mTLS──▶│  message bus · capability task board        │
+   │  (local or remote)    │  /token  │  blackboard · file-sync hub · journal       │
+   └───────────────────────┘          │  facilitator · human-in-the-loop gating     │
+                                      └───────▲────────────────────────▲────────────┘
+                                        mTLS  │                 mTLS   │
+                              ┌───────────────┴────────┐  ┌────────────┴────────────┐
+                              │ node  ·  linux-box     │  │ node  ·  macos-box      │
+                              │  MCP proxy (localhost) │  │  MCP proxy (localhost)  │
+                              │  agent: Claude Code    │  │  agent: Codex           │
+                              │  workspace ⇄ hub sync  │  │  workspace ⇄ hub sync   │
+                              └────────────────────────┘  └─────────────────────────┘
 ```
 
 **Core** runs the bus, the task board, the blackboard (shared memory), the file-sync hub, the
@@ -109,15 +109,19 @@ handovers. Without `-demo`, avairy starts **no agents** — you bring them with 
 ### One real agent
 
 ```sh
-go run ./cmd/avairy -live                  # alice = real Claude Code (default, cheapest model)
-go run ./cmd/avairy -live -family codex     # alice = real Codex
-go run ./cmd/avairy -live -model sonnet     # pick the model
+# alice = real Claude Code (default, cheapest model)
+go run ./cmd/avairy -live
+# alice = real Codex
+go run ./cmd/avairy -live -family codex
+# pick the model
+go run ./cmd/avairy -live -model sonnet
 ```
 
 A non-interactive one-shot — send a message, print the journal, exit (handy for scripts/CI):
 
 ```sh
-go run ./cmd/avairy -live -send "create a task titled ping that requires os=linux"
+go run ./cmd/avairy -live \
+   -send "create a task titled ping that requires os=linux"
 ```
 
 Everything that happens is appended to `.avairy/journal.jsonl`.
@@ -142,13 +146,15 @@ both ways, so every node gets a working copy and node edits flow back to your di
 client certificate (no token):
 
 ```sh
-avairy mint-join -id linux-box -core https://<your-ip>:7700 > linux-box.join
+avairy mint-join -id linux-box \
+       -core https://<your-ip>:7700 > linux-box.join
 ```
 
 **3. On the remote machine, join** with that single string and let the daemon run the agent:
 
 ```sh
-avairy-node -join-file linux-box.join -workspace ./repo -family claude
+avairy-node -join-file linux-box.join \
+            -workspace ./repo -family claude
 ```
 
 The node enrolls over mTLS (its identity is the certificate, not a shared token), syncs `./repo`
@@ -164,9 +170,17 @@ and the token a node first joins with is **bound to that node** so a restarted d
 the same `-token`/`-id`.
 
 ```sh
-avairy -control-addr 0.0.0.0:7700 -mcp-addr 0.0.0.0:7702 -advertise <your-ip> -workspace ./project
-avairy-node -core http://<your-ip>:7700 -core-mcp http://<your-ip>:7702 \
-            -token <enroll-token> -id linux-box -workspace ./repo -family claude
+avairy -control-addr 0.0.0.0:7700 \
+       -mcp-addr 0.0.0.0:7702 \
+       -advertise <your-ip> \
+       -workspace ./project
+
+avairy-node -core http://<your-ip>:7700 \
+            -core-mcp http://<your-ip>:7702 \
+            -token <enroll-token> \
+            -id linux-box \
+            -workspace ./repo \
+            -family claude
 ```
 
 Prefer mTLS for anything beyond a trusted LAN — a token is a bearer credential; a certificate is an
@@ -207,11 +221,11 @@ Other guarantees regardless of transport:
 From the console you address the fleet by *intent*, so a question doesn't make every agent answer at
 once:
 
-| Address | Behavior |
-|---------|----------|
-| `@<id>` | One specific agent — wakes it and expects it to act. |
-| `@all` | Everyone answers (a true broadcast). |
-| `@team` | Everyone sees it, but exactly **one** claims it and answers; the rest stand down. |
+| Address        | Behavior                                                                                                                                       |
+|----------------|------------------------------------------------------------------------------------------------------------------------------------------------|
+| `@<id>`        | One specific agent — wakes it and expects it to act.                                                                                           |
+| `@all`         | Everyone answers (a true broadcast).                                                                                                           |
+| `@team`        | Everyone sees it, but exactly **one** claims it and answers; the rest stand down.                                                              |
 | `@facilitator` | A coordinator triages the request and **auto-assigns** the best-suited agent (or opens a `@team` claim), so you don't have to know who's free. |
 
 Agents have the same vocabulary over MCP (`send_message`, `claim_response`, …), and a directed
@@ -250,7 +264,8 @@ One console, three ways to run it — all over the same operator API, all stream
 - **Remote TUI** (`avairy-tui`) — the same interface attached over the network:
 
   ```sh
-  avairy-tui -join-file .avairy/operator-join          # URL + CA + token in one bundle
+  # URL + CA + token in one bundle
+  avairy-tui -join-file .avairy/operator-join
   ```
 
 - **Browser** — a chat-first console mirroring the TUI. Core prints the URL; open it and you get the
@@ -282,25 +297,25 @@ certificate authenticates you.
 
 ### `avairy` (core + operator TUI)
 
-| Flag | Default | What it does |
-|------|---------|--------------|
-| `-demo` | off | Spawn mock agents `alice`+`bob` (zero credits) to try the loop. |
-| `-live` | off | Run `alice` as a real agent on the bus. |
-| `-family` | `claude` | Live agent family: `claude` \| `codex` \| `copilot` \| `grok`. |
-| `-model` | `haiku` | Model for the live agent (kept cheap by default). |
-| `-send <msg>` | — | One-shot: send to a local `alice`, wait for the turn, print the journal, exit. |
-| `-headless` | off | Serve bus/control with no TUI; block until interrupted (attach remotely). |
-| `-control-addr <addr>` | — | Serve the node control + operator API here (e.g. `0.0.0.0:7700`). |
-| `-mcp-addr <addr>` | `127.0.0.1:7702` | MCP bus listen address (`0.0.0.0:7702` to allow remote nodes). |
-| `-advertise <host>` | listen host | Host/IP remote nodes use to reach this core. |
-| `-workspace <dir>` | — | Project dir to seed/sync into the canonical hub. |
-| `-tls-auto` | off | **Recommended:** self-manage a CA and serve control + bus over TLS (enables mTLS). |
-| `-tls-cert` / `-tls-key` | — | Serve the control channel with your own PEM cert/key instead. |
-| `-gate-edits` | off | Also require operator approval for file edits (not just risky commands). |
-| `-operator-token <tok>` | random | Bearer token for the remote operator API / web console. |
-| `-budget <usd>` | 0 (off) | Fleet spend cap: cross it and every agent is interrupted (you're warned). |
-| `-agent-budget <usd>` | 0 (off) | Per-agent spend cap: cross it and that agent is interrupted. |
-| `-idle-sleep <dur>` | 0 (off) | Park an idle core agent (e.g. `10m`); the next directed message respawns it. |
+| Flag                     | Default          | What it does                                                                       |
+|--------------------------|------------------|------------------------------------------------------------------------------------|
+| `-demo`                  | off              | Spawn mock agents `alice`+`bob` (zero credits) to try the loop.                    |
+| `-live`                  | off              | Run `alice` as a real agent on the bus.                                            |
+| `-family`                | `claude`         | Live agent family: `claude` \| `codex` \| `copilot` \| `grok`.                     |
+| `-model`                 | `haiku`          | Model for the live agent (kept cheap by default).                                  |
+| `-send <msg>`            | —                | One-shot: send to a local `alice`, wait for the turn, print the journal, exit.     |
+| `-headless`              | off              | Serve bus/control with no TUI; block until interrupted (attach remotely).          |
+| `-control-addr <addr>`   | —                | Serve the node control + operator API here (e.g. `0.0.0.0:7700`).                  |
+| `-mcp-addr <addr>`       | `127.0.0.1:7702` | MCP bus listen address (`0.0.0.0:7702` to allow remote nodes).                     |
+| `-advertise <host>`      | listen host      | Host/IP remote nodes use to reach this core.                                       |
+| `-workspace <dir>`       | —                | Project dir to seed/sync into the canonical hub.                                   |
+| `-tls-auto`              | off              | **Recommended:** self-manage a CA and serve control + bus over TLS (enables mTLS). |
+| `-tls-cert` / `-tls-key` | —                | Serve the control channel with your own PEM cert/key instead.                      |
+| `-gate-edits`            | off              | Also require operator approval for file edits (not just risky commands).           |
+| `-operator-token <tok>`  | random           | Bearer token for the remote operator API / web console.                            |
+| `-budget <usd>`          | 0 (off)          | Fleet spend cap: cross it and every agent is interrupted (you're warned).          |
+| `-agent-budget <usd>`    | 0 (off)          | Per-agent spend cap: cross it and that agent is interrupted.                       |
+| `-idle-sleep <dur>`      | 0 (off)          | Park an idle core agent (e.g. `10m`); the next directed message respawns it.       |
 
 Subcommands: **`avairy mint-join -id <node> -core <https-url>`** issues an mTLS client-cert join;
 **`avairy mint-web-cert`** writes an `operator.p12` for browser/TUI mTLS auth; `avairy hook …` is the
@@ -308,31 +323,31 @@ internal PreToolUse shim Claude invokes per tool call (not run by hand).
 
 ### `avairy-node` (node daemon — one process per agent)
 
-| Flag | Default | What it does |
-|------|---------|--------------|
-| `-join <str>` / `-join-file <path>` | — | **Recommended:** one bundled string — core URL + CA + token/cert. |
-| `-core <url>` | — | Core control API URL (if not using a join). |
-| `-core-mcp <url>` | — | Core MCP bus base URL for the local proxy. |
-| `-token <tok>` | — | Enrollment token (or a client cert via a join bundle). |
-| `-id <name>` | — | Node id — also the agent's bus identity. **Required.** |
-| `-os <name>` | host OS | OS capability this node advertises. |
-| `-workspace <dir>` | — | Local dir synced to/from the canonical workspace. |
-| `-proxy <addr>` | `127.0.0.1:7800` | Local MCP proxy listen address the agent connects to. |
-| `-interval <dur>` | `2s` | Sync/heartbeat cadence. |
-| `-family <fam>` | — | Spawn & drive the agent here (`claude`/`codex`/`copilot`/`grok`); empty = proxy-only. |
-| `-model` / `-role` | — | Tune the spawned agent. |
-| `-gate-edits` | off | Gate the spawned agent's file edits. |
-| `-idle-sleep <dur>` | 0 (off) | Park the idle agent; the next directed message respawns it (resuming its session). |
-| `-ca <file>` / `-insecure` | — | Trust a PEM CA for an https core / skip verification (dev only). |
+| Flag                                | Default          | What it does                                                                          |
+|-------------------------------------|------------------|---------------------------------------------------------------------------------------|
+| `-join <str>` / `-join-file <path>` | —                | **Recommended:** one bundled string — core URL + CA + token/cert.                     |
+| `-core <url>`                       | —                | Core control API URL (if not using a join).                                           |
+| `-core-mcp <url>`                   | —                | Core MCP bus base URL for the local proxy.                                            |
+| `-token <tok>`                      | —                | Enrollment token (or a client cert via a join bundle).                                |
+| `-id <name>`                        | —                | Node id — also the agent's bus identity. **Required.**                                |
+| `-os <name>`                        | host OS          | OS capability this node advertises.                                                   |
+| `-workspace <dir>`                  | —                | Local dir synced to/from the canonical workspace.                                     |
+| `-proxy <addr>`                     | `127.0.0.1:7800` | Local MCP proxy listen address the agent connects to.                                 |
+| `-interval <dur>`                   | `2s`             | Sync/heartbeat cadence.                                                               |
+| `-family <fam>`                     | —                | Spawn & drive the agent here (`claude`/`codex`/`copilot`/`grok`); empty = proxy-only. |
+| `-model` / `-role`                  | —                | Tune the spawned agent.                                                               |
+| `-gate-edits`                       | off              | Gate the spawned agent's file edits.                                                  |
+| `-idle-sleep <dur>`                 | 0 (off)          | Park the idle agent; the next directed message respawns it (resuming its session).    |
+| `-ca <file>` / `-insecure`          | —                | Trust a PEM CA for an https core / skip verification (dev only).                      |
 
 ### `avairy-tui` (remote operator console)
 
-| Flag | What it does |
-|------|--------------|
+| Flag                                | What it does                                                          |
+|-------------------------------------|-----------------------------------------------------------------------|
 | `-join-file <path>` / `-join <str>` | Attach with one bundled string (e.g. core's `.avairy/operator-join`). |
-| `-core <url>` | Core control API URL (if not using a join). |
-| `-token <tok>` | Operator API token. |
-| `-ca <file>` / `-insecure` | Trust a PEM CA for an https core / skip verification (dev only). |
+| `-core <url>`                       | Core control API URL (if not using a join).                           |
+| `-token <tok>`                      | Operator API token.                                                   |
+| `-ca <file>` / `-insecure`          | Trust a PEM CA for an https core / skip verification (dev only).      |
 
 ## Project status
 
