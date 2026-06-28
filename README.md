@@ -91,11 +91,13 @@ checksum, and installs `avairy`, `avairy-node`, and `avairy-tui`:
 curl -fsSL https://raw.githubusercontent.com/noctarius/avairy/main/install.sh | sh
 ```
 
-Pin a version or pick the install dir with env vars:
+Pin a version by passing the tag (note `sh -s --`, so the arg reaches the script, not `sh`); pick
+the install dir with an env var:
 
 ```sh
+curl -fsSL https://raw.githubusercontent.com/noctarius/avairy/main/install.sh | sh -s -- v0.1.0
 curl -fsSL https://raw.githubusercontent.com/noctarius/avairy/main/install.sh \
-  | AVAIRY_VERSION=v0.1.0 AVAIRY_INSTALL_DIR="$HOME/.local/bin" sh
+  | AVAIRY_INSTALL_DIR="$HOME/.local/bin" sh -s -- v1.0.0-rc1
 ```
 
 **Windows**, or to verify by hand: grab the archive for your platform from the

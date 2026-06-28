@@ -3,9 +3,12 @@
 # checksum, and installs the avairy / avairy-node / avairy-tui binaries.
 #
 #   curl -fsSL https://raw.githubusercontent.com/noctarius/avairy/main/install.sh | sh
+#   curl -fsSL .../install.sh | sh -s -- v1.0.0      # pick a version (note: sh -s --, not sh --)
 #
+# Args:
+#   [VERSION]            release tag to install, e.g. v1.0.0 or v1.0.0-rc1 (default: latest stable)
 # Environment overrides:
-#   AVAIRY_VERSION       release tag to install (default: the latest release)
+#   AVAIRY_VERSION       same as the VERSION arg (the arg wins if both are given)
 #   AVAIRY_INSTALL_DIR   where to put the binaries (default: /usr/local/bin if writable, else ~/.local/bin)
 #   AVAIRY_REPO          owner/repo to install from (default: noctarius/avairy)
 set -eu
@@ -13,6 +16,13 @@ set -eu
 REPO="${AVAIRY_REPO:-noctarius/avairy}"
 
 err() { echo "avairy install: $*" >&2; exit 1; }
+
+case "${1:-}" in
+	-h|--help)
+		echo "usage: install.sh [VERSION]      e.g. v1.0.0, v1.0.0-rc1 (default: latest stable)"
+		echo "piped:  curl -fsSL .../install.sh | sh -s -- v1.0.0"
+		exit 0 ;;
+esac
 
 # --- detect platform -------------------------------------------------------
 os=$(uname -s)
@@ -33,7 +43,8 @@ command -v curl >/dev/null 2>&1 || err "curl is required"
 command -v tar  >/dev/null 2>&1 || err "tar is required"
 
 # --- resolve version -------------------------------------------------------
-VERSION="${AVAIRY_VERSION:-}"
+# Precedence: positional arg ($1) > $AVAIRY_VERSION > latest stable release.
+VERSION="${1:-${AVAIRY_VERSION:-}}"
 if [ -z "$VERSION" ]; then
 	VERSION=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" \
 		| sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1)
