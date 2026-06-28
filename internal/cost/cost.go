@@ -37,8 +37,7 @@ func New(agentCap, totalCap float64) *Monitor {
 	return &Monitor{agentCap: agentCap, totalCap: totalCap, perAgent: map[string]Spend{}, flagged: map[string]bool{}}
 }
 
-// Run feeds journal records to Observe until ctx-cancel / sub close. (Caller passes a context via
-// the sub's lifetime; kept signature-light — just drain the channel.)
+// Run drains journal records into Observe until sub is closed (cancel by closing the subscription).
 func (m *Monitor) Run(sub <-chan journal.Record) {
 	for rec := range sub {
 		m.Observe(rec)

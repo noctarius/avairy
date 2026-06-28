@@ -107,18 +107,16 @@ func (a *Adapter) Start(ctx context.Context, cfg agent.SessionConfig) (agent.Ses
 	if cfg.ResumeID != "" && cfg.Mode != agent.SessionEphemeral {
 		// Resume the prior thread by id; fall back to a fresh thread if it can't be loaded
 		// (e.g. the app-server's store was cleared), so respawn never hard-fails.
-		tsRes, err = s.call(hctx, "thread/resume", threadResumeParams{
-			ThreadID: cfg.ResumeID, Cwd: nonEmpty(cfg.Workspace), ApprovalPolicy: approval, Sandbox: sandbox,
+		// Discard the resume error deliberately: tsRes stays nil and we fall back to thread/start.
+		tsRes, _ = s.call(hctx, "thread/resume", threadResumeParams{
+			ThreadID: cfg.ResumeID, Cwd: cfg.Workspace, ApprovalPolicy: approval, Sandbox: sandbox,
 		})
-		if err != nil {
-			tsRes, err = nil, nil
-		}
 	}
 	if tsRes == nil {
 		tsRes, err = s.call(hctx, "thread/start", threadStartParams{
-			Cwd:                   nonEmpty(cfg.Workspace),
-			Model:                 nonEmpty(cfg.Model),
-			DeveloperInstructions: nonEmpty(cfg.Role),
+			Cwd:                   cfg.Workspace,
+			Model:                 cfg.Model,
+			DeveloperInstructions: cfg.Role,
 			ApprovalPolicy:        approval,
 			Sandbox:               sandbox,
 		})
@@ -393,8 +391,6 @@ func defaultApprove(method string, _ json.RawMessage) string {
 		return "accept"
 	}
 }
-
-func nonEmpty(s string) string { return s }
 
 func orDefault(s, def string) string {
 	if s == "" {

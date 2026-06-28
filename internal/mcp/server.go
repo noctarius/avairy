@@ -192,8 +192,8 @@ func (s *Server) DrainInbox(agentID string) []bus.Message {
 	}
 }
 
-// drainInbox non-blockingly pulls all currently-buffered messages for reg.
-func drainInbox(reg *registered) []inboxMessage {
+// drainReadInbox non-blockingly pulls all currently-buffered messages for reg.
+func drainReadInbox(reg *registered) []inboxMessage {
 	var out []inboxMessage
 	for {
 		select {

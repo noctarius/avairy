@@ -100,7 +100,7 @@ func (s *Supervisor) Run(ctx context.Context) {
 		s.mu.Lock()
 		s.working = false
 		s.mu.Unlock()
-		s.jrnl.Append(journal.KindSystem, s.id, map[string]any{"event": "agent_sleeping"})
+		s.markSleeping()
 	}
 
 	wakeUp(false) // start awake (a spawn failure is retried on the next message)
@@ -132,7 +132,7 @@ func (s *Supervisor) Run(ctx context.Context) {
 			// died — drop to sleeping so the next message respawns it.
 			if sess != nil {
 				sess, sessCancel, dead = nil, nil, nil
-				s.jrnl.Append(journal.KindSystem, s.id, map[string]any{"event": "agent_sleeping"})
+				s.markSleeping()
 			} else {
 				dead = nil
 			}
@@ -170,6 +170,11 @@ func (s *Supervisor) Run(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// markSleeping journals the agent's transition to the sleeping state (shown in the consoles).
+func (s *Supervisor) markSleeping() {
+	s.jrnl.Append(journal.KindSystem, s.id, map[string]any{"event": "agent_sleeping"})
 }
 
 func (s *Supervisor) touch() {

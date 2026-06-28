@@ -75,7 +75,7 @@ func (s *Server) handleReadInbox(ctx context.Context, req mcpgo.CallToolRequest)
 	if reg == nil {
 		return mcpgo.NewToolResultError("read_inbox: agent not registered"), nil
 	}
-	msgs := drainInbox(reg)
+	msgs := drainReadInbox(reg)
 	if len(msgs) == 0 {
 		return mcpgo.NewToolResultText("[]"), nil
 	}

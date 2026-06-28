@@ -20,7 +20,7 @@ type Policy struct {
 
 // Decide implements Decider.
 func (p Policy) Decide(ctx context.Context, req Request) (Decision, error) {
-	if !p.gated(req) {
+	if !p.isGated(req) {
 		return Allow, nil
 	}
 	if p.Approve == nil {
@@ -30,7 +30,7 @@ func (p Policy) Decide(ctx context.Context, req Request) (Decision, error) {
 }
 
 // gated is Gated plus the policy's opt-in edit gating.
-func (p Policy) gated(req Request) bool {
+func (p Policy) isGated(req Request) bool {
 	if p.GateEdits && req.Kind == ActionFileWrite {
 		return true
 	}

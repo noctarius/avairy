@@ -41,15 +41,17 @@ type Services struct {
 // when the recipient selector is on broadcast (the web composer relies on this; the TUI also sends
 // a clean target, for which the parse is a no-op).
 func (s *Services) Inject(target, body string) {
-	if mention, rest := splitMention(body); mention != "" && rest != "" {
+	if mention, rest := splitAddressedMention(body); mention != "" && rest != "" {
 		target, body = mention, rest
 	}
 	s.Bus.Publish("human", addrOf(target), body, agent.DeliverySteer)
 }
 
-// splitMention extracts a leading "@<id> " address from a message. "@id" with no following text is
-// not a mention (returns "", s) so a bare mention isn't swallowed.
-func splitMention(s string) (mention, rest string) {
+// splitAddressedMention extracts a leading "@<id> " address from a message, but ONLY when there's a
+// real body after it: a bare "@id" returns ("", s) so it isn't swallowed as an empty injection.
+// (The TUI's own splitMention differs — it returns the id even for a bare "@id" — because there it
+// drives the recipient selector, not a publish.)
+func splitAddressedMention(s string) (mention, rest string) {
 	if !strings.HasPrefix(s, "@") {
 		return "", s
 	}

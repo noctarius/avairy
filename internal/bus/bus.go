@@ -164,7 +164,7 @@ func (b *Bus) publish(msg Message) Message {
 			return msg // duplicate within the window → drop
 		}
 		if len(b.recent) > 1024 {
-			b.recent = make(map[string]time.Time, 64) // bounded; losing stale history is harmless
+			b.recent = make(map[string]time.Time) // full flush past the cap (not LRU); losing stale dedup history is harmless
 		}
 		b.recent[key] = now
 	}

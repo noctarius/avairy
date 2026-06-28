@@ -122,7 +122,7 @@ func parseLine(line []byte) (events []agent.Event, sessionID string) {
 		return []agent.Event{ev}, ""
 
 	default:
-		// rate_limit_event and any future/unknown types are ignored (recorded as Raw nowhere).
+		// rate_limit_event and any future/unknown types are dropped (not surfaced as events).
 		return nil, ""
 	}
 }

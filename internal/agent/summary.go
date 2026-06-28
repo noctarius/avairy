@@ -21,7 +21,7 @@ func ToolSummary(tc *ToolCall) string {
 func actionDetail(in map[string]any) string {
 	for _, k := range []string{"command", "cmd", "file_path", "filePath", "path", "pattern", "query", "url"} {
 		if v, ok := in[k].(string); ok && v != "" {
-			return trunc(firstLine(v), 120)
+			return trunc(firstLineEllipsis(v), 120)
 		}
 	}
 	return ""
@@ -49,7 +49,7 @@ func TrimInput(in map[string]any) map[string]any {
 	return out
 }
 
-func firstLine(s string) string {
+func firstLineEllipsis(s string) string {
 	if i := strings.IndexByte(s, '\n'); i >= 0 {
 		return strings.TrimSpace(s[:i]) + " …"
 	}

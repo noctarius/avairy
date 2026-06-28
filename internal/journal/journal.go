@@ -3,8 +3,8 @@
 // It is the durable source of truth for resume and the audit/handover timeline; the
 // blackboard and task board are materialized views over it.
 //
-// This is the in-memory implementation. Persistence (append-only file + snapshots) is a
-// later milestone; the Log interface is the seam for it.
+// This file is the in-memory Log; the durable append-only JSONL variant is in file.go (it embeds
+// Memory and persists each record). The Log interface is the seam between them.
 package journal
 
 import (
