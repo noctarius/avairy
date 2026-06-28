@@ -3,6 +3,7 @@ package supervisor
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -124,7 +125,41 @@ func TestSupervisor_InterruptKeepsInterruptibleSession(t *testing.T) {
 	}
 }
 
+// A @team request that wakes an agent must carry the claim protocol in the delivered prompt. The
+// agent is woken by Send (which otherwise passes only the bare body), so without an injected
+// instruction it never learns this is a team request and just starts working — which is exactly how
+// two agents ended up investigating the same leak in parallel. (The mock echoes the delivered text.)
+func TestSupervisor_TeamWakeCarriesClaimInstruction(t *testing.T) {
+	jrnl := journal.NewMemory()
+	b := bus.New(jrnl)
+	var spawns int32
+
+	s := New("alice", []string{"backend"}, spawnerFor(mock.New(), &spawns), b, jrnl, 0)
+	go s.Run(t.Context())
+
+	if !waitFor(t, func() bool { return atomic.LoadInt32(&spawns) == 1 }) {
+		t.Fatal("no startup spawn")
+	}
+	b.Publish(bus.SenderHuman, bus.Team(), "fix the leak", agent.DeliverySteer)
+
+	if !waitFor(t, func() bool { return hasTextContaining(jrnl, "claim_response") }) {
+		t.Fatalf("team wake did not carry the claim instruction; journal %+v", jrnl.Records())
+	}
+}
+
 // --- helpers ---
+
+func hasTextContaining(j journal.Log, sub string) bool {
+	for _, r := range j.Records() {
+		if r.Kind != journal.KindAgentEvent {
+			continue
+		}
+		if ev, ok := r.Data.(agent.Event); ok && ev.Type == agent.EventText && strings.Contains(ev.Text, sub) {
+			return true
+		}
+	}
+	return false
+}
 
 func waitFor(t *testing.T, cond func() bool) bool {
 	t.Helper()

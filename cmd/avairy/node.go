@@ -566,7 +566,7 @@ func spawnAgent(ctx context.Context, n *control.Node, family, agentID, role, mod
 						if sess == nil && !wakeUp(true) {
 							continue
 						}
-						_ = sess.Send(ctx, m.Body, agent.DeliverySteer)
+						_ = sess.Send(ctx, bus.AnnotateDelivery(m.ID, bus.ToKind(m.ToKind), m.Body), agent.DeliverySteer)
 						touch()
 					}
 				}

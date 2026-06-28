@@ -63,6 +63,42 @@ func drain(ch <-chan Message) []Message {
 	}
 }
 
+// The facilitator dispatch loop must receive ONLY @facilitator requests — never @team/@broadcast.
+// Otherwise it re-dispatches a direct @team request as a duplicate team message (a second wake under
+// a different id), so two agents end up working the same request in parallel.
+func TestFacilitatorReceivesOnlyFacilitatorMessages(t *testing.T) {
+	b := New(journal.NewMemory())
+	fac, _ := b.Subscribe(SenderFacilitator)
+	agt, _ := b.Subscribe("alice", "backend")
+
+	// A human @team request: agents see it (to claim among themselves); the facilitator must not.
+	b.Publish(SenderHuman, Team(), "fix the leak", agent.DeliverySteer)
+	if got := drain(agt); len(got) != 1 {
+		t.Fatalf("agent should receive the @team request, got %d", len(got))
+	}
+	if got := drain(fac); len(got) != 0 {
+		t.Fatalf("facilitator must NOT receive a @team request (it would re-dispatch it), got %v", bodies(got))
+	}
+
+	// A human @broadcast: everyone (including the agent), but not the facilitator's triage loop.
+	b.Publish(SenderHuman, Broadcast(), "status?", agent.DeliverySteer)
+	if got := drain(agt); len(got) != 1 {
+		t.Fatalf("agent should receive the @broadcast, got %v", bodies(got))
+	}
+	if got := drain(fac); len(got) != 0 {
+		t.Fatalf("facilitator must NOT receive a @broadcast, got %v", bodies(got))
+	}
+
+	// But an explicit @facilitator request reaches only the facilitator.
+	b.Publish(SenderHuman, Facilitator(), "triage this", agent.DeliverySteer)
+	if got := drain(fac); len(got) != 1 {
+		t.Fatalf("facilitator should receive a @facilitator request, got %d", len(got))
+	}
+	if got := drain(agt); len(got) != 0 {
+		t.Fatalf("agents must not receive @facilitator messages, got %v", bodies(got))
+	}
+}
+
 func bodies(ms []Message) []string {
 	var b []string
 	for _, m := range ms {

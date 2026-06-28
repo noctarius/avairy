@@ -167,8 +167,9 @@ func (s *Supervisor) Run(ctx context.Context) {
 				}
 			}
 			s.touch()
-			if err := sess.Send(ctx, msg.Body, msg.Delivery); err != nil && msg.Delivery == agent.DeliveryInterrupt {
-				_ = sess.Send(ctx, msg.Body, agent.DeliverySteer)
+			text := bus.AnnotateDelivery(msg.ID, msg.To.Kind, msg.Body)
+			if err := sess.Send(ctx, text, msg.Delivery); err != nil && msg.Delivery == agent.DeliveryInterrupt {
+				_ = sess.Send(ctx, text, agent.DeliverySteer)
 			}
 		}
 	}

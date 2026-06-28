@@ -5,6 +5,7 @@
 package bus
 
 import (
+	"fmt"
 	"strconv"
 	"sync"
 	"time"
@@ -45,6 +46,20 @@ func Role(r string) Addr   { return Addr{ToRole, r} }
 func Broadcast() Addr      { return Addr{ToBroadcast, ""} }
 func Team() Addr           { return Addr{ToTeam, ""} }
 func Facilitator() Addr    { return Addr{ToFacilitator, ""} }
+
+// AnnotateDelivery prepares a message body for delivery to a session. A @team request is prefixed
+// with the claim protocol: an agent woken by Send sees only the bare body (not the "to":"team"
+// marker that read_inbox exposes), so without this it never learns it must claim_response first and
+// just starts working — which is how multiple agents end up on the same request in parallel. Other
+// kinds are returned unchanged.
+func AnnotateDelivery(id string, kind ToKind, body string) string {
+	if kind != ToTeam {
+		return body
+	}
+	return fmt.Sprintf("[team request %s — exactly ONE agent should handle this. Call claim_response(%q) "+
+		"BEFORE you act; if it returns \"denied\", another agent owns it: stand down and stay silent.]\n\n%s",
+		id, id, body)
+}
 
 // Message is one routed message.
 type Message struct {
@@ -194,6 +209,12 @@ func (b *Bus) matches(s *subscriber, msg Message) bool {
 	if s.agentID == msg.From {
 		return false // never echo a message back to its sender
 	}
+	// The facilitator dispatch loop is special: it receives ONLY @facilitator requests, never the
+	// team/broadcast/role traffic the working agents see. Otherwise it would re-dispatch a direct
+	// @team request as a duplicate team message and two agents would work it in parallel.
+	if s.agentID == SenderFacilitator {
+		return msg.To.Kind == ToFacilitator
+	}
 	switch msg.To.Kind {
 	case ToBroadcast, ToTeam:
 		return true // everyone sees it; for a team request, one will claim it and the rest stand down
@@ -201,9 +222,7 @@ func (b *Bus) matches(s *subscriber, msg Message) bool {
 		return s.agentID == msg.To.Value
 	case ToRole:
 		return s.roles[msg.To.Value]
-	case ToFacilitator:
-		return s.agentID == SenderFacilitator // only the dispatcher loop receives it, not the agents
 	default:
-		return false
+		return false // ToFacilitator is handled above; working agents never receive it
 	}
 }
