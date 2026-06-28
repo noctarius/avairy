@@ -190,6 +190,61 @@ identity.
 Omit `-family` on the node to run **proxy-only** and launch the agent yourself against
 `http://127.0.0.1:7800/mcp`.
 
+### Walkthrough: a two-node fleet, end to end
+
+A Claude agent on a Linux box and a Codex agent on a Mac, working one project over mTLS — then your
+first question. Assume your machine is reachable at `192.0.2.10`.
+
+**1. Start core** (your machine) with its own CA and the project to share:
+
+```sh
+avairy -control-addr 0.0.0.0:7700 -mcp-addr 0.0.0.0:7702 \
+       -advertise 192.0.2.10 -tls-auto -workspace ./project
+```
+
+The operator TUI opens. Core has written its CA to `.avairy/` and is serving control + bus over HTTPS.
+
+**2. Mint a client-cert join for each node** (a second terminal on the core machine):
+
+```sh
+avairy mint-join -id linux-box -core https://192.0.2.10:7700 > linux-box.join
+avairy mint-join -id macos-box -core https://192.0.2.10:7700 > macos-box.join
+```
+
+Each `.join` is one line of text — the core URL, the CA to trust, and that node's certificate.
+Copy them to the machines however you like (`scp`, paste, a secrets manager).
+
+**3. Bring up the nodes.** On the **Linux** machine:
+
+```sh
+avairy-node -join-file linux-box.join -workspace ./repo -family claude
+```
+
+On the **Mac**:
+
+```sh
+avairy-node -join-file macos-box.join -workspace ./repo -family codex
+```
+
+Each node authenticates by certificate, pulls a working copy of `./project` into its `./repo`, and
+spawns its agent. Within a couple of seconds both appear in the operator console's fleet line as
+`linux-box` and `macos-box`.
+
+**4. Ask the first question** — in the operator console, let the facilitator route it to whoever
+fits:
+
+```
+@facilitator the integration tests fail only on Linux — reproduce and report the failing case
+```
+
+The facilitator picks `linux-box` (it has `os=linux`) and assigns it; you'll see
+`⇢ facilitator routed to linux-box` and the agent gets to work. Prefer to pick yourself? Address an
+agent directly (`@linux-box …`), put it to the whole team so exactly one claims it (`@team …`), or
+broadcast to everyone (`@all …`).
+
+> No mTLS yet? Swap step 2 for the enrollment-token flow in the collapsible section above — same
+> walkthrough, a token instead of a per-node certificate.
+
 ## Security
 
 avairy is built so that **the more secure option is the default, and the recommended path**. The
