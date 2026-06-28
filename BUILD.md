@@ -27,11 +27,20 @@ Override any of them: `make build VERSION=v1.2.3 COMMIT=abc1234 DATE=2026-01-01T
 
 ## Releases
 
-Releases are produced by the [`release` workflow](.github/workflows/release.yml). Push a `v*` tag
-(or run the workflow manually with a version), and CI runs `make package`, then publishes a GitHub
-Release with every platform archive, a `SHA256SUMS` file, and `install.sh`. End users install with
-the one-liner in the [README](README.md#install); the script resolves their OS/arch, downloads the
-matching archive, verifies its checksum, and drops the binaries on the `PATH`.
+Releases are produced by the [`release` workflow](.github/workflows/release.yml) and tagged with
+**semver**:
+
+- `vMAJOR.MINOR.PATCH` — a stable release (e.g. `v1.2.3`).
+- `vMAJOR.MINOR.PATCH-<prerelease>` — a prerelease (e.g. `v1.0.0-rc1`). It's published but marked
+  *pre-release*, so it isn't "latest" and `install.sh` keeps serving the last stable (install it
+  explicitly with `AVAIRY_VERSION=v1.0.0-rc1`).
+
+Cut one either way: **push the tag** (`git tag v1.2.3 && git push origin v1.2.3`), or **run the
+workflow manually** with the version — which creates and pushes the tag for you. CI validates the
+semver, runs `make test vet` then `make package`, and publishes a GitHub Release with every platform
+archive, a `SHA256SUMS` file, and `install.sh`. End users install with the one-liner in the
+[README](README.md#install); the script resolves their OS/arch, downloads the matching archive,
+verifies its checksum, and drops the binaries on the `PATH`.
 
 ## Target matrix
 

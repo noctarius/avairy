@@ -7,11 +7,13 @@ name: release
 #     tag, then builds & releases it.
 on:
   push:
-    tags: ['v*']
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'   # stable, e.g. v1.2.3
+      - 'v[0-9]+.[0-9]+.[0-9]+-*' # prerelease, e.g. v1.0.0-rc1
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version tag to create and release (e.g. v0.1.0)'
+        description: 'Semver tag to create and release: vX.Y.Z, or vX.Y.Z-<pre> for a prerelease (e.g. v1.0.0, v1.0.0-rc1)'
         required: true
 
 permissions:
@@ -29,27 +31,34 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Resolve version, build metadata, and tag
+      - name: Resolve version, validate semver, build metadata, and tag
         id: meta
         run: |
           set -euo pipefail
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             VERSION="${{ github.event.inputs.version }}"
-            case "$VERSION" in
-              v*) ;;
-              *) echo "version must start with 'v' (got '$VERSION')"; exit 1 ;;
-            esac
+          else
+            VERSION="${GITHUB_REF_NAME}"
+          fi
+          # Strict semver: vMAJOR.MINOR.PATCH, optionally followed by a -prerelease suffix.
+          if ! printf '%s' "$VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::'$VERSION' is not valid — expected vX.Y.Z or vX.Y.Z-<prerelease> (e.g. v1.0.0, v1.0.0-rc1)"
+            exit 1
+          fi
+          # A -suffix marks a prerelease (kept out of "latest", so install.sh stays on the last stable).
+          PRERELEASE=false
+          case "$VERSION" in *-*) PRERELEASE=true ;; esac
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             git config user.name  "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
             git tag -a "$VERSION" -m "$VERSION"
             git push origin "$VERSION"
-          else
-            VERSION="${GITHUB_REF_NAME}"
           fi
           {
             echo "version=$VERSION"
             echo "commit=$(git rev-parse --short HEAD)"
             echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "prerelease=$PRERELEASE"
           } >> "$GITHUB_OUTPUT"
 
       - name: Test
@@ -85,8 +94,10 @@ jobs:
           Every binary reports its build with \`avairy version\`.
           EOF
           )"
+          flags=""
+          if [ "${{ steps.meta.outputs.prerelease }}" = "true" ]; then flags="--prerelease"; fi
           gh release create "$VERSION" \
             dist/*.tar.gz dist/*.zip dist/SHA256SUMS install.sh \
             --title "$VERSION" \
             --notes "$notes" \
-            --verify-tag
+            --verify-tag $flags
