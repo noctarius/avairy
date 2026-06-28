@@ -199,10 +199,12 @@ first question. Assume your machine is reachable at `192.0.2.10`.
 
 ```sh
 avairy -control-addr 0.0.0.0:7700 -mcp-addr 0.0.0.0:7702 \
-       -advertise 192.0.2.10 -tls-auto -workspace ./project
+       -advertise 192.0.2.10 -tls-auto -web -workspace ./project
 ```
 
-The operator TUI opens. Core has written its CA to `.avairy/` and is serving control + bus over HTTPS.
+The operator TUI opens. Core has written its CA to `.avairy/` and is serving control + bus over
+HTTPS. `-web` also serves the **browser console** — core prints its URL (and the TUI's control line
+shows it), so you can drive the fleet from a browser instead of, or alongside, the TUI.
 
 **2. Mint a client-cert join for each node** (a second terminal on the core machine):
 
@@ -230,8 +232,8 @@ Each node authenticates by certificate, pulls a working copy of `./project` into
 spawns its agent. Within a couple of seconds both appear in the operator console's fleet line as
 `linux-box` and `macos-box`.
 
-**4. Ask the first question** — in the operator console, let the facilitator route it to whoever
-fits:
+**4. Ask the first question** — from the TUI or the browser console (the URL from step 1), let the
+facilitator route it to whoever fits:
 
 ```
 @facilitator the integration tests fail only on Linux — reproduce and report the failing case
@@ -323,8 +325,10 @@ One console, three ways to run it — all over the same operator API, all stream
   avairy-tui -join-file .avairy/operator-join
   ```
 
-- **Browser** — a chat-first console mirroring the TUI. Core prints the URL; open it and you get the
-  conversation, fleet, tasks, notes, approvals, and conflicts.
+- **Browser** — a chat-first console mirroring the TUI, served at `/operator/ui` when core is started
+  with **`-web`** (off by default). Core prints the ready-to-open URL; you get the conversation,
+  fleet, tasks, notes, approvals, and conflicts, all over the same operator API and live journal
+  stream as the TUI.
 
 **Operator auth** is the operator token by default, or — preferred — an **mTLS operator
 certificate**: `avairy mint-web-cert` writes a password-protected `operator.p12` (cert + key + CA) to
@@ -368,6 +372,7 @@ certificate authenticates you.
 | `-tls-cert` / `-tls-key` | —                | Serve the control channel with your own PEM cert/key instead.                      |
 | `-gate-edits`            | off              | Also require operator approval for file edits (not just risky commands).           |
 | `-operator-token <tok>`  | random           | Bearer token for the remote operator API / web console.                            |
+| `-web`                   | off              | Serve the browser operator console at `/operator/ui`.                              |
 | `-budget <usd>`          | 0 (off)          | Fleet spend cap: cross it and every agent is interrupted (you're warned).          |
 | `-agent-budget <usd>`    | 0 (off)          | Per-agent spend cap: cross it and that agent is interrupted.                       |
 | `-idle-sleep <dur>`      | 0 (off)          | Park an idle core agent (e.g. `10m`); the next directed message respawns it.       |
