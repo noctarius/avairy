@@ -5,17 +5,18 @@
 > [Makefile](Makefile) runs, for reference or CI without `make`.
 
 avairy is **pure Go (no CGO)**, so it cross-compiles to every target from any machine with a
-Go 1.26+ toolchain — no C compiler, no per-OS setup. There are three executables:
+Go 1.26+ toolchain — no C compiler, no per-OS setup. There is **one executable**, `avairy`, with
+subcommand groups:
 
-- **`avairy`** — core + operator TUI (run on the operator machine)
-- **`avairy-node`** — the node daemon (run on each remote machine/VM, incl. Windows)
-- **`avairy-tui`** — the operator console as a standalone client (attach to a remote core)
+- **`avairy core run|serve`** — core + operator TUI (run on the operator machine)
+- **`avairy node join`** — the agent daemon (run on each remote machine/VM, incl. Windows)
+- **`avairy tui connect`** — the operator console as a standalone client (attach to a remote core)
+- **`avairy core add-node|add-operator`** — invite nodes/operators
 
 ## Versioning
 
-Build metadata is stamped into `internal/buildinfo` at link time and shown by `avairy version`
-(likewise `avairy-node version` / `avairy-tui version`). The Makefile injects it via
-`-ldflags -X`:
+Build metadata is stamped into `internal/buildinfo` at link time and shown by `avairy version`.
+The Makefile injects it via `-ldflags -X`:
 
 | Field | Default | Source in CI |
 |-------|---------|--------------|
@@ -68,18 +69,14 @@ targets=(
   linux/arm64   linux/amd64
   freebsd/arm64 freebsd/amd64
 )
-cmds=(avairy avairy-node avairy-tui)
-
 for t in "${targets[@]}"; do
   os="${t%/*}"; arch="${t#*/}"
   ext=""; [ "$os" = windows ] && ext=".exe"
   dir="dist/${os}-${arch}"; mkdir -p "$dir"
-  for c in "${cmds[@]}"; do
-    out="${dir}/${c}${ext}"
-    echo "building $out"
-    CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" \
-      go build -trimpath -ldflags="-s -w" -o "$out" "./cmd/${c}"
-  done
+  out="${dir}/avairy${ext}"
+  echo "building $out"
+  CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" \
+    go build -trimpath -ldflags="-s -w" -o "$out" ./cmd/avairy
 done
 echo "done → dist/"
 ```
@@ -88,9 +85,8 @@ echo "done → dist/"
 chmod +x build-all.sh && ./build-all.sh
 ```
 
-This produces 24 binaries (3 commands × 8 targets) under per-target dirs, e.g.
-`dist/darwin-arm64/avairy`, `dist/windows-amd64/avairy-node.exe`,
-`dist/freebsd-arm64/avairy-node`.
+This produces 8 binaries (one `avairy` × 8 targets) under per-target dirs, e.g.
+`dist/darwin-arm64/avairy`, `dist/windows-amd64/avairy.exe`, `dist/freebsd-arm64/avairy`.
 
 > **fish shell:** the loop above is bash. Run it with `bash build-all.sh`, or set per-build
 > vars fish-style: `env CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build ...`.
@@ -99,12 +95,11 @@ This produces 24 binaries (3 commands × 8 targets) under per-target dirs, e.g.
 
 ```sh
 # native (host OS/arch)
-go build -o dist/avairy      ./cmd/avairy
-go build -o dist/avairy-node ./cmd/avairy-node
+go build -o dist/avairy ./cmd/avairy
 
 # one cross target, e.g. Windows on ARM64
 CGO_ENABLED=0 GOOS=windows GOARCH=arm64 \
-  go build -trimpath -ldflags="-s -w" -o dist/windows-arm64/avairy-node.exe ./cmd/avairy-node
+  go build -trimpath -ldflags="-s -w" -o dist/windows-arm64/avairy.exe ./cmd/avairy
 ```
 
 ## Flags used

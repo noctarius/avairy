@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
 # avairy installer — detects your OS/arch, downloads the matching release archive, verifies its
-# checksum, and installs the avairy / avairy-node / avairy-tui binaries.
+# checksum, and installs the single `avairy` binary (core, node, tui, and auth are subcommands).
 #
 #   curl -fsSL https://raw.githubusercontent.com/noctarius/avairy/main/install.sh | sh
 #   curl -fsSL .../install.sh | sh -s -- v1.0.0      # pick a version (note: sh -s --, not sh --)
@@ -79,13 +79,11 @@ else
 fi
 
 tar -xzf "$tmp/$ASSET" -C "$tmp"
-for b in avairy avairy-node avairy-tui; do
-	[ -f "$tmp/$b" ] || err "archive missing $b"
-	mv -f "$tmp/$b" "$BIN/$b"
-	chmod 0755 "$BIN/$b"
-done
+[ -f "$tmp/avairy" ] || err "archive missing avairy"
+mv -f "$tmp/avairy" "$BIN/avairy"
+chmod 0755 "$BIN/avairy"
 
-echo "installed: avairy, avairy-node, avairy-tui → $BIN"
+echo "installed: avairy → $BIN"
 case ":$PATH:" in
 	*":$BIN:"*) ;;
 	*) echo "note: $BIN is not on your PATH — add it, e.g.  export PATH=\"$BIN:\$PATH\"" ;;
