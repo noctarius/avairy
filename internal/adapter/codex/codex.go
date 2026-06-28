@@ -13,15 +13,12 @@ package codex
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"os/exec"
-	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
 
+	"avairy/internal/adapter/jsonrpc"
 	"avairy/internal/agent"
 )
 
@@ -88,17 +85,15 @@ func (a *Adapter) Start(ctx context.Context, cfg agent.SessionConfig) (agent.Ses
 	}
 	s := &session{
 		cmd:     cmd,
-		stdin:   stdin,
+		peer:    jsonrpc.NewPeer("codex", stdin),
 		approve: approve,
 		events:  make(chan agent.Event, 64),
-		pending: make(map[int64]chan rpcResult),
-		done:    make(chan struct{}),
 	}
-	go s.readLoop(stdout)
+	go func() { s.peer.Run(stdout, s); close(s.events) }()
 
 	hctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	if _, err := s.call(hctx, "initialize", initializeParams{ClientInfo: clientInfo{Name: "avairy", Version: "0.1.0"}}); err != nil {
+	if _, err := s.peer.Call(hctx, "initialize", initializeParams{ClientInfo: clientInfo{Name: "avairy", Version: "0.1.0"}}); err != nil {
 		_ = s.Close()
 		return nil, fmt.Errorf("codex: initialize: %w", err)
 	}
@@ -108,12 +103,12 @@ func (a *Adapter) Start(ctx context.Context, cfg agent.SessionConfig) (agent.Ses
 		// Resume the prior thread by id; fall back to a fresh thread if it can't be loaded
 		// (e.g. the app-server's store was cleared), so respawn never hard-fails.
 		// Discard the resume error deliberately: tsRes stays nil and we fall back to thread/start.
-		tsRes, _ = s.call(hctx, "thread/resume", threadResumeParams{
+		tsRes, _ = s.peer.Call(hctx, "thread/resume", threadResumeParams{
 			ThreadID: cfg.ResumeID, Cwd: cfg.Workspace, ApprovalPolicy: approval, Sandbox: sandbox,
 		})
 	}
 	if tsRes == nil {
-		tsRes, err = s.call(hctx, "thread/start", threadStartParams{
+		tsRes, err = s.peer.Call(hctx, "thread/start", threadStartParams{
 			Cwd:                   cfg.Workspace,
 			Model:                 cfg.Model,
 			DeveloperInstructions: cfg.Role,
@@ -142,122 +137,29 @@ func (a *Adapter) Start(ctx context.Context, cfg agent.SessionConfig) (agent.Ses
 
 // --- JSON-RPC plumbing ---
 
-type rpcRequest struct {
-	JSONRPC string `json:"jsonrpc"`
-	ID      int64  `json:"id"`
-	Method  string `json:"method"`
-	Params  any    `json:"params"`
-}
-
+// rpcResponse answers a server-initiated request (the app-server's approval prompt). Codex omits
+// the jsonrpc field on responses, so this stays local rather than living in the shared peer.
 type rpcResponse struct {
 	ID     json.RawMessage `json:"id"`
 	Result any             `json:"result"`
 }
 
-type rpcMessage struct {
-	ID     *json.RawMessage `json:"id"`
-	Method string           `json:"method"`
-	Params json.RawMessage  `json:"params"`
-	Result json.RawMessage  `json:"result"`
-	Error  *rpcError        `json:"error"`
-}
-
-type rpcError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
-}
-
-type rpcResult struct {
-	result json.RawMessage
-	err    error
-}
-
 type session struct {
 	cmd     *exec.Cmd
-	stdin   io.WriteCloser
+	peer    *jsonrpc.Peer
 	approve ApprovalDecider
 	events  chan agent.Event
-	done    chan struct{}
 
-	encMu sync.Mutex // serializes writes to stdin
-
-	mu         sync.Mutex
-	nextID     int64
-	pending    map[int64]chan rpcResult
+	mu         sync.Mutex // guards threadID / activeTurn / closed
 	threadID   string
 	activeTurn string
 	closed     bool
 }
 
-func (s *session) write(v any) error {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-	s.encMu.Lock()
-	defer s.encMu.Unlock()
-	_, err = s.stdin.Write(append(b, '\n'))
-	return err
-}
-
-func (s *session) call(ctx context.Context, method string, params any) (json.RawMessage, error) {
-	id := atomic.AddInt64(&s.nextID, 1)
-	ch := make(chan rpcResult, 1)
-	s.mu.Lock()
-	s.pending[id] = ch
-	s.mu.Unlock()
-
-	if err := s.write(rpcRequest{JSONRPC: "2.0", ID: id, Method: method, Params: params}); err != nil {
-		s.mu.Lock()
-		delete(s.pending, id)
-		s.mu.Unlock()
-		return nil, err
-	}
-	select {
-	case r := <-ch:
-		return r.result, r.err
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case <-s.done:
-		return nil, errors.New("codex: session closed")
-	}
-}
-
-func (s *session) readLoop(r io.Reader) {
-	defer close(s.done)
-	defer close(s.events)
-	dec := json.NewDecoder(r)
-	for {
-		var m rpcMessage
-		if err := dec.Decode(&m); err != nil {
-			return
-		}
-		switch {
-		case m.Method != "" && m.ID != nil:
-			s.handleServerRequest(*m.ID, m.Method, m.Params)
-		case m.Method != "":
-			s.handleNotification(m.Method, m.Params)
-		case m.ID != nil:
-			id, _ := strconv.ParseInt(string(*m.ID), 10, 64)
-			s.mu.Lock()
-			ch := s.pending[id]
-			delete(s.pending, id)
-			s.mu.Unlock()
-			if ch != nil {
-				if m.Error != nil {
-					ch <- rpcResult{err: fmt.Errorf("codex rpc error %d: %s", m.Error.Code, m.Error.Message)}
-				} else {
-					ch <- rpcResult{result: m.Result}
-				}
-			}
-		}
-	}
-}
-
-// handleServerRequest answers an approval request. It MUST always reply or the turn hangs.
-func (s *session) handleServerRequest(id json.RawMessage, method string, params json.RawMessage) {
+// OnServerRequest answers the app-server's approval request. It MUST always reply or the turn hangs.
+func (s *session) OnServerRequest(id json.RawMessage, method string, params json.RawMessage) {
 	decision := s.approve(method, params)
-	_ = s.write(rpcResponse{ID: id, Result: map[string]string{"decision": decision}})
+	_ = s.peer.Write(rpcResponse{ID: id, Result: map[string]string{"decision": decision}})
 }
 
 // --- agent.Session ---
@@ -281,10 +183,10 @@ func (s *session) Send(ctx context.Context, text string, d agent.Delivery) error
 	input := []userInput{{Type: "text", Text: text}}
 	if turn != "" {
 		// A turn is in flight: steer injects this message mid-turn (mid-reasoning).
-		_, err := s.call(ctx, "turn/steer", steerParams{ThreadID: tid, ExpectedTurnID: turn, Input: input})
+		_, err := s.peer.Call(ctx, "turn/steer", steerParams{ThreadID: tid, ExpectedTurnID: turn, Input: input})
 		return err
 	}
-	res, err := s.call(ctx, "turn/start", turnStartParams{ThreadID: tid, Input: input})
+	res, err := s.peer.Call(ctx, "turn/start", turnStartParams{ThreadID: tid, Input: input})
 	if err != nil {
 		return err
 	}
@@ -306,7 +208,7 @@ func (s *session) Interrupt(ctx context.Context) error {
 	if turn == "" {
 		return nil
 	}
-	_, err := s.call(ctx, "turn/interrupt", interruptParams{ThreadID: tid, TurnID: turn})
+	_, err := s.peer.Call(ctx, "turn/interrupt", interruptParams{ThreadID: tid, TurnID: turn})
 	return err
 }
 
@@ -320,7 +222,7 @@ func (s *session) Close() error {
 	}
 	s.closed = true
 	s.mu.Unlock()
-	_ = s.stdin.Close()
+	_ = s.peer.Close()
 	return s.cmd.Wait()
 }
 

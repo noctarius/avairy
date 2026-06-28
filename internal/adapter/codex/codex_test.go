@@ -4,8 +4,21 @@ import (
 	"encoding/json"
 	"testing"
 
+	"avairy/internal/adapter/jsonrpc"
 	"avairy/internal/agent"
 )
+
+// nopCloser is a no-op io.WriteCloser for tests that build a session/peer without a real subprocess.
+type nopCloser struct{}
+
+func (nopCloser) Write(p []byte) (int, error) { return len(p), nil }
+func (nopCloser) Close() error                { return nil }
+
+// testSession builds a session with a peer whose Done channel is open (never fires), so emit()
+// delivers to events.
+func testSession(buf int) *session {
+	return &session{events: make(chan agent.Event, buf), peer: jsonrpc.NewPeer("codex", nopCloser{})}
+}
 
 func TestItemToEvent(t *testing.T) {
 	cases := []struct {
@@ -43,8 +56,9 @@ func TestItemToEventSkipsUnknown(t *testing.T) {
 }
 
 func TestHandleNotificationTurnCompleted(t *testing.T) {
-	s := &session{events: make(chan agent.Event, 4), done: make(chan struct{}), activeTurn: "turn_1"}
-	s.handleNotification("turn/completed", json.RawMessage(`{"threadId":"t","turn":{"id":"turn_1","status":"completed"}}`))
+	s := testSession(4)
+	s.activeTurn = "turn_1"
+	s.OnNotification("turn/completed", json.RawMessage(`{"threadId":"t","turn":{"id":"turn_1","status":"completed"}}`))
 
 	if s.activeTurn != "" {
 		t.Fatalf("expected activeTurn cleared, got %q", s.activeTurn)
@@ -60,8 +74,8 @@ func TestHandleNotificationTurnCompleted(t *testing.T) {
 }
 
 func TestHandleNotificationItemCompleted(t *testing.T) {
-	s := &session{events: make(chan agent.Event, 4), done: make(chan struct{})}
-	s.handleNotification("item/completed", json.RawMessage(`{"turnId":"x","item":{"type":"agentMessage","id":"i","text":"hello"}}`))
+	s := testSession(4)
+	s.OnNotification("item/completed", json.RawMessage(`{"turnId":"x","item":{"type":"agentMessage","id":"i","text":"hello"}}`))
 	select {
 	case ev := <-s.events:
 		if ev.Type != agent.EventText || ev.Text != "hello" {

@@ -9,8 +9,8 @@ import (
 	"avairy/internal/gating"
 )
 
-// handleNotification maps an ACP session/update to normalized agent events.
-func (s *session) handleNotification(method string, params json.RawMessage) {
+// OnNotification maps an ACP session/update to normalized agent events.
+func (s *session) OnNotification(method string, params json.RawMessage) {
 	if method != "session/update" {
 		return
 	}
@@ -68,14 +68,14 @@ func (s *session) handleNotification(method string, params json.RawMessage) {
 	}
 }
 
-// handleServerRequest answers agent→client requests. The only one we act on is permission;
+// OnServerRequest answers agent→client requests. The only one we act on is permission;
 // fs/* are refused (we advertised no fs capability) but must still be answered.
-func (s *session) handleServerRequest(id json.RawMessage, method string, params json.RawMessage) {
+func (s *session) OnServerRequest(id json.RawMessage, method string, params json.RawMessage) {
 	if method == "session/request_permission" {
 		s.handlePermission(id, params)
 		return
 	}
-	_ = s.write(rpcResponse{JSONRPC: "2.0", ID: id, Result: map[string]any{}})
+	_ = s.peer.Write(rpcResponse{JSONRPC: "2.0", ID: id, Result: map[string]any{}})
 }
 
 type permOption struct {
@@ -110,7 +110,7 @@ func (s *session) handlePermission(id json.RawMessage, params json.RawMessage) {
 	} else {
 		outcome = map[string]any{"outcome": "cancelled"}
 	}
-	_ = s.write(rpcResponse{JSONRPC: "2.0", ID: id, Result: map[string]any{"outcome": outcome}})
+	_ = s.peer.Write(rpcResponse{JSONRPC: "2.0", ID: id, Result: map[string]any{"outcome": outcome}})
 }
 
 // permToRequest maps an ACP tool-call kind to a gating Request for the §7 policy.
@@ -180,6 +180,6 @@ func (s *session) emit(ev agent.Event) {
 	}
 	select {
 	case s.events <- ev:
-	case <-s.done:
+	case <-s.peer.Done:
 	}
 }

@@ -6,8 +6,8 @@ import (
 	"avairy/internal/agent"
 )
 
-// handleNotification maps a Codex app-server notification to normalized agent events.
-func (s *session) handleNotification(method string, params json.RawMessage) {
+// OnNotification maps a Codex app-server notification to normalized agent events.
+func (s *session) OnNotification(method string, params json.RawMessage) {
 	switch method {
 	case "item/completed":
 		var p struct {
@@ -76,7 +76,7 @@ func itemToEvent(raw json.RawMessage) (agent.Event, bool) {
 func (s *session) emit(ev agent.Event) {
 	select {
 	case s.events <- ev:
-	case <-s.done:
+	case <-s.peer.Done:
 	}
 }
 

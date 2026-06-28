@@ -4,26 +4,33 @@ import (
 	"encoding/json"
 	"testing"
 
+	"avairy/internal/adapter/jsonrpc"
 	"avairy/internal/agent"
 	"avairy/internal/gating"
 )
 
+type nopCloser struct{}
+
+func (nopCloser) Write(p []byte) (int, error) { return len(p), nil }
+func (nopCloser) Close() error                { return nil }
+
 func newTestSession() *session {
-	return &session{events: make(chan agent.Event, 16), done: make(chan struct{})}
+	// A peer with an open (never-closed) Done channel, so emit() delivers to events.
+	return &session{events: make(chan agent.Event, 16), peer: jsonrpc.NewPeer("acp", nopCloser{})}
 }
 
 // agent_message_chunks accumulate and flush as one text event when a tool_call arrives.
 func TestSessionUpdate_TextThenTool(t *testing.T) {
 	s := newTestSession()
-	s.handleNotification("session/update", json.RawMessage(`{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hello "}}}`))
-	s.handleNotification("session/update", json.RawMessage(`{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"world"}}}`))
+	s.OnNotification("session/update", json.RawMessage(`{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hello "}}}`))
+	s.OnNotification("session/update", json.RawMessage(`{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"world"}}}`))
 	// nothing emitted yet (buffered)
 	select {
 	case ev := <-s.events:
 		t.Fatalf("unexpected early event %+v", ev)
 	default:
 	}
-	s.handleNotification("session/update", json.RawMessage(`{"update":{"sessionUpdate":"tool_call","toolCallId":"t1","title":"Bash","kind":"execute"}}`))
+	s.OnNotification("session/update", json.RawMessage(`{"update":{"sessionUpdate":"tool_call","toolCallId":"t1","title":"Bash","kind":"execute"}}`))
 
 	if ev := <-s.events; ev.Type != agent.EventText || ev.Text != "hello world" {
 		t.Fatalf("text event = %+v", ev)
@@ -37,7 +44,7 @@ func TestSessionUpdate_TextThenTool(t *testing.T) {
 // rawInput is absent — so the TUI/loop detection see the action, not just the tool name.
 func TestSessionUpdate_ToolInput(t *testing.T) {
 	s := newTestSession()
-	s.handleNotification("session/update", json.RawMessage(`{"update":{"sessionUpdate":"tool_call","toolCallId":"t1","title":"Bash","kind":"execute","rawInput":{"command":"go test ./..."}}}`))
+	s.OnNotification("session/update", json.RawMessage(`{"update":{"sessionUpdate":"tool_call","toolCallId":"t1","title":"Bash","kind":"execute","rawInput":{"command":"go test ./..."}}}`))
 	ev := <-s.events
 	if ev.Tool.Input["command"] != "go test ./..." {
 		t.Fatalf("rawInput not mapped: %+v", ev.Tool.Input)
@@ -47,7 +54,7 @@ func TestSessionUpdate_ToolInput(t *testing.T) {
 	}
 
 	// No rawInput, but a touched file location → path is captured as a fallback.
-	s.handleNotification("session/update", json.RawMessage(`{"update":{"sessionUpdate":"tool_call","toolCallId":"t2","title":"Edit","kind":"edit","locations":[{"path":"src/main.go"}]}}`))
+	s.OnNotification("session/update", json.RawMessage(`{"update":{"sessionUpdate":"tool_call","toolCallId":"t2","title":"Edit","kind":"edit","locations":[{"path":"src/main.go"}]}}`))
 	ev = <-s.events
 	if ev.Tool.Input["path"] != "src/main.go" {
 		t.Fatalf("locations fallback not mapped: %+v", ev.Tool.Input)
@@ -59,8 +66,8 @@ func TestSessionUpdate_ToolInput(t *testing.T) {
 func TestLoadingSuppressesReplayedEvents(t *testing.T) {
 	s := newTestSession()
 	s.loading.Store(true)
-	s.handleNotification("session/update", json.RawMessage(`{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"old"}}}`))
-	s.handleNotification("session/update", json.RawMessage(`{"update":{"sessionUpdate":"tool_call","toolCallId":"t1","title":"Bash","kind":"execute"}}`))
+	s.OnNotification("session/update", json.RawMessage(`{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"old"}}}`))
+	s.OnNotification("session/update", json.RawMessage(`{"update":{"sessionUpdate":"tool_call","toolCallId":"t1","title":"Bash","kind":"execute"}}`))
 	select {
 	case ev := <-s.events:
 		t.Fatalf("event emitted during load replay: %+v", ev)
@@ -68,7 +75,7 @@ func TestLoadingSuppressesReplayedEvents(t *testing.T) {
 	}
 
 	s.loading.Store(false)
-	s.handleNotification("session/update", json.RawMessage(`{"update":{"sessionUpdate":"tool_call","toolCallId":"t2","title":"Read","kind":"read"}}`))
+	s.OnNotification("session/update", json.RawMessage(`{"update":{"sessionUpdate":"tool_call","toolCallId":"t2","title":"Read","kind":"read"}}`))
 	if ev := <-s.events; ev.Type != agent.EventToolUse {
 		t.Fatalf("after load, events should flow; got %+v", ev)
 	}
@@ -76,7 +83,7 @@ func TestLoadingSuppressesReplayedEvents(t *testing.T) {
 
 func TestSessionUpdate_ToolResult(t *testing.T) {
 	s := newTestSession()
-	s.handleNotification("session/update", json.RawMessage(`{"update":{"sessionUpdate":"tool_call_update","toolCallId":"t1","status":"completed"}}`))
+	s.OnNotification("session/update", json.RawMessage(`{"update":{"sessionUpdate":"tool_call_update","toolCallId":"t1","status":"completed"}}`))
 	if ev := <-s.events; ev.Type != agent.EventToolResult || ev.Tool.ID != "t1" {
 		t.Fatalf("tool result = %+v", ev)
 	}
