@@ -2,6 +2,7 @@ package supervisor
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -69,6 +70,57 @@ func TestSupervisor_SleepsAndRespawns(t *testing.T) {
 		return atomic.LoadInt32(&spawns) == 2 && hasSystem(jrnl, "agent_awake") && hasText(jrnl, "wake up")
 	}) {
 		t.Fatalf("agent did not respawn/deliver; spawns=%d journal %+v", atomic.LoadInt32(&spawns), jrnl.Records())
+	}
+}
+
+// A Stop (broadcast interrupt) against a family that can't be interrupted mid-turn (e.g. claude,
+// whose Interrupt returns an error) must still actually stop it: the supervisor hard-stops by
+// closing the subprocess (agent_sleeping), then respawns on the next directed message.
+func TestSupervisor_InterruptHardStopsNonInterruptible(t *testing.T) {
+	jrnl := journal.NewMemory()
+	b := bus.New(jrnl)
+	var spawns int32
+
+	ad := mock.New()
+	ad.InterruptErr = errors.New("mock: interrupt not supported") // mimic claude
+	s := New("alice", []string{"backend"}, spawnerFor(ad, &spawns), b, jrnl, 0)
+	go s.Run(t.Context())
+
+	if !waitFor(t, func() bool { return atomic.LoadInt32(&spawns) == 1 }) {
+		t.Fatal("supervisor did not spawn at startup")
+	}
+
+	b.Interrupt("human", bus.Broadcast()) // the Stop button
+	if !waitFor(t, func() bool { return hasSystem(jrnl, "agent_sleeping") }) {
+		t.Fatalf("Stop did not stop a non-interruptible agent; journal %+v", jrnl.Records())
+	}
+
+	// It's still usable: a directed message respawns it.
+	b.Publish("human", bus.Agent("alice"), "back to work", agent.DeliverySteer)
+	if !waitFor(t, func() bool { return atomic.LoadInt32(&spawns) == 2 && hasText(jrnl, "back to work") }) {
+		t.Fatalf("agent did not respawn after a hard-stop; spawns=%d", atomic.LoadInt32(&spawns))
+	}
+}
+
+// A Stop against an interruptible family (Interrupt returns nil) cancels the turn in-band without
+// tearing the session down — it must NOT be hard-stopped.
+func TestSupervisor_InterruptKeepsInterruptibleSession(t *testing.T) {
+	jrnl := journal.NewMemory()
+	b := bus.New(jrnl)
+	var spawns int32
+
+	s := New("alice", []string{"backend"}, spawnerFor(mock.New(), &spawns), b, jrnl, 0)
+	go s.Run(t.Context())
+
+	if !waitFor(t, func() bool { return atomic.LoadInt32(&spawns) == 1 }) {
+		t.Fatal("no startup spawn")
+	}
+	b.Interrupt("human", bus.Broadcast())
+
+	// Give the interrupt time to be (wrongly) treated as a hard-stop.
+	time.Sleep(150 * time.Millisecond)
+	if hasSystem(jrnl, "agent_sleeping") {
+		t.Fatal("interruptible agent should not be torn down on interrupt")
 	}
 }
 

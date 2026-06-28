@@ -22,8 +22,9 @@ func EchoReply(input string) []agent.Event {
 
 // Adapter is a mock agent family.
 type Adapter struct {
-	Caps  agent.Capabilities
-	Reply Reply // defaults to EchoReply
+	Caps         agent.Capabilities
+	Reply        Reply // defaults to EchoReply
+	InterruptErr error // returned by session.Interrupt; non-nil mimics a family that can't be interrupted (e.g. claude)
 }
 
 // New returns a mock Adapter with steer/resume capabilities and an echo script.
@@ -46,13 +47,14 @@ func (a *Adapter) Start(ctx context.Context, cfg agent.SessionConfig) (agent.Ses
 	if id == "" {
 		id = "mock"
 	}
-	return &session{id: id, reply: reply, events: make(chan agent.Event, 64)}, nil
+	return &session{id: id, reply: reply, interruptErr: a.InterruptErr, events: make(chan agent.Event, 64)}, nil
 }
 
 type session struct {
-	id     string
-	reply  Reply
-	events chan agent.Event
+	id           string
+	reply        Reply
+	interruptErr error
+	events       chan agent.Event
 
 	mu     sync.Mutex
 	closed bool
@@ -85,7 +87,7 @@ func (s *session) Send(ctx context.Context, text string, d agent.Delivery) error
 
 func (s *session) Events() <-chan agent.Event { return s.events }
 
-func (s *session) Interrupt(ctx context.Context) error { return nil }
+func (s *session) Interrupt(ctx context.Context) error { return s.interruptErr }
 
 func (s *session) Close() error {
 	s.mu.Lock()

@@ -148,8 +148,10 @@ func (s *Supervisor) Run(ctx context.Context) {
 				return
 			}
 			if msg.Interrupt {
-				if sess != nil {
-					_ = sess.Interrupt(ctx)
+				// Cancel the turn in-band; if the family can't (e.g. claude), hard-stop by closing
+				// the subprocess so Stop actually stops it. It respawns on the next directed message.
+				if sess != nil && sess.Interrupt(ctx) != nil {
+					sleep()
 				}
 				continue
 			}

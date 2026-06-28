@@ -531,7 +531,7 @@ func spawnAgent(ctx context.Context, n *control.Node, family, agentID, role, mod
 			working = false
 			mu.Unlock()
 			_ = n.PostEvents([]control.AgentEventReport{{AgentID: agentID, Type: control.EventAgentSleeping}})
-			fmt.Printf("agent %q sleeping (idle) — a directed message wakes it\n", agentID)
+			fmt.Printf("agent %q sleeping — a directed message wakes it\n", agentID)
 		}
 
 		wakeUp(false) // start awake
@@ -550,8 +550,11 @@ func spawnAgent(ctx context.Context, n *control.Node, family, agentID, role, mod
 				if msgs, err := n.PullInbox(agentID); err == nil {
 					for _, m := range msgs {
 						if m.Interrupt {
-							if sess != nil {
-								_ = sess.Interrupt(ctx)
+							// Cancel the turn in-band; if the family can't (e.g. claude), hard-stop by
+							// closing the subprocess so Stop actually stops it. The next directed message
+							// respawns it (resuming the session for families that support --resume).
+							if sess != nil && sess.Interrupt(ctx) != nil {
+								sleep()
 							}
 							continue
 						}
