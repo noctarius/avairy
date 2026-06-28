@@ -167,27 +167,9 @@ func main() {
 	}
 	var operatorJoinFile string // path to the .avairy/operator-join bundle (set when serving)
 
-	// Self-managed TLS material (DESIGN.md §4), shared by the MCP bus and the control channel:
-	// build the CA + one server cert (SANs cover the advertised control + mcp hosts and loopback)
-	// once, so both encrypted listeners use it and the CA travels to nodes in the join bundle.
-	var ca *control.CA
-	var serverCert tls.Certificate
-	var caPEM []byte
-	if *tlsAuto {
-		c, cerr := control.EnsureCA(".avairy")
-		if cerr != nil {
-			fail("ca", cerr)
-		}
-		cert, cerr := c.ServerTLS([]string{
-			hostOf(advertised(*advertise, *mcpAddr)),
-			hostOf(advertised(*advertise, *controlAddr)),
-			"127.0.0.1", "localhost", "::1",
-		})
-		if cerr != nil {
-			fail("server cert", cerr)
-		}
-		ca, serverCert, caPEM = c, cert, c.CertPEM()
-	}
+	// Self-managed TLS material (DESIGN.md §4), shared by the MCP bus and the control channel, so
+	// both encrypted listeners use one cert and the CA travels to nodes in the join bundle.
+	ca, serverCert, caPEM := serverTLS(*tlsAuto, *advertise, *mcpAddr, *controlAddr)
 
 	// HTTP servers' per-connection errors (e.g. a browser refusing the self-signed cert, which the
 	// peer reports as a TLS alert) must NOT hit the terminal — under the TUI's alt-screen they
@@ -491,87 +473,13 @@ func main() {
 		}
 	}
 
-	// Facilitator: watch the journal for stuck signals and nudge (DESIGN.md §5).
-	fac := facilitator.New(b, facilitator.RosterFunc(func() []facilitator.Agent {
-		metas := mcpSrv.AgentList()
-		out := make([]facilitator.Agent, 0, len(metas))
-		for _, m := range metas {
-			out = append(out, facilitator.Agent{ID: m.ID, Caps: m.Caps})
-		}
-		return out
-	}), facilitator.RuleNudger{})
-	// Let the facilitator run a fresh look on a detected loop — but only with a real agent in
-	// play (a -demo mock loop must not spawn a credit-spending session).
-	if *live || *controlAddr != "" {
-		fac.FreshLook = makeFreshLook(*family, *model, bd, mcpSrv.Blackboard())
-	}
-	facSub, _ := jrnl.Subscribe()
-	go fac.Run(ctx, facSub)
-
-	// Cost guardrails (#26): fold per-agent/total spend off the journal and, when a cap is crossed,
-	// warn the operator (a journaled budget_exceeded event surfaces in both consoles) and interrupt
-	// the runaway turn. Capless monitoring is still useful — the consoles show per-agent spend.
-	costMon := cost.New(*agentBudget, *budget)
-	costMon.OnExceed = func(agentID, scope string, spent float64) {
-		actor := agentID
-		if actor == "" {
-			actor = "core"
-		}
-		jrnl.Append(journal.KindSystem, actor, map[string]any{
-			"event": "budget_exceeded", "scope": scope, "agent": agentID, "spent": spent,
-		})
-		if scope == "agent" && agentID != "" {
-			b.Interrupt("avairy", bus.Agent(agentID))
-		} else {
-			b.Interrupt("avairy", bus.Broadcast())
-		}
-	}
-	costSub, _ := jrnl.Subscribe()
-	go costMon.Run(costSub)
-
-	// @facilitator dispatch (#team phase 2): a request addressed to the facilitator is triaged here
-	// via a cascade — deterministic rules first (no agents / sole candidate), an ephemeral LLM picker
-	// as the fallback for several candidates — and auto-assigned to one agent (or opened as a @team
-	// claim), journaled so the operator sees the routing. Only the dispatcher loop receives @facilitator
-	// messages; the agents don't.
-	facInbox, _ := b.Subscribe(bus.SenderFacilitator)
-	llmDispatch := *live || *controlAddr != "" // an LLM picker needs a real agent family
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case req, ok := <-facInbox:
-				if !ok {
-					return
-				}
-				if req.Interrupt {
-					continue
-				}
-				roster := mcpSrv.AgentList()
-				var workers []string
-				for _, m := range roster {
-					if m.ID == req.From || strings.HasPrefix(m.ID, "consult-") {
-						continue // don't route a request back to its sender or to an ephemeral consult
-					}
-					workers = append(workers, m.ID)
-				}
-				var pick func() string
-				if llmDispatch && len(workers) > 1 {
-					pick = func() string { return pickWorker(ctx, *family, *model, req.Body, roster, workers) }
-				}
-				d, routed := dispatch.Decide(workers, pick)
-				rec := map[string]any{"event": "facilitator_dispatch", "rule": d.Rule, "request": req.Body}
-				if routed {
-					b.Publish(bus.SenderFacilitator, d.To, req.Body, agent.DeliverySteer)
-					if rec["to"] = d.To.Value; d.To.Value == "" {
-						rec["to"] = string(d.To.Kind) // "team"
-					}
-				}
-				jrnl.Append(journal.KindSystem, bus.SenderFacilitator, rec)
-			}
-		}
-	}()
+	// Background services: the facilitator nudges stuck agents and routes @facilitator requests; the
+	// cost monitor enforces budgets. An LLM-backed fresh look / dispatch picker needs a real agent
+	// family, so it's gated to -live or a control server (a -demo mock loop must not spend credits).
+	realAgents := *live || *controlAddr != ""
+	startFacilitator(ctx, b, mcpSrv, bd, jrnl, realAgents, *family, *model)
+	startCostMonitor(jrnl, b, *agentBudget, *budget)
+	startFacilitatorDispatch(ctx, b, mcpSrv, jrnl, realAgents, *family, *model)
 
 	caps := map[string]string{"os": runtime.GOOS}
 
@@ -616,6 +524,111 @@ func main() {
 	if err := tui.Run(svc.Deps()); err != nil {
 		fail("tui", err)
 	}
+}
+
+// serverTLS builds the self-managed CA + one server cert covering the advertised control/bus hosts
+// and loopback (DESIGN.md §4), shared by the MCP bus and the control channel. Returns zero values
+// when tlsAuto is off.
+func serverTLS(tlsAuto bool, advertise, mcpAddr, controlAddr string) (*control.CA, tls.Certificate, []byte) {
+	if !tlsAuto {
+		return nil, tls.Certificate{}, nil
+	}
+	ca, err := control.EnsureCA(".avairy")
+	if err != nil {
+		fail("ca", err)
+	}
+	cert, err := ca.ServerTLS([]string{
+		hostOf(advertised(advertise, mcpAddr)),
+		hostOf(advertised(advertise, controlAddr)),
+		"127.0.0.1", "localhost", "::1",
+	})
+	if err != nil {
+		fail("server cert", err)
+	}
+	return ca, cert, ca.CertPEM()
+}
+
+// startFacilitator wires the journal-watching facilitator that nudges stuck agents (DESIGN.md §5).
+// With a real agent family in play (freshLook), it can run a clean-context fresh look on a loop.
+func startFacilitator(ctx context.Context, b *bus.Bus, mcpSrv *mcp.Server, bd *board.Board, jrnl journal.Log, freshLook bool, family, model string) {
+	fac := facilitator.New(b, facilitator.RosterFunc(func() []facilitator.Agent {
+		metas := mcpSrv.AgentList()
+		out := make([]facilitator.Agent, 0, len(metas))
+		for _, m := range metas {
+			out = append(out, facilitator.Agent{ID: m.ID, Caps: m.Caps})
+		}
+		return out
+	}), facilitator.RuleNudger{})
+	if freshLook {
+		fac.FreshLook = makeFreshLook(family, model, bd, mcpSrv.Blackboard())
+	}
+	sub, _ := jrnl.Subscribe()
+	go fac.Run(ctx, sub)
+}
+
+// startCostMonitor folds per-agent/total spend off the journal and, when a cap is crossed, journals
+// a budget_exceeded event (surfaced in the consoles) and interrupts the runaway (#26).
+func startCostMonitor(jrnl journal.Log, b *bus.Bus, agentBudget, totalBudget float64) {
+	mon := cost.New(agentBudget, totalBudget)
+	mon.OnExceed = func(agentID, scope string, spent float64) {
+		actor := agentID
+		if actor == "" {
+			actor = "core"
+		}
+		jrnl.Append(journal.KindSystem, actor, map[string]any{
+			"event": "budget_exceeded", "scope": scope, "agent": agentID, "spent": spent,
+		})
+		if scope == "agent" && agentID != "" {
+			b.Interrupt("avairy", bus.Agent(agentID))
+		} else {
+			b.Interrupt("avairy", bus.Broadcast())
+		}
+	}
+	sub, _ := jrnl.Subscribe()
+	go mon.Run(sub)
+}
+
+// startFacilitatorDispatch handles @facilitator requests: triage via the dispatch cascade (rules,
+// then an ephemeral LLM picker when several candidates qualify) and auto-assign one agent (or open a
+// @team claim), journaling the routing (#team phase 2). Only this loop receives @facilitator messages.
+func startFacilitatorDispatch(ctx context.Context, b *bus.Bus, mcpSrv *mcp.Server, jrnl journal.Log, llm bool, family, model string) {
+	inbox, _ := b.Subscribe(bus.SenderFacilitator)
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case req, ok := <-inbox:
+				if !ok {
+					return
+				}
+				if req.Interrupt {
+					continue
+				}
+				roster := mcpSrv.AgentList()
+				var workers []string
+				for _, m := range roster {
+					if m.ID == req.From || strings.HasPrefix(m.ID, "consult-") {
+						continue // don't route a request back to its sender or to an ephemeral consult
+					}
+					workers = append(workers, m.ID)
+				}
+				var pick func() string
+				if llm && len(workers) > 1 {
+					pick = func() string { return pickWorker(ctx, family, model, req.Body, roster, workers) }
+				}
+				d, routed := dispatch.Decide(workers, pick)
+				rec := map[string]any{"event": "facilitator_dispatch", "rule": d.Rule, "request": req.Body}
+				if routed {
+					b.Publish(bus.SenderFacilitator, d.To, req.Body, agent.DeliverySteer)
+					if rec["to"] = d.To.Value; d.To.Value == "" {
+						rec["to"] = string(d.To.Kind) // "team"
+					}
+				}
+				jrnl.Append(journal.KindSystem, bus.SenderFacilitator, rec)
+			}
+		}
+	}()
 }
 
 const aliceRole = "You are 'alice', a backend engineer agent in the avairy multi-agent system. " +
