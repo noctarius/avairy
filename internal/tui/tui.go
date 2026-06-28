@@ -974,6 +974,7 @@ func (m *Model) visualLines() []string {
 	return lines
 }
 
+// bodyLines renders the rows for the active tab. Each non-trivial tab has its own builder.
 func (m *Model) bodyLines() []string {
 	switch m.tab {
 	case tabHandovers:
@@ -982,93 +983,109 @@ func (m *Model) bodyLines() []string {
 		}
 		return m.handovers
 	case tabApprovals:
-		pend := m.pendingApprovals()
-		if len(pend) == 0 {
-			return []string{helpStyle.Render("(no pending approvals — gated actions appear here for allow/deny)")}
-		}
-		if m.approvalSel >= len(pend) {
-			m.approvalSel = len(pend) - 1
-		}
-		out := make([]string, 0, len(pend))
-		for i, ap := range pend {
-			marker := "  "
-			if i == m.approvalSel {
-				marker = activeTab.Render("▸ ")
-			}
-			line := fmt.Sprintf("%s%s wants [%s]: %s", marker, ap.AgentID, ap.Kind, ap.Summary)
-			if ap.Reason != "" {
-				line += helpStyle.Render("  — " + ap.Reason)
-			}
-			out = append(out, line)
-		}
-		return out
+		return m.approvalLines()
 	case tabConflicts:
-		pend := m.pendingConflicts()
-		if len(pend) == 0 {
-			return []string{helpStyle.Render("(no conflicts — seed/git conflicts with no owning agent appear here to resolve or delegate)")}
-		}
-		if m.conflictSel >= len(pend) {
-			m.conflictSel = len(pend) - 1
-		}
-		out := make([]string, 0, len(pend))
-		for i, cf := range pend {
-			marker := "  "
-			if i == m.conflictSel {
-				marker = activeTab.Render("▸ ")
-			}
-			if cf.Source == conflictSourceNodeStartup {
-				out = append(out, fmt.Sprintf("%snode %s — startup conflict %s", marker, cf.Path, helpStyle.Render("(r: resync · x: resolve · o: overview)")))
-				if m.conflictExp[cf.ID] && cf.Detail != "" {
-					for _, dl := range strings.Split(cf.Detail, "\n") {
-						out = append(out, helpStyle.Render("      "+dl))
-					}
-				}
-				continue
-			}
-			line := fmt.Sprintf("%s%s (hub v%d, %s) — has git-style markers; edit to resolve", marker, cf.Path, cf.HubVersion, cf.Source)
-			if cf.Detail != "" {
-				line += helpStyle.Render("  — " + cf.Detail)
-			}
-			out = append(out, line)
-		}
-		return out
+		return m.conflictLines()
 	case tabTasks:
-		var tasks []board.Task
-		if m.deps.Tasks != nil {
-			tasks = m.deps.Tasks()
-		}
-		if len(tasks) == 0 {
-			return []string{helpStyle.Render("(no tasks yet)")}
-		}
-		out := make([]string, 0, len(tasks))
-		for _, t := range tasks {
-			claim := t.Claimant
-			if claim == "" {
-				claim = "-"
-			}
-			out = append(out, fmt.Sprintf("%s [%s] %q  requires=%v  claimant=%s", t.ID, t.State, t.Title, t.Requires, claim))
-		}
-		return out
+		return m.taskLines()
 	case tabNotes:
-		var notes []board.Note
-		if m.deps.Notes != nil {
-			notes = m.deps.Notes()
-		}
-		if len(notes) == 0 {
-			return []string{helpStyle.Render("(blackboard empty — agents write durable shared memory here via note(key, text))")}
-		}
-		out := make([]string, 0, len(notes)*2)
-		for _, n := range notes {
-			out = append(out, fmt.Sprintf("%s %s", titleStyle.Render(n.Key), helpStyle.Render("· "+n.Author)))
-			out = append(out, "  "+n.Text)
-		}
-		return out
+		return m.noteLines()
 	default:
 		if len(m.conv) == 0 {
 			return []string{helpStyle.Render("(no messages yet — type below to inject)")}
 		}
 		return m.conv
 	}
+}
+
+func (m *Model) approvalLines() []string {
+	pend := m.pendingApprovals()
+	if len(pend) == 0 {
+		return []string{helpStyle.Render("(no pending approvals — gated actions appear here for allow/deny)")}
+	}
+	if m.approvalSel >= len(pend) {
+		m.approvalSel = len(pend) - 1
+	}
+	out := make([]string, 0, len(pend))
+	for i, ap := range pend {
+		marker := "  "
+		if i == m.approvalSel {
+			marker = activeTab.Render("▸ ")
+		}
+		line := fmt.Sprintf("%s%s wants [%s]: %s", marker, ap.AgentID, ap.Kind, ap.Summary)
+		if ap.Reason != "" {
+			line += helpStyle.Render("  — " + ap.Reason)
+		}
+		out = append(out, line)
+	}
+	return out
+}
+
+func (m *Model) conflictLines() []string {
+	pend := m.pendingConflicts()
+	if len(pend) == 0 {
+		return []string{helpStyle.Render("(no conflicts — seed/git conflicts with no owning agent appear here to resolve or delegate)")}
+	}
+	if m.conflictSel >= len(pend) {
+		m.conflictSel = len(pend) - 1
+	}
+	out := make([]string, 0, len(pend))
+	for i, cf := range pend {
+		marker := "  "
+		if i == m.conflictSel {
+			marker = activeTab.Render("▸ ")
+		}
+		if cf.Source == conflictSourceNodeStartup {
+			out = append(out, fmt.Sprintf("%snode %s — startup conflict %s", marker, cf.Path, helpStyle.Render("(r: resync · x: resolve · o: overview)")))
+			if m.conflictExp[cf.ID] && cf.Detail != "" {
+				for _, dl := range strings.Split(cf.Detail, "\n") {
+					out = append(out, helpStyle.Render("      "+dl))
+				}
+			}
+			continue
+		}
+		line := fmt.Sprintf("%s%s (hub v%d, %s) — has git-style markers; edit to resolve", marker, cf.Path, cf.HubVersion, cf.Source)
+		if cf.Detail != "" {
+			line += helpStyle.Render("  — " + cf.Detail)
+		}
+		out = append(out, line)
+	}
+	return out
+}
+
+func (m *Model) taskLines() []string {
+	var tasks []board.Task
+	if m.deps.Tasks != nil {
+		tasks = m.deps.Tasks()
+	}
+	if len(tasks) == 0 {
+		return []string{helpStyle.Render("(no tasks yet)")}
+	}
+	out := make([]string, 0, len(tasks))
+	for _, t := range tasks {
+		claim := t.Claimant
+		if claim == "" {
+			claim = "-"
+		}
+		out = append(out, fmt.Sprintf("%s [%s] %q  requires=%v  claimant=%s", t.ID, t.State, t.Title, t.Requires, claim))
+	}
+	return out
+}
+
+func (m *Model) noteLines() []string {
+	var notes []board.Note
+	if m.deps.Notes != nil {
+		notes = m.deps.Notes()
+	}
+	if len(notes) == 0 {
+		return []string{helpStyle.Render("(blackboard empty — agents write durable shared memory here via note(key, text))")}
+	}
+	out := make([]string, 0, len(notes)*2)
+	for _, n := range notes {
+		out = append(out, fmt.Sprintf("%s %s", titleStyle.Render(n.Key), helpStyle.Render("· "+n.Author)))
+		out = append(out, "  "+n.Text)
+	}
+	return out
 }
 
 func sep(w int) string {
