@@ -687,81 +687,85 @@ func (m *Model) apply(rec journal.Record) {
 			m.handovers = append(m.handovers, fmt.Sprintf("%s claimed %s — %q", t.Claimant, t.ID, t.Title))
 		}
 	case journal.KindSystem:
-		d, ok := rec.Data.(map[string]any)
-		if !ok {
-			return
+		if d, ok := rec.Data.(map[string]any); ok {
+			m.applySystem(rec.Actor, d)
 		}
-		switch d["event"] {
-		case "report_status":
-			// Only agent self-reports affect the fleet (node-lifecycle records carry a node
-			// id as actor, not an agent — they must not create a phantom fleet entry).
-			if a := m.touchAgent(rec.Actor); a != nil {
-				switch s, _ := d["status"].(string); s {
-				case "blocked", "low_confidence":
-					a.status = "blocked"
-				case "done":
-					a.status = "idle"
-				default:
-					a.status = "working"
-				}
+	}
+}
+
+// applySystem folds a KindSystem record (a {"event": …} payload) into the model: agent/node
+// lifecycle status and the operator-facing notices shown in the conversation.
+func (m *Model) applySystem(actor string, d map[string]any) {
+	switch d["event"] {
+	case "report_status":
+		// Only agent self-reports affect the fleet (node-lifecycle records carry a node id as
+		// actor, not an agent — they must not create a phantom fleet entry).
+		if a := m.touchAgent(actor); a != nil {
+			switch s, _ := d["status"].(string); s {
+			case "blocked", "low_confidence":
+				a.status = "blocked"
+			case "done":
+				a.status = "idle"
+			default:
+				a.status = "working"
 			}
-		case "node_enrolled", "node_rejoined":
-			// A node consumed the enrollment token → refresh the displayed (regenerated) one.
-			if m.control != nil && m.control.CurrentToken != nil {
-				m.token = m.control.CurrentToken()
+		}
+	case "node_enrolled", "node_rejoined":
+		// A node consumed the enrollment token → refresh the displayed (regenerated) one.
+		if m.control != nil && m.control.CurrentToken != nil {
+			m.token = m.control.CurrentToken()
+		}
+	case "node_offline":
+		// Heartbeats lapsed (node id == agent id). Mark an existing fleet entry offline;
+		// don't create one (avoid a phantom for a node that never had an agent).
+		if a := m.agents[actor]; a != nil {
+			a.status = "offline"
+		}
+	case "node_online":
+		if a := m.agents[actor]; a != nil && a.status == "offline" {
+			a.status = "idle" // back in contact; real status follows on its next event
+		}
+	case "consult_opened":
+		if id, _ := d["id"].(string); id != "" {
+			m.addConversation(helpStyle.Render("✓ opened " + id + " (ephemeral) — talk to it with @" + id + " · /end " + id + " when done"))
+		}
+	case "consult_closed":
+		if id, _ := d["id"].(string); id != "" {
+			m.addConversation(helpStyle.Render("✓ closed " + id + " — gone (capture anything kept to the blackboard/tasks)"))
+		}
+	case "response_claimed":
+		if thread, _ := d["thread"].(string); thread != "" {
+			m.addConversation(helpStyle.Render("✋ " + actor + " claimed the team request " + thread + " — others stand down"))
+		}
+	case "facilitator_dispatch":
+		to, _ := d["to"].(string)
+		rule, _ := d["rule"].(string)
+		if to == "" {
+			m.addConversation(helpStyle.Render("⇢ facilitator: no agents available to take it"))
+		} else {
+			m.addConversation(helpStyle.Render("⇢ facilitator routed to " + to + " (" + rule + ")"))
+		}
+	case "agent_sleeping":
+		// Idle teardown (#28): the subprocess is gone; the fleet entry persists as sleeping
+		// and the next directed message respawns it.
+		if a := m.agents[actor]; a != nil {
+			a.status = "sleeping"
+		}
+	case "agent_awake":
+		if a := m.touchAgent(actor); a != nil && a.status == "sleeping" {
+			a.status = "idle" // real status follows on its next event
+		}
+	case "budget_exceeded":
+		scope, _ := d["scope"].(string)
+		spent, _ := d["spent"].(float64)
+		agentID, _ := d["agent"].(string)
+		if scope == "agent" && agentID != "" {
+			if a := m.agents[agentID]; a != nil {
+				a.overBudget = true
 			}
-		case "node_offline":
-			// Heartbeats lapsed (node id == agent id). Mark an existing fleet entry offline;
-			// don't create one (avoid a phantom for a node that never had an agent).
-			if a := m.agents[rec.Actor]; a != nil {
-				a.status = "offline"
-			}
-		case "node_online":
-			if a := m.agents[rec.Actor]; a != nil && a.status == "offline" {
-				a.status = "idle" // back in contact; real status follows on its next event
-			}
-		case "consult_opened":
-			if id, _ := d["id"].(string); id != "" {
-				m.addConversation(helpStyle.Render("✓ opened " + id + " (ephemeral) — talk to it with @" + id + " · /end " + id + " when done"))
-			}
-		case "consult_closed":
-			if id, _ := d["id"].(string); id != "" {
-				m.addConversation(helpStyle.Render("✓ closed " + id + " — gone (capture anything kept to the blackboard/tasks)"))
-			}
-		case "response_claimed":
-			if thread, _ := d["thread"].(string); thread != "" {
-				m.addConversation(helpStyle.Render("✋ " + rec.Actor + " claimed the team request " + thread + " — others stand down"))
-			}
-		case "facilitator_dispatch":
-			to, _ := d["to"].(string)
-			rule, _ := d["rule"].(string)
-			if to == "" {
-				m.addConversation(helpStyle.Render("⇢ facilitator: no agents available to take it"))
-			} else {
-				m.addConversation(helpStyle.Render("⇢ facilitator routed to " + to + " (" + rule + ")"))
-			}
-		case "agent_sleeping":
-			// Idle teardown (#28): the subprocess is gone; the fleet entry persists as sleeping
-			// and the next directed message respawns it.
-			if a := m.agents[rec.Actor]; a != nil {
-				a.status = "sleeping"
-			}
-		case "agent_awake":
-			if a := m.touchAgent(rec.Actor); a != nil && a.status == "sleeping" {
-				a.status = "idle" // real status follows on its next event
-			}
-		case "budget_exceeded":
-			scope, _ := d["scope"].(string)
-			spent, _ := d["spent"].(float64)
-			agentID, _ := d["agent"].(string)
-			if scope == "agent" && agentID != "" {
-				if a := m.agents[agentID]; a != nil {
-					a.overBudget = true
-				}
-				m.addConversation(warnStyle.Render(fmt.Sprintf("⚠ %s exceeded its budget ($%.2f) — interrupted", agentID, spent)))
-			} else {
-				m.addConversation(warnStyle.Render(fmt.Sprintf("⚠ fleet exceeded its budget ($%.2f) — all agents interrupted", spent)))
-			}
+			m.addConversation(warnStyle.Render(fmt.Sprintf("⚠ %s exceeded its budget ($%.2f) — interrupted", agentID, spent)))
+		} else {
+			m.addConversation(warnStyle.Render(fmt.Sprintf("⚠ fleet exceeded its budget ($%.2f) — all agents interrupted", spent)))
 		}
 	}
 }
