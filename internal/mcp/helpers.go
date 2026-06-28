@@ -8,20 +8,36 @@ import (
 	"avairy/internal/bus"
 )
 
+// addrString renders a bus address for the wire (read_inbox): "all"/"team" for the fan-out kinds,
+// else "agent:<id>"/"role:<name>". Lets an agent see a message is a team request and claim it.
+func addrString(a bus.Addr) string {
+	switch a.Kind {
+	case bus.ToBroadcast:
+		return "all"
+	case bus.ToTeam:
+		return "team"
+	default:
+		return string(a.Kind) + ":" + a.Value
+	}
+}
+
 // agentFromContext returns the caller agent id resolved by the HTTP transport.
 func agentFromContext(ctx context.Context) string {
 	v, _ := ctx.Value(agentKey).(string)
 	return v
 }
 
-// parseAddr parses a bus address string: "broadcast", "agent:<id>", or "role:<name>".
+// parseAddr parses a bus address string: "broadcast"/"all", "team", "agent:<id>", or "role:<name>".
 func parseAddr(to string) (bus.Addr, error) {
-	if to == "broadcast" {
+	switch to {
+	case "broadcast", "all":
 		return bus.Broadcast(), nil
+	case "team":
+		return bus.Team(), nil
 	}
 	kind, val, ok := strings.Cut(to, ":")
 	if !ok || val == "" {
-		return bus.Addr{}, fmt.Errorf("invalid address %q (want broadcast | agent:<id> | role:<name>)", to)
+		return bus.Addr{}, fmt.Errorf("invalid address %q (want all | team | agent:<id> | role:<name>)", to)
 	}
 	switch kind {
 	case "agent":

@@ -20,6 +20,7 @@ const (
 	ToAgent     ToKind = "agent"     // a specific agent id
 	ToRole      ToKind = "role"      // fan-out to everyone holding a role
 	ToBroadcast ToKind = "broadcast" // everyone but the sender
+	ToTeam      ToKind = "team"      // everyone, but exactly one should claim it and answer (claim_response)
 )
 
 // Senders whose messages always wake the recipient (#25): the operator and the facilitator are
@@ -41,6 +42,7 @@ type Addr struct {
 func Agent(id string) Addr { return Addr{ToAgent, id} }
 func Role(r string) Addr   { return Addr{ToRole, r} }
 func Broadcast() Addr      { return Addr{ToBroadcast, ""} }
+func Team() Addr           { return Addr{ToTeam, ""} }
 
 // Message is one routed message.
 type Message struct {
@@ -95,9 +97,10 @@ func (w *Waker) Wake(from string, kind ToKind, interrupt bool, now time.Time) bo
 	if interrupt || from == SenderHuman || from == SenderFacilitator {
 		return true
 	}
-	if kind != ToAgent {
+	if kind != ToAgent && kind != ToTeam {
 		return false // agent → broadcast/role: deliver as context, don't trigger a turn
 	}
+	// agent → team: a coordination request; wake within the budget so a peer can claim it.
 	cut := now.Add(-w.window)
 	kept := w.recent[:0]
 	for _, t := range w.recent {
@@ -190,8 +193,8 @@ func (b *Bus) matches(s *subscriber, msg Message) bool {
 		return false // never echo a message back to its sender
 	}
 	switch msg.To.Kind {
-	case ToBroadcast:
-		return true
+	case ToBroadcast, ToTeam:
+		return true // everyone sees it; for a team request, one will claim it and the rest stand down
 	case ToAgent:
 		return s.agentID == msg.To.Value
 	case ToRole:

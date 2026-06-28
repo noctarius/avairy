@@ -164,8 +164,11 @@ func delegateBody(oc control.OperatorConflict) string {
 
 // addrOf maps an operator target string to a bus address ("" or "broadcast" → broadcast).
 func addrOf(target string) bus.Addr {
-	if target == "" || target == "broadcast" {
+	switch target {
+	case "", "broadcast", "all":
 		return bus.Broadcast()
+	case "team":
+		return bus.Team() // one agent claims it and answers (claim_response); the rest stand down
 	}
 	return bus.Agent(target)
 }

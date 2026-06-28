@@ -53,6 +53,11 @@ type Server struct {
 
 	mu     sync.Mutex
 	agents map[string]*registered
+
+	// claims arbitrates @team request ownership: thread id -> who claimed it + when (claim_response).
+	claimMu sync.Mutex
+	claims  map[string]claim
+	now     func() time.Time // injectable clock (claim TTL); defaults to time.Now
 }
 
 type registered struct {
@@ -72,6 +77,7 @@ type registered struct {
 type inboxMessage struct {
 	ID       string `json:"id"`
 	From     string `json:"from"`
+	To       string `json:"to"` // "all" | "team" | "agent:<id>" | "role:<name>" — "team" means claim_response first
 	Body     string `json:"body"`
 	Delivery string `json:"delivery"`
 	Time     string `json:"time"`
@@ -86,6 +92,8 @@ func NewServer(b *bus.Bus, bd *board.Board, j journal.Log) *Server {
 		blackboard: board.NewBlackboard(j),
 		jrnl:       j,
 		agents:     make(map[string]*registered),
+		claims:     make(map[string]claim),
+		now:        time.Now,
 		resolve:    func(r *http.Request) string { return r.Header.Get("X-Avairy-Agent") },
 	}
 	s.registerTools()
@@ -106,6 +114,7 @@ func (s *Server) registerTools() {
 	s.registerClaimTask()
 	s.registerListTasks()
 	s.registerReportStatus()
+	s.registerClaimResponse()
 }
 
 // MCP returns the underlying mcp-go server (for tests / extra transports).
@@ -192,6 +201,7 @@ func drainInbox(reg *registered) []inboxMessage {
 			out = append(out, inboxMessage{
 				ID:       m.ID,
 				From:     m.From,
+				To:       addrString(m.To),
 				Body:     m.Body,
 				Delivery: string(m.Delivery),
 				Time:     m.Time.Format(time.RFC3339Nano),

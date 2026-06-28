@@ -265,7 +265,7 @@ function sysline(text){
   const p=document.createElement("span"); p.className="syspill"; p.textContent=text;
   row.appendChild(p); logwrap.appendChild(row); if(stick) toBottom();
 }
-function addrStr(to){ if(!to) return ""; return to.Kind==="broadcast" ? "all" : to.Kind+":"+to.Value; }
+function addrStr(to){ if(!to) return ""; if(to.Kind==="broadcast") return "all"; if(to.Kind==="team") return "team"; return to.Kind+":"+to.Value; }
 // Mirror of agent.ToolSummary: tool name + its identifying arg (command / file / pattern …), so
 // the transcript shows "Bash: go test ./…" rather than a bare "Bash".
 function toolSummary(t){
@@ -311,6 +311,7 @@ function applySystem(actor, d){
     case "conflict_raised": sysline(`conflict on ${d.path} needs resolution`); break;
     case "consult_opened": if(d.id) sysline(`opened ${d.id} (ephemeral) — @${d.id} to talk · /end ${d.id}`); break;
     case "consult_closed": if(d.id) sysline(`closed ${d.id} — gone`); break;
+    case "response_claimed": if(d.thread) sysline(`✋ ${actor} claimed the team request ${d.thread} — others stand down`); break;
     case "agent_sleeping": if(agents.has(actor)){ setStatus(actor,"sleeping"); sysline(`${actor} went to sleep (idle) — a message wakes it`); } break;
     case "agent_awake": if(agents.get(actor)==="sleeping") setStatus(actor,"idle"); break;
     case "budget_exceeded": {

@@ -724,6 +724,10 @@ func (m *Model) apply(rec journal.Record) {
 			if id, _ := d["id"].(string); id != "" {
 				m.addConversation(helpStyle.Render("✓ closed " + id + " — gone (capture anything kept to the blackboard/tasks)"))
 			}
+		case "response_claimed":
+			if thread, _ := d["thread"].(string); thread != "" {
+				m.addConversation(helpStyle.Render("✋ " + rec.Actor + " claimed the team request " + thread + " — others stand down"))
+			}
 		case "agent_sleeping":
 			// Idle teardown (#28): the subprocess is gone; the fleet entry persists as sleeping
 			// and the next directed message respawns it.
@@ -786,6 +790,8 @@ func addrStr(a bus.Addr) string {
 	switch a.Kind {
 	case bus.ToBroadcast:
 		return "all"
+	case bus.ToTeam:
+		return "team"
 	default:
 		return string(a.Kind) + ":" + a.Value
 	}

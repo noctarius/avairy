@@ -49,7 +49,7 @@ func (s *Server) handleSendMessage(ctx context.Context, req mcpgo.CallToolReques
 	// Reject a directed message that reaches no one, so the sender learns its address was wrong
 	// instead of getting a false "sent" (a silent drop is what hid the role:macos bug). Broadcast
 	// is a fan-out, not a targeted address, so it's always allowed.
-	if addr.Kind != bus.ToBroadcast && !s.hasRecipient(from, addr) {
+	if addr.Kind != bus.ToBroadcast && addr.Kind != bus.ToTeam && !s.hasRecipient(from, addr) {
 		return mcpgo.NewToolResultError("send_message: no agent matches " + to + " — call list_agents to see who's reachable (address a specific peer as agent:<id>)"), nil
 	}
 	delivery := agent.DeliverySteer

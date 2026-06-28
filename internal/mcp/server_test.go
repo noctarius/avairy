@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 
@@ -172,5 +173,74 @@ func TestSendMessageRejectsUnaddressable(t *testing.T) {
 	}
 	if res := must(s.handleSendMessage(asAgent("alice"), call(map[string]any{"to": "broadcast", "body": "hi"}))); res.IsError {
 		t.Fatalf("broadcast should always be allowed: %s", resultText(res))
+	}
+}
+
+// A @team request must be claimed by exactly one agent: the first claim_response wins, others are
+// told to stand down, the owner can re-affirm, and the claim is journaled so the fleet sees it.
+func TestClaimResponseFirstWins(t *testing.T) {
+	s, j := newTestServer(t)
+	s.RegisterAgent("linux", AgentRoles("linux", map[string]string{"os": "linux"}), map[string]string{"os": "linux"})
+	s.RegisterAgent("macos", AgentRoles("macos", map[string]string{"os": "darwin"}), map[string]string{"os": "darwin"})
+
+	r1 := resultText(must(s.handleClaimResponse(asAgent("linux"), call(map[string]any{"thread_id": "m1"}))))
+	if !strings.Contains(r1, "granted") {
+		t.Fatalf("first claimant should win: %q", r1)
+	}
+	r2 := resultText(must(s.handleClaimResponse(asAgent("macos"), call(map[string]any{"thread_id": "m1"}))))
+	if strings.Contains(r2, "granted") || !strings.Contains(r2, "linux") {
+		t.Fatalf("second claimant should be denied and told who owns it: %q", r2)
+	}
+	// The owner re-affirming is fine (idempotent).
+	if r3 := resultText(must(s.handleClaimResponse(asAgent("linux"), call(map[string]any{"thread_id": "m1"})))); !strings.Contains(r3, "granted") {
+		t.Fatalf("owner re-claim should still be granted: %q", r3)
+	}
+	// Journaled once for visibility.
+	n := 0
+	for _, r := range j.Records() {
+		if d, ok := r.Data.(map[string]any); ok && d["event"] == "response_claimed" && d["thread"] == "m1" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("expected one response_claimed journal record, got %d", n)
+	}
+}
+
+// A claim whose lease has expired (TTL) may be taken over by another agent.
+func TestClaimResponseExpires(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.RegisterAgent("linux", AgentRoles("linux", nil), nil)
+	s.RegisterAgent("macos", AgentRoles("macos", nil), nil)
+
+	now := time.Unix(0, 0)
+	s.now = func() time.Time { return now }
+	resultText(must(s.handleClaimResponse(asAgent("linux"), call(map[string]any{"thread_id": "m1"}))))
+
+	now = now.Add(claimTTL + time.Second) // linux's lease has lapsed
+	if r := resultText(must(s.handleClaimResponse(asAgent("macos"), call(map[string]any{"thread_id": "m1"})))); !strings.Contains(r, "granted") {
+		t.Fatalf("an expired claim should be reclaimable: %q", r)
+	}
+}
+
+// A "team" message reaches every agent and read_inbox tags it to:"team" so the agent knows to
+// claim_response before answering (rather than all replying).
+func TestTeamMessageVisibleToAll(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.RegisterAgent("linux", AgentRoles("linux", map[string]string{"os": "linux"}), map[string]string{"os": "linux"})
+	s.RegisterAgent("macos", AgentRoles("macos", map[string]string{"os": "darwin"}), map[string]string{"os": "darwin"})
+
+	if res := must(s.handleSendMessage(asAgent("human"), call(map[string]any{"to": "team", "body": "who can run the lottery?"}))); res.IsError {
+		t.Fatalf("team send should be accepted: %s", resultText(res))
+	}
+	for _, who := range []string{"linux", "macos"} {
+		res := must(s.handleReadInbox(asAgent(who), call(nil)))
+		var msgs []inboxMessage
+		if err := json.Unmarshal([]byte(mustText(t, res)), &msgs); err != nil {
+			t.Fatalf("%s inbox json: %v", who, err)
+		}
+		if len(msgs) != 1 || msgs[0].To != "team" || msgs[0].Body != "who can run the lottery?" {
+			t.Fatalf("%s inbox = %+v, want one to:team message", who, msgs)
+		}
 	}
 }
