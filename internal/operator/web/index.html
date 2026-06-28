@@ -475,7 +475,10 @@ function connect(){
   const es=new EventSource("/operator/stream"+authq);
   const live=()=>{ $("conn").className="dot ok"; $("connTxt").textContent="live"; };
   es.onmessage=e=>{ try{ applyRecord(JSON.parse(e.data)); }catch(err){} };
-  es.addEventListener("ready", live);
+  // "ready" = the full backfill has replayed. Jump to the newest message: the per-message
+  // stick-to-bottom can drop out mid-replay (a tall message) and markdown/highlight relayout
+  // shifts the position, so force it once layout settles (rAF = after the appended content lays out).
+  es.addEventListener("ready", ()=>{ live(); requestAnimationFrame(toBottom); });
   es.onopen=live;
   es.onerror=()=>{ $("conn").className="dot warn"; $("connTxt").textContent="reconnecting…"; };
 }
