@@ -183,6 +183,27 @@ func TestLoop_CycleDetection(t *testing.T) {
 	}
 }
 
+// Editing the same file several times in a row is building up a change — progress, not a loop. The
+// loop signature can't see edit *content* (remote agents don't even journal old/new strings), so
+// three consecutive Edits to one file look identical; they must NOT trip the detector and fire a
+// spurious fresh-look. A genuine edit↔test oscillation that never resolves IS still a loop.
+func TestLoop_RepeatedFileEditsAreNotALoop(t *testing.T) {
+	edit := func(path string) agent.Event {
+		return agent.Event{Type: agent.EventToolUse, Tool: &agent.ToolCall{Name: "Edit", Input: map[string]any{"file_path": path}}}
+	}
+	e := edit("buffers.c")
+	if n := loopFires([]agent.Event{e, e, e}); n != 0 {
+		t.Fatalf("three edits to the same file is progress, not a loop; fired %d", n)
+	}
+	if n := loopFires([]agent.Event{e, e, e, e, e, e}); n != 0 {
+		t.Fatalf("repeated same-file edits must never trip the loop detector; fired %d", n)
+	}
+	// But edit ↔ test oscillation that never converges is still a loop.
+	if n := loopFires([]agent.Event{e, toolEv("make test"), e, toolEv("make test"), e, toolEv("make test")}); n != 1 {
+		t.Fatalf("edit↔test oscillation should still be a loop; fired %d", n)
+	}
+}
+
 // Circling detection (#14a): an agent churning the same few actions in no fixed order has no
 // period (so the cycle detector stays silent), but introduces no new action for a stretch → a loop.
 func TestLoop_CirclingDetection(t *testing.T) {

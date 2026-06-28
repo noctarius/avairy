@@ -190,7 +190,7 @@ func (f *Facilitator) detect(rec journal.Record) (Trigger, bool) {
 			return Trigger{}, false
 		}
 		if sig := signature(ev); sig != "" {
-			return f.trackLoop(rec.Actor, sig)
+			return f.trackLoop(rec.Actor, sig, mutatesFiles(ev.Tool))
 		}
 	}
 	return Trigger{}, false
@@ -205,10 +205,18 @@ const loopMaxPeriod = 4
 // (ping-ponging between two fixes). Interleaved reasoning is already filtered out (signature
 // only tracks tool actions), so retries with thinking in between still register. Resets on a
 // hit to avoid re-firing on the same loop.
-func (f *Facilitator) trackLoop(agentID, sig string) (Trigger, bool) {
+func (f *Facilitator) trackLoop(agentID, sig string, mutating bool) (Trigger, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	old := f.recent[agentID]
+	// A file-mutating action repeated back-to-back (e.g. several Edits to the same file) is building
+	// up a change, not looping — and the signature can't see the differing content, so the edits look
+	// identical. Treat it as progress: don't grow the window with the duplicate, and clear the
+	// circling counter. Interleaved repeats (edit↔test oscillation) are untouched and still detected.
+	if mutating && len(old) > 0 && old[len(old)-1] == sig {
+		f.stale[agentID] = 0
+		return Trigger{}, false
+	}
 	novel := !slices.Contains(old, sig) // a never-seen-this-window action = progress
 	w := append(old, sig)
 	if maxLen := loopMaxPeriod * f.loopN; len(w) > maxLen {
@@ -324,4 +332,14 @@ func signature(ev agent.Event) string {
 		return "tool:" + agent.ToolSummary(ev.Tool)
 	}
 	return ""
+}
+
+// fileMutators are tools that change the workspace: repeating one is progress (a new change), not
+// the stuck-repetition the loop detector hunts for. Covers the common families' edit/write tools.
+var fileMutators = map[string]bool{
+	"Edit": true, "Write": true, "MultiEdit": true, "NotebookEdit": true, "apply_patch": true,
+}
+
+func mutatesFiles(tc *agent.ToolCall) bool {
+	return tc != nil && fileMutators[tc.Name]
 }
