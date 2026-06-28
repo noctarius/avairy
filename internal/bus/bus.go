@@ -17,10 +17,11 @@ import (
 type ToKind string
 
 const (
-	ToAgent     ToKind = "agent"     // a specific agent id
-	ToRole      ToKind = "role"      // fan-out to everyone holding a role
-	ToBroadcast ToKind = "broadcast" // everyone but the sender
-	ToTeam      ToKind = "team"      // everyone, but exactly one should claim it and answer (claim_response)
+	ToAgent       ToKind = "agent"       // a specific agent id
+	ToRole        ToKind = "role"        // fan-out to everyone holding a role
+	ToBroadcast   ToKind = "broadcast"   // everyone but the sender
+	ToTeam        ToKind = "team"        // everyone, but exactly one should claim it and answer (claim_response)
+	ToFacilitator ToKind = "facilitator" // the facilitator dispatcher: triage + assign to one agent
 )
 
 // Senders whose messages always wake the recipient (#25): the operator and the facilitator are
@@ -43,6 +44,7 @@ func Agent(id string) Addr { return Addr{ToAgent, id} }
 func Role(r string) Addr   { return Addr{ToRole, r} }
 func Broadcast() Addr      { return Addr{ToBroadcast, ""} }
 func Team() Addr           { return Addr{ToTeam, ""} }
+func Facilitator() Addr    { return Addr{ToFacilitator, ""} }
 
 // Message is one routed message.
 type Message struct {
@@ -199,6 +201,8 @@ func (b *Bus) matches(s *subscriber, msg Message) bool {
 		return s.agentID == msg.To.Value
 	case ToRole:
 		return s.roles[msg.To.Value]
+	case ToFacilitator:
+		return s.agentID == SenderFacilitator // only the dispatcher loop receives it, not the agents
 	default:
 		return false
 	}

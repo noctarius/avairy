@@ -21,6 +21,8 @@ func (s *Server) registerSendMessage() {
 				"  agent:<id>   — one specific agent (use an id from list_agents). Wakes it; use this to ask a peer to act.\n"+
 				"  role:<name>  — every agent with that role; delivered as context, does not wake. An agent is also\n"+
 				"                 reachable as role:<its id> and role:<its os> (e.g. role:macos, role:darwin).\n"+
+				"  team         — the whole team, but exactly ONE should claim it (claim_response) and answer.\n"+
+				"  facilitator  — ask the coordinator to pick the best agent for this and assign it.\n"+
 				"  broadcast    — everyone; context only, does not wake.\n"+
 				"A directed send that matches nobody is rejected with an error — call list_agents to see who's reachable.")),
 		mcpgo.WithString("body", mcpgo.Required(), mcpgo.Description("Message text")),
@@ -49,7 +51,7 @@ func (s *Server) handleSendMessage(ctx context.Context, req mcpgo.CallToolReques
 	// Reject a directed message that reaches no one, so the sender learns its address was wrong
 	// instead of getting a false "sent" (a silent drop is what hid the role:macos bug). Broadcast
 	// is a fan-out, not a targeted address, so it's always allowed.
-	if addr.Kind != bus.ToBroadcast && addr.Kind != bus.ToTeam && !s.hasRecipient(from, addr) {
+	if (addr.Kind == bus.ToAgent || addr.Kind == bus.ToRole) && !s.hasRecipient(from, addr) {
 		return mcpgo.NewToolResultError("send_message: no agent matches " + to + " — call list_agents to see who's reachable (address a specific peer as agent:<id>)"), nil
 	}
 	delivery := agent.DeliverySteer

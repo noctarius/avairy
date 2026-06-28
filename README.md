@@ -41,7 +41,7 @@ go run ./cmd/avairy -demo
 A TUI opens with two mock agents, `alice` and `bob`. (Without `-demo`, avairy starts **no
 local agents** — you bring them via `avairy-node` or `-live`.)
 
-- Type `@alice <message>` to address an agent; a bare line broadcasts to everyone.
+- Type `@alice <message>` to address an agent; a bare line broadcasts to everyone. Three group addresses coordinate *how* the fleet responds: `@all` (everyone answers), `@team` (everyone sees it but exactly one **claims** it and answers — the rest stand down), and `@facilitator` (a coordinator triages and auto-assigns the best-suited agent, or opens a `@team` claim). The recipient selector (`ctrl+t` in the TUI / dropdown on the web) lists them.
 - **Enter** sends; **Shift+Enter** (Kitty-protocol terminals) / **Option·Alt+Enter** / **Ctrl+J** insert a newline.
 - `tab` cycles **Conversation / Handovers / Tasks / Approvals / Conflicts**; **Esc** stops running agents; **Ctrl+C twice** quits.
 - On the **Approvals** tab, `↑/↓` (or `j/k`) selects a pending gated action; **`y`** allows it once, **`a`** allows that kind from that agent for the rest of the session, **`n`** denies. The tab shows a `(N)` badge while any are waiting.

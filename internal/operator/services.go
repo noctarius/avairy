@@ -169,6 +169,8 @@ func addrOf(target string) bus.Addr {
 		return bus.Broadcast()
 	case "team":
 		return bus.Team() // one agent claims it and answers (claim_response); the rest stand down
+	case "facilitator":
+		return bus.Facilitator() // triage: pick/assign one agent
 	}
 	return bus.Agent(target)
 }

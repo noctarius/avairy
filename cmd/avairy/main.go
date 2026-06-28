@@ -38,6 +38,7 @@ import (
 	"avairy/internal/bus"
 	"avairy/internal/control"
 	"avairy/internal/cost"
+	"avairy/internal/dispatch"
 	"avairy/internal/facilitator"
 	"avairy/internal/gating"
 	"avairy/internal/git"
@@ -523,6 +524,50 @@ func main() {
 	costSub, _ := jrnl.Subscribe()
 	go costMon.Run(costSub)
 
+	// @facilitator dispatch (#team phase 2): a request addressed to the facilitator is triaged here
+	// via a cascade — deterministic rules first (no agents / sole candidate), an ephemeral LLM picker
+	// as the fallback for several candidates — and auto-assigned to one agent (or opened as a @team
+	// claim), journaled so the operator sees the routing. Only the dispatcher loop receives @facilitator
+	// messages; the agents don't.
+	facInbox, _ := b.Subscribe(bus.SenderFacilitator)
+	llmDispatch := *live || *controlAddr != "" // an LLM picker needs a real agent family
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case req, ok := <-facInbox:
+				if !ok {
+					return
+				}
+				if req.Interrupt {
+					continue
+				}
+				roster := mcpSrv.AgentList()
+				var workers []string
+				for _, m := range roster {
+					if m.ID == req.From || strings.HasPrefix(m.ID, "consult-") {
+						continue // don't route a request back to its sender or to an ephemeral consult
+					}
+					workers = append(workers, m.ID)
+				}
+				var pick func() string
+				if llmDispatch && len(workers) > 1 {
+					pick = func() string { return pickWorker(ctx, *family, *model, req.Body, roster, workers) }
+				}
+				d, routed := dispatch.Decide(workers, pick)
+				rec := map[string]any{"event": "facilitator_dispatch", "rule": d.Rule, "request": req.Body}
+				if routed {
+					b.Publish(bus.SenderFacilitator, d.To, req.Body, agent.DeliverySteer)
+					if rec["to"] = d.To.Value; d.To.Value == "" {
+						rec["to"] = string(d.To.Kind) // "team"
+					}
+				}
+				jrnl.Append(journal.KindSystem, bus.SenderFacilitator, rec)
+			}
+		}
+	}()
+
 	caps := map[string]string{"os": runtime.GOOS}
 
 	// Local agents are opt-in: none by default (bring agents via avairy-node). -live runs one
@@ -850,6 +895,43 @@ func freshLookAdapter(family string) agent.Adapter {
 		ca.ExtraArgs = []string{"--allowedTools", ""} // no tools — pure reasoning
 		return ca
 	}
+}
+
+// dispatchRole steers the ephemeral picker used by @facilitator: choose ONE agent by capability.
+const dispatchRole = "You are a dispatcher. Choose the single best-suited agent for a request based " +
+	"on the agents' capabilities and roles. Reply with ONLY one agent id, or the word \"team\" if any " +
+	"of them could handle it equally well. No explanation, no punctuation."
+
+// pickWorker asks an ephemeral one-shot session which agent should own a request (#team phase 2).
+// Returns the chosen id (or "team"); on any error or garbage, an empty/unknown string, which the
+// dispatch cascade treats as "open a team claim".
+func pickWorker(ctx context.Context, family, model, request string, roster []mcp.AgentMeta, workers []string) string {
+	ws, err := os.MkdirTemp("", "avairy-dispatch-")
+	if err != nil {
+		return ""
+	}
+	defer os.RemoveAll(ws)
+	want := make(map[string]bool, len(workers))
+	for _, w := range workers {
+		want[w] = true
+	}
+	var b strings.Builder
+	for _, m := range roster {
+		if want[m.ID] {
+			fmt.Fprintf(&b, "- %s (caps: %v, roles: %v)\n", m.ID, m.Caps, m.Roles)
+		}
+	}
+	prompt := "An operator needs exactly ONE agent to own this request:\n\n" + request +
+		"\n\nAvailable agents:\n" + b.String() + "\nReply with ONLY the best-suited id, or \"team\"."
+	out, err := oneShot(ctx, freshLookAdapter(family), dispatchRole, model, ws, prompt)
+	if err != nil {
+		return ""
+	}
+	out = strings.Trim(strings.TrimSpace(out), "\"'`.")
+	if i := strings.IndexAny(out, " \n\t"); i >= 0 {
+		out = out[:i] // first token only
+	}
+	return out
 }
 
 // oneShot runs one ephemeral turn: start a fresh session, send prompt, collect assistant text

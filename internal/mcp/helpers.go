@@ -16,6 +16,8 @@ func addrString(a bus.Addr) string {
 		return "all"
 	case bus.ToTeam:
 		return "team"
+	case bus.ToFacilitator:
+		return "facilitator"
 	default:
 		return string(a.Kind) + ":" + a.Value
 	}
@@ -34,10 +36,12 @@ func parseAddr(to string) (bus.Addr, error) {
 		return bus.Broadcast(), nil
 	case "team":
 		return bus.Team(), nil
+	case "facilitator":
+		return bus.Facilitator(), nil
 	}
 	kind, val, ok := strings.Cut(to, ":")
 	if !ok || val == "" {
-		return bus.Addr{}, fmt.Errorf("invalid address %q (want all | team | agent:<id> | role:<name>)", to)
+		return bus.Addr{}, fmt.Errorf("invalid address %q (want all | team | facilitator | agent:<id> | role:<name>)", to)
 	}
 	switch kind {
 	case "agent":

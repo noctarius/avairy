@@ -357,14 +357,21 @@ func TestRecipientSelector(t *testing.T) {
 		t.Fatalf("plain text → selectedTarget=%q", got)
 	}
 
-	// selector → input (cycle: broadcast → alice → bob), preserving the body
+	// selector → input (cycle: broadcast → team → facilitator → alice → bob), preserving the body
 	m.cycleTarget(1)
-	if got := m.input.Value(); got != "@alice hello" {
+	if got := m.input.Value(); got != "@team hello" {
 		t.Fatalf("cycle 1 → %q", got)
 	}
+	if got := m.selectedTarget(); got != "team" {
+		t.Fatalf("@team → selectedTarget=%q", got)
+	}
 	m.cycleTarget(1)
-	if got := m.input.Value(); got != "@bob hello" {
+	if got := m.input.Value(); got != "@facilitator hello" {
 		t.Fatalf("cycle 2 → %q", got)
+	}
+	m.cycleTarget(1)
+	if got := m.input.Value(); got != "@alice hello" {
+		t.Fatalf("cycle 3 → %q", got)
 	}
 	m.setTarget("broadcast")
 	if got := m.input.Value(); got != "hello" {

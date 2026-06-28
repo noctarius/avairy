@@ -265,7 +265,7 @@ function sysline(text){
   const p=document.createElement("span"); p.className="syspill"; p.textContent=text;
   row.appendChild(p); logwrap.appendChild(row); if(stick) toBottom();
 }
-function addrStr(to){ if(!to) return ""; if(to.Kind==="broadcast") return "all"; if(to.Kind==="team") return "team"; return to.Kind+":"+to.Value; }
+function addrStr(to){ if(!to) return ""; if(to.Kind==="broadcast") return "all"; if(to.Kind==="team") return "team"; if(to.Kind==="facilitator") return "facilitator"; return to.Kind+":"+to.Value; }
 // Mirror of agent.ToolSummary: tool name + its identifying arg (command / file / pattern …), so
 // the transcript shows "Bash: go test ./…" rather than a bare "Bash".
 function toolSummary(t){
@@ -312,6 +312,7 @@ function applySystem(actor, d){
     case "consult_opened": if(d.id) sysline(`opened ${d.id} (ephemeral) — @${d.id} to talk · /end ${d.id}`); break;
     case "consult_closed": if(d.id) sysline(`closed ${d.id} — gone`); break;
     case "response_claimed": if(d.thread) sysline(`✋ ${actor} claimed the team request ${d.thread} — others stand down`); break;
+    case "facilitator_dispatch": sysline(d.to ? `⇢ facilitator routed to ${d.to} (${d.rule})` : `⇢ facilitator: no agents available to take it`); break;
     case "agent_sleeping": if(agents.has(actor)){ setStatus(actor,"sleeping"); sysline(`${actor} went to sleep (idle) — a message wakes it`); } break;
     case "agent_awake": if(agents.get(actor)==="sleeping") setStatus(actor,"idle"); break;
     case "budget_exceeded": {
@@ -365,7 +366,11 @@ function renderNotes(notes){
 function agentOptions(sel, includeBroadcast){
   const cur=sel.value;
   sel.innerHTML="";
-  if(includeBroadcast){ const o=document.createElement("option"); o.value=""; o.textContent="broadcast"; sel.appendChild(o); }
+  if(includeBroadcast){
+    [["","broadcast"],["team","team (one claims)"],["facilitator","facilitator (triage)"]].forEach(([v,t])=>{
+      const o=document.createElement("option"); o.value=v; o.textContent=t; sel.appendChild(o);
+    });
+  }
   [...agents.keys()].sort().forEach(id=>{ const o=document.createElement("option"); o.value=id; o.textContent="@"+id; sel.appendChild(o); });
   if([...sel.options].some(o=>o.value===cur)) sel.value=cur;
 }

@@ -475,13 +475,17 @@ func splitMention(s string) (mention, rest string) {
 func (m *Model) targets() []string {
 	ag := append([]string(nil), m.agentOrder...)
 	sort.Strings(ag)
-	return append([]string{"broadcast"}, ag...)
+	// broadcast = everyone answers; team = one claims it; facilitator = triage + assign one.
+	return append([]string{"broadcast", "team", "facilitator"}, ag...)
 }
 
 // selectedTarget derives the current recipient from the input's @mention (broadcast if none
 // or unknown) — this is what keeps the selector in sync when you type "@name".
 func (m *Model) selectedTarget() string {
 	if mention, _ := splitMention(m.input.Value()); mention != "" {
+		if mention == "team" || mention == "facilitator" {
+			return mention
+		}
 		for _, id := range m.agentOrder {
 			if id == mention {
 				return mention
@@ -728,6 +732,14 @@ func (m *Model) apply(rec journal.Record) {
 			if thread, _ := d["thread"].(string); thread != "" {
 				m.addConversation(helpStyle.Render("✋ " + rec.Actor + " claimed the team request " + thread + " — others stand down"))
 			}
+		case "facilitator_dispatch":
+			to, _ := d["to"].(string)
+			rule, _ := d["rule"].(string)
+			if to == "" {
+				m.addConversation(helpStyle.Render("⇢ facilitator: no agents available to take it"))
+			} else {
+				m.addConversation(helpStyle.Render("⇢ facilitator routed to " + to + " (" + rule + ")"))
+			}
 		case "agent_sleeping":
 			// Idle teardown (#28): the subprocess is gone; the fleet entry persists as sleeping
 			// and the next directed message respawns it.
@@ -792,6 +804,8 @@ func addrStr(a bus.Addr) string {
 		return "all"
 	case bus.ToTeam:
 		return "team"
+	case bus.ToFacilitator:
+		return "facilitator"
 	default:
 		return string(a.Kind) + ":" + a.Value
 	}
