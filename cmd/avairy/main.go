@@ -13,7 +13,6 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -27,6 +26,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/urfave/cli/v3"
 
 	"avairy/internal/adapter"
 	"avairy/internal/adapter/claudecode"
@@ -51,55 +52,106 @@ import (
 )
 
 func main() {
-	// `avairy hook -gate <url>` is the PreToolUse hook shim a locally-spawned Claude invokes
-	// per tool call; it must run before flag parsing (its args are its own).
-	if len(os.Args) > 1 && os.Args[1] == "hook" {
-		gating.RunHookShim(os.Args[2:])
-		return
+	app := &cli.Command{
+		Name:    "avairy",
+		Usage:   "orchestrate a fleet of AI coding agents across machines",
+		Version: buildinfo.Version,
+		Commands: []*cli.Command{
+			coreCommand(),
+			hookCommand(),
+			{Name: "version", Usage: "print the build version", Action: func(context.Context, *cli.Command) error {
+				fmt.Println(buildinfo.String())
+				return nil
+			}},
+		},
 	}
-	// `avairy mint-join -id <node> -core <https-url>` issues an mTLS client-cert join (no token)
-	// from the self-managed CA under .avairy, for a node to authenticate by certificate.
-	if len(os.Args) > 1 && os.Args[1] == "mint-join" {
-		mintJoin(os.Args[2:])
-		return
+	if err := app.Run(context.Background(), os.Args); err != nil {
+		fail("avairy", err)
 	}
-	// `avairy mint-web-cert` issues an operator client cert as a .p12 to import into a browser/OS
-	// keychain, so the web console authenticates by mTLS instead of a URL token (#30).
-	if len(os.Args) > 1 && os.Args[1] == "mint-web-cert" {
-		mintWebCert(os.Args[2:])
-		return
-	}
-	if len(os.Args) > 1 && (os.Args[1] == "version" || os.Args[1] == "-version" || os.Args[1] == "--version") {
-		fmt.Println(buildinfo.String())
-		return
-	}
+}
 
-	demo := flag.Bool("demo", false, "spawn mock agents (alice, bob) for trying the loop / tests — off by default")
-	live := flag.Bool("live", false, "run 'alice' as a real agent on the MCP bus")
-	family := flag.String("family", "claude", "live agent family: claude | codex | copilot | grok")
-	headless := flag.Bool("headless", false, "run without the TUI: serve the bus/control and block until interrupted (for remote operators / nodes)")
-	send := flag.String("send", "", "one-shot (dev/verification): send this message to a local 'alice', wait for her turn, print the journal, and exit")
-	model := flag.String("model", "haiku", "model for the live agent (kept cheap by default; ignored for codex unless set)")
-	controlAddr := flag.String("control-addr", "", "if set, serve the node control API here (enrollment/sync) and print an enroll token")
-	mcpAddr := flag.String("mcp-addr", "127.0.0.1:7702", "MCP bus listen address (use 0.0.0.0:7702 to allow remote nodes)")
-	advertise := flag.String("advertise", "", "host/IP remote nodes use to reach this core (defaults to the listen host)")
-	workspaceDir := flag.String("workspace", "", "operator project dir to seed/sync into the canonical hub (with -control-addr)")
-	tlsCert := flag.String("tls-cert", "", "PEM cert file: serve the node control channel over TLS (recommended for remote nodes)")
-	tlsKey := flag.String("tls-key", "", "PEM private key file for -tls-cert")
-	tlsAuto := flag.Bool("tls-auto", false, "self-manage a CA under .avairy and serve the control channel over TLS with mTLS (the CA travels to nodes in the join bundle; mTLS disables token enrollment)")
-	gateEdits := flag.Bool("gate-edits", false, "also require operator approval for file edits (per-edit gating; allow-for-session avoids per-diff prompts)")
-	operatorToken := flag.String("operator-token", "", "bearer token for the remote operator API (#18); default: random, shown in the TUI / printed when headless")
-	web := flag.Bool("web", false, "serve the browser operator console at /operator/ui (#17); off by default")
-	budget := flag.Float64("budget", 0, "fleet spend cap in USD (#26): when total cost crosses this, warn the operator and interrupt; 0 = uncapped")
-	agentBudget := flag.Float64("agent-budget", 0, "per-agent spend cap in USD (#26): when an agent crosses this, warn the operator and interrupt that agent; 0 = uncapped")
-	idleSleep := flag.Duration("idle-sleep", 0, "tear an idle core agent's subprocess down to a \"sleeping\" state after this long with no activity, respawning it on the next directed message (#28); 0 = stay resident (loses in-session context on sleep)")
-	flag.Parse()
+// ref returns a pointer to v, so the core wiring can keep reading flags as *flag while urfave
+// hands us plain values.
+func ref[T any](v T) *T { return &v }
 
-	// -tls-auto self-manages a CA that both signs core's server cert and verifies node client certs,
-	// i.e. mTLS. Once every node authenticates by client certificate, the shared enrollment token is
-	// just a weaker credential to leak — so mTLS disables token enrollment. (-tls-cert alone is only
-	// a server leaf cert: it encrypts the channel but can't verify clients, so it isn't mTLS.)
-	mtlsEnabled := *tlsAuto
+// hookCommand is the PreToolUse shim a locally-spawned Claude invokes per tool call
+// (avairy hook -gate <url>). It parses its own flags, so urfave passes the raw args through.
+func hookCommand() *cli.Command {
+	return &cli.Command{Name: "hook", Hidden: true, SkipFlagParsing: true, Action: func(_ context.Context, cmd *cli.Command) error {
+		gating.RunHookShim(cmd.Args().Slice())
+		return nil
+	}}
+}
+
+// coreFlags are shared by `core run` and `core serve` — they differ only in attaching the TUI.
+func coreFlags() []cli.Flag {
+	return []cli.Flag{
+		&cli.BoolFlag{Name: "demo", Usage: "spawn mock agents (alice, bob) for trying the loop / tests"},
+		&cli.BoolFlag{Name: "live", Usage: "run 'alice' as a real agent on the MCP bus"},
+		&cli.StringFlag{Name: "family", Value: "claude", Usage: "live agent family: claude | codex | copilot | grok"},
+		&cli.StringFlag{Name: "model", Value: "haiku", Usage: "model for the live agent (kept cheap by default)"},
+		&cli.StringFlag{Name: "send", Usage: "one-shot (dev): send this to a local 'alice', print the journal, and exit"},
+		&cli.StringFlag{Name: "control-addr", Usage: "serve the node control + operator API here (e.g. 0.0.0.0:7700)"},
+		&cli.StringFlag{Name: "mcp-addr", Value: "127.0.0.1:7702", Usage: "MCP bus listen address (0.0.0.0:7702 to allow remote nodes)"},
+		&cli.StringFlag{Name: "advertise", Usage: "host/IP remote nodes use to reach this core"},
+		&cli.StringFlag{Name: "workspace", Usage: "operator project dir to seed/sync into the canonical hub"},
+		&cli.StringFlag{Name: "tls-cert", Usage: "PEM cert file: serve the control channel over TLS"},
+		&cli.StringFlag{Name: "tls-key", Usage: "PEM private key file for --tls-cert"},
+		&cli.BoolFlag{Name: "tls-auto", Usage: "self-manage a CA under .avairy and serve control + bus over TLS (enables mTLS)"},
+		&cli.BoolFlag{Name: "allow-token-join", Usage: "allow temporary token-based node enrollment; default off — nodes join by minted mTLS cert (see `core add-node`)"},
+		&cli.BoolFlag{Name: "gate-edits", Usage: "also require operator approval for file edits (not just risky commands)"},
+		&cli.StringFlag{Name: "operator-token", Usage: "bearer token for the remote operator API; default: random"},
+		&cli.BoolFlag{Name: "web", Usage: "serve the browser operator console at /operator/ui"},
+		&cli.Float64Flag{Name: "budget", Usage: "fleet spend cap in USD: cross it and every agent is interrupted (0 = uncapped)"},
+		&cli.Float64Flag{Name: "agent-budget", Usage: "per-agent spend cap in USD (0 = uncapped)"},
+		&cli.DurationFlag{Name: "idle-sleep", Usage: "park an idle core agent after this long quiet; the next directed message respawns it"},
+	}
+}
+
+// coreCommand groups running core and managing who may join it.
+func coreCommand() *cli.Command {
+	return &cli.Command{
+		Name:  "core",
+		Usage: "run core, or invite nodes/operators to join it",
+		Commands: []*cli.Command{
+			{Name: "run", Usage: "run core with the operator TUI", Flags: coreFlags(),
+				Action: func(ctx context.Context, cmd *cli.Command) error { return runCore(ctx, cmd, false) }},
+			{Name: "serve", Usage: "run core headless (no TUI — attach a remote console)", Flags: coreFlags(),
+				Action: func(ctx context.Context, cmd *cli.Command) error { return runCore(ctx, cmd, true) }},
+			addNodeCommand(),
+			addOperatorCommand(),
+		},
+	}
+}
+
+// runCore is the core's main loop (core run / core serve). headlessMode skips the in-process TUI.
+// Flags are read into *flag locals so the wiring below is unchanged from the original main().
+func runCore(_ context.Context, cmd *cli.Command, headlessMode bool) error {
+	demo := ref(cmd.Bool("demo"))
+	live := ref(cmd.Bool("live"))
+	family := ref(cmd.String("family"))
+	headless := ref(headlessMode)
+	send := ref(cmd.String("send"))
+	model := ref(cmd.String("model"))
+	controlAddr := ref(cmd.String("control-addr"))
+	mcpAddr := ref(cmd.String("mcp-addr"))
+	advertise := ref(cmd.String("advertise"))
+	workspaceDir := ref(cmd.String("workspace"))
+	tlsCert := ref(cmd.String("tls-cert"))
+	tlsKey := ref(cmd.String("tls-key"))
+	tlsAuto := ref(cmd.Bool("tls-auto"))
+	allowTokenJoin := ref(cmd.Bool("allow-token-join"))
+	gateEdits := ref(cmd.Bool("gate-edits"))
+	operatorToken := ref(cmd.String("operator-token"))
+	web := ref(cmd.Bool("web"))
+	budget := ref(cmd.Float64("budget"))
+	agentBudget := ref(cmd.Float64("agent-budget"))
+	idleSleep := ref(cmd.Duration("idle-sleep"))
+
+	// Secure by default (b): token enrollment is OFF unless --allow-token-join. A node joins with a
+	// minted mTLS client cert (`core add-node`); a token is a deliberate, temporary opt-in. So
+	// mtlsEnabled ("cert-only, no token") is the default and only relaxes when tokens are allowed.
+	mtlsEnabled := !*allowTokenJoin
 
 	// Durable, append-only journal (DESIGN.md §10) under .avairy/; falls back to memory-only.
 	// On restart, replay the persisted log so both the board and the TUI history resume.
@@ -506,22 +558,19 @@ func main() {
 
 	if *send != "" {
 		runOnce(b, jrnl, *send)
-		return
+		return nil
 	}
 	if *headless {
-		// Serve without a TUI: nodes enroll/sync and agents work; block until interrupted. (A
-		// remote operator UI attaching here is backlog #18.)
+		// Serve without a TUI: nodes enroll/sync and agents work; block until interrupted.
 		fmt.Println("avairy: serving headless (no TUI) — ctrl+c to stop")
 		sig := make(chan os.Signal, 1)
 		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 		<-sig
 		fmt.Println("avairy: shutting down")
-		return
+		return nil
 	}
 	// The attached TUI runs in-process against the same operator surface a remote client uses.
-	if err := tui.Run(svc.Deps()); err != nil {
-		fail("tui", err)
-	}
+	return tui.Run(svc.Deps())
 }
 
 // serverTLS builds the self-managed CA + one server cert covering the advertised control/bus hosts
@@ -1015,68 +1064,106 @@ const (
 	defaultBusPort     = "7702"
 )
 
-// mintJoin issues an mTLS client-cert join bundle from the self-managed CA (no enrollment
-// token): the node it's given to authenticates by certificate. Prints the join string.
-func mintJoin(argv []string) {
-	fs := flag.NewFlagSet("mint-join", flag.ExitOnError)
-	id := fs.String("id", "", "node id (becomes the client cert CN) — required")
-	advertise := fs.String("advertise", "", "core host/IP — derives -core (https://host:7700) and -mcp (https://host:7702); same value you passed core")
-	coreURL := fs.String("core", "", "control API URL the node will dial (https://…); overrides -advertise")
-	busURL := fs.String("mcp", "", "MCP bus base URL to bundle so -family works from the join alone; overrides -advertise")
-	dir := fs.String("dir", ".avairy", "directory holding the CA (ca.crt/ca.key)")
-	_ = fs.Parse(argv)
-	// Infer the URLs from -advertise + default ports when they're not given explicitly.
-	if *advertise != "" {
-		if *coreURL == "" {
-			*coreURL = "https://" + *advertise + ":" + defaultControlPort
-		}
-		if *busURL == "" {
-			*busURL = "https://" + *advertise + ":" + defaultBusPort
-		}
+// addNodeCommand (`avairy core add-node`) invites a node by minting an mTLS client-cert join
+// bundle from the self-managed CA — no enrollment token. The node it's given to authenticates by
+// certificate (durable membership). Prints the join string (redirect it to a file).
+func addNodeCommand() *cli.Command {
+	return &cli.Command{
+		Name:  "add-node",
+		Usage: "invite a node: mint an mTLS client-cert join bundle (prints the join string)",
+		Flags: []cli.Flag{
+			&cli.StringFlag{Name: "id", Required: true, Usage: "node id (becomes the client cert identity)"},
+			&cli.StringFlag{Name: "advertise", Usage: "core host/IP — derives --core (https://host:7700) and --mcp (https://host:7702)"},
+			&cli.StringFlag{Name: "core", Usage: "control API URL the node will dial (https://…); overrides --advertise"},
+			&cli.StringFlag{Name: "mcp", Usage: "MCP bus base URL to bundle (so the node can run the agent); overrides --advertise"},
+			&cli.StringFlag{Name: "dir", Value: ".avairy", Usage: "directory holding the CA (ca.crt/ca.key)"},
+		},
+		Action: func(_ context.Context, cmd *cli.Command) error {
+			coreURL, busURL := cmd.String("core"), cmd.String("mcp")
+			if adv := cmd.String("advertise"); adv != "" {
+				if coreURL == "" {
+					coreURL = "https://" + adv + ":" + defaultControlPort
+				}
+				if busURL == "" {
+					busURL = "https://" + adv + ":" + defaultBusPort
+				}
+			}
+			if coreURL == "" {
+				return fmt.Errorf("need --advertise <host> (or an explicit --core URL)")
+			}
+			ca, err := control.EnsureCA(cmd.String("dir"))
+			if err != nil {
+				return fmt.Errorf("ca: %w", err)
+			}
+			cert, key, err := ca.ClientTLS(cmd.String("id"))
+			if err != nil {
+				return fmt.Errorf("client cert: %w", err)
+			}
+			fmt.Println(control.EncodeJoin(control.JoinBundle{
+				Core: coreURL, Bus: busURL, CA: ca.CertPEM(), NodeID: cmd.String("id"), ClientCert: cert, ClientKey: key,
+			}))
+			return nil
+		},
 	}
-	if *id == "" || *coreURL == "" {
-		fmt.Fprintln(os.Stderr, "mint-join: -id required, plus -advertise <host> (or an explicit -core URL)")
-		os.Exit(2)
-	}
-	ca, err := control.EnsureCA(*dir)
-	if err != nil {
-		fail("mint-join: ca", err)
-	}
-	cert, key, err := ca.ClientTLS(*id)
-	if err != nil {
-		fail("mint-join: client cert", err)
-	}
-	fmt.Println(control.EncodeJoin(control.JoinBundle{
-		Core: *coreURL, Bus: *busURL, CA: ca.CertPEM(), NodeID: *id, ClientCert: cert, ClientKey: key,
-	}))
 }
 
-// mintWebCert issues an operator client cert from the self-managed CA and writes it as a
-// password-protected PKCS#12 (.p12) to import into a browser/OS keychain — so the web console
-// authenticates by mTLS instead of a URL token (#30). Run on the core host (reads .avairy/ca.*).
-func mintWebCert(argv []string) {
-	fs := flag.NewFlagSet("mint-web-cert", flag.ExitOnError)
-	name := fs.String("name", "operator", "operator identity embedded in the cert (CN/SAN)")
-	dir := fs.String("dir", ".avairy", "directory holding the CA (ca.crt/ca.key)")
-	out := fs.String("o", "operator.p12", "output PKCS#12 file to import into the browser")
-	password := fs.String("password", "", "PKCS#12 password (browsers/keychains usually require one; default: random, printed)")
-	_ = fs.Parse(argv)
-	ca, err := control.EnsureCA(*dir)
-	if err != nil {
-		fail("mint-web-cert: ca", err)
+// addOperatorCommand (`avairy core add-operator`) invites an operator console. It mints ONE
+// operator client cert and emits it in both forms the console can use: a password-protected .p12
+// to import into a browser / OS keychain, and a join bundle (CA + cert + key) so
+// `avairy tui connect --join-file <file>` authenticates by mTLS. Run on the core host.
+func addOperatorCommand() *cli.Command {
+	return &cli.Command{
+		Name:  "add-operator",
+		Usage: "invite an operator console: mint a cert (.p12 for the browser + join for `tui connect`)",
+		Flags: []cli.Flag{
+			&cli.StringFlag{Name: "name", Value: "operator", Usage: "operator identity embedded in the cert"},
+			&cli.StringFlag{Name: "advertise", Usage: "core host/IP — derives --core (https://host:7700)"},
+			&cli.StringFlag{Name: "core", Usage: "control API URL the console will dial (https://…); overrides --advertise"},
+			&cli.StringFlag{Name: "dir", Value: ".avairy", Usage: "directory holding the CA (ca.crt/ca.key)"},
+			&cli.StringFlag{Name: "p12", Value: "operator.p12", Usage: "output PKCS#12 file to import into the browser"},
+			&cli.StringFlag{Name: "join", Value: "operator.join", Usage: "output join bundle for `avairy tui connect --join-file`"},
+			&cli.StringFlag{Name: "password", Usage: "PKCS#12 password (default: random, printed)"},
+		},
+		Action: func(_ context.Context, cmd *cli.Command) error {
+			coreURL := cmd.String("core")
+			if coreURL == "" && cmd.String("advertise") != "" {
+				coreURL = "https://" + cmd.String("advertise") + ":" + defaultControlPort
+			}
+			ca, err := control.EnsureCA(cmd.String("dir"))
+			if err != nil {
+				return fmt.Errorf("ca: %w", err)
+			}
+			name := cmd.String("name")
+			pw := cmd.String("password")
+			if pw == "" {
+				pw = operator.RandomToken()[:16]
+			}
+			// One identity, two artifacts: the .p12 for browser import…
+			p12, err := ca.OperatorP12(name, pw)
+			if err != nil {
+				return err
+			}
+			if err := os.WriteFile(cmd.String("p12"), p12, 0o600); err != nil {
+				return fmt.Errorf("write p12: %w", err)
+			}
+			fmt.Printf("wrote %s (password: %s) — import into your browser/OS keychain, then open the console with NO ?token=\n", cmd.String("p12"), pw)
+			// …and a join bundle carrying the same cert+key, for the remote TUI (mTLS).
+			if coreURL == "" {
+				fmt.Fprintln(os.Stderr, "note: no --core/--advertise given, so no join bundle for `tui connect` was written (the .p12 still works in a browser)")
+				return nil
+			}
+			cert, key, err := ca.OperatorTLS(name)
+			if err != nil {
+				return fmt.Errorf("operator cert: %w", err)
+			}
+			join := control.EncodeJoin(control.JoinBundle{Core: coreURL, CA: ca.CertPEM(), ClientCert: cert, ClientKey: key})
+			if err := os.WriteFile(cmd.String("join"), []byte(join), 0o600); err != nil {
+				return fmt.Errorf("write join: %w", err)
+			}
+			fmt.Printf("wrote %s — attach with: avairy tui connect --join-file %s\n", cmd.String("join"), cmd.String("join"))
+			return nil
+		},
 	}
-	pw := *password
-	if pw == "" {
-		pw = operator.RandomToken()[:16]
-	}
-	p12, err := ca.OperatorP12(*name, pw)
-	if err != nil {
-		fail("mint-web-cert", err)
-	}
-	if err := os.WriteFile(*out, p12, 0o600); err != nil {
-		fail("mint-web-cert: write", err)
-	}
-	fmt.Printf("wrote %s (password: %s)\nImport it into your browser / OS keychain, then open the web console with NO ?token= — the cert authenticates you.\n", *out, pw)
 }
 
 // decodeRecords turns persisted journal records back into typed in-memory records, so the TUI

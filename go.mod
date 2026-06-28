@@ -12,6 +12,7 @@ require (
 	github.com/mark3labs/mcp-go v0.55.1
 	github.com/moby/patternmatcher v0.6.1
 	github.com/sabhiram/go-gitignore v0.0.0-20210923224102-525f6e181f06
+	github.com/urfave/cli/v3 v3.10.1
 	software.sslmate.com/src/go-pkcs12 v0.7.3
 )
 
