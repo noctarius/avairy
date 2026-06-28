@@ -27,6 +27,7 @@ import (
 	"avairy/internal/adapter/copilot"
 	"avairy/internal/adapter/grok"
 	"avairy/internal/agent"
+	"avairy/internal/buildinfo"
 	"avairy/internal/bus"
 	"avairy/internal/control"
 	"avairy/internal/gating"
@@ -39,6 +40,10 @@ func main() {
 	// it must run before flag parsing (its args are its own).
 	if len(os.Args) > 1 && os.Args[1] == "hook" {
 		gating.RunHookShim(os.Args[2:])
+		return
+	}
+	if len(os.Args) > 1 && (os.Args[1] == "version" || os.Args[1] == "-version" || os.Args[1] == "--version") {
+		fmt.Println(buildinfo.String())
 		return
 	}
 

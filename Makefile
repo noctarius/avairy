@@ -9,13 +9,16 @@ PLATFORMS := darwin/arm64 darwin/amd64 \
              freebsd/arm64 freebsd/amd64
 
 VERSION   ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-LDFLAGS   := -s -w
-# To embed the version, append `-X main.version=$(VERSION)` here and add `var version string`
-# to each command's main package.
+COMMIT    ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
+DATE      ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+# Version metadata is stamped into internal/buildinfo at link time (shown by `avairy version`).
+# CI passes VERSION/COMMIT/DATE in; a local build derives them from git.
+BI        := avairy/internal/buildinfo
+LDFLAGS   := -s -w -X $(BI).Version=$(VERSION) -X $(BI).Commit=$(COMMIT) -X $(BI).Date=$(DATE)
 BUILDFLAGS := -trimpath -ldflags '$(LDFLAGS)'
 export CGO_ENABLED := 0
 
-.PHONY: all build test vet fmt tidy check release clean help
+.PHONY: all build test vet fmt tidy check release package clean help
 
 all: build
 
@@ -61,6 +64,24 @@ release:
 		done; \
 	done
 	@echo "done → $(DIST)/ (version $(VERSION))"
+
+## package: release-build, then archive each target (.tar.gz / .zip) + SHA256SUMS into dist/
+package: release
+	@cd $(DIST); rm -f *.tar.gz *.zip SHA256SUMS; \
+	for p in $(PLATFORMS); do \
+		os=$${p%/*}; arch=$${p#*/}; dir=$$os-$$arch; \
+		base=avairy_$(VERSION)_$${os}_$${arch}; \
+		if [ "$$os" = windows ]; then \
+			( cd $$dir && zip -q ../$$base.zip $(addsuffix .exe,$(CMDS)) ); \
+			echo "packaged $$base.zip"; \
+		else \
+			tar -czf $$base.tar.gz -C $$dir $(CMDS); \
+			echo "packaged $$base.tar.gz"; \
+		fi; \
+	done; \
+	if command -v sha256sum >/dev/null 2>&1; then sha256sum *.tar.gz *.zip > SHA256SUMS; \
+	else shasum -a 256 *.tar.gz *.zip > SHA256SUMS; fi; \
+	echo "checksums → $(DIST)/SHA256SUMS"
 
 ## clean: remove build artifacts
 clean:

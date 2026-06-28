@@ -1,0 +1,92 @@
+name: release
+
+# Build all binaries with the Makefile, package them per-platform, and publish a GitHub Release.
+# Trigger either way:
+#   • push a tag  v*           — builds & releases that tag.
+#   • run manually (Actions ▸ release ▸ Run workflow) with a version like v0.1.0 — creates the
+#     tag, then builds & releases it.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag to create and release (e.g. v0.1.0)'
+        required: true
+
+permissions:
+  contents: write # create the release and (on manual runs) push the tag
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history + tags (git describe, tag creation)
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Resolve version, build metadata, and tag
+        id: meta
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+            case "$VERSION" in
+              v*) ;;
+              *) echo "version must start with 'v' (got '$VERSION')"; exit 1 ;;
+            esac
+            git config user.name  "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag -a "$VERSION" -m "$VERSION"
+            git push origin "$VERSION"
+          else
+            VERSION="${GITHUB_REF_NAME}"
+          fi
+          {
+            echo "version=$VERSION"
+            echo "commit=$(git rev-parse --short HEAD)"
+            echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Test
+        run: make test vet
+
+      - name: Build & package (Makefile)
+        run: |
+          make package \
+            VERSION='${{ steps.meta.outputs.version }}' \
+            COMMIT='${{ steps.meta.outputs.commit }}' \
+            DATE='${{ steps.meta.outputs.date }}'
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          COMMIT: ${{ steps.meta.outputs.commit }}
+          DATE: ${{ steps.meta.outputs.date }}
+        run: |
+          set -euo pipefail
+          notes="$(cat <<EOF
+          **avairy ${VERSION}** — built ${DATE} from \`${COMMIT}\`.
+
+          ### Install (Linux / macOS / FreeBSD)
+
+          \`\`\`sh
+          curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/install.sh | sh
+          \`\`\`
+
+          Or pin a version: \`curl -fsSL .../install.sh | AVAIRY_VERSION=${VERSION} sh\`.
+          Windows: download the matching \`.zip\` below. Verify downloads against \`SHA256SUMS\`.
+
+          Every binary reports its build with \`avairy version\`.
+          EOF
+          )"
+          gh release create "$VERSION" \
+            dist/*.tar.gz dist/*.zip dist/SHA256SUMS install.sh \
+            --title "$VERSION" \
+            --notes "$notes" \
+            --verify-tag

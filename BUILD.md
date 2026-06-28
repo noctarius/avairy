@@ -1,13 +1,37 @@
 # Building avairy
 
-> **TL;DR:** `make build` (host) or `make release` (all targets → `dist/`). This doc explains
-> the commands the [Makefile](Makefile) runs, for reference or CI without `make`.
+> **TL;DR:** `make build` (host) · `make release` (all targets → `dist/`) · `make package`
+> (release + per-platform archives + `SHA256SUMS`). This doc explains the commands the
+> [Makefile](Makefile) runs, for reference or CI without `make`.
 
 avairy is **pure Go (no CGO)**, so it cross-compiles to every target from any machine with a
-Go 1.26+ toolchain — no C compiler, no per-OS setup. There are two executables:
+Go 1.26+ toolchain — no C compiler, no per-OS setup. There are three executables:
 
-- **`avairy`** — core + TUI (run on the operator machine)
+- **`avairy`** — core + operator TUI (run on the operator machine)
 - **`avairy-node`** — the node daemon (run on each remote machine/VM, incl. Windows)
+- **`avairy-tui`** — the operator console as a standalone client (attach to a remote core)
+
+## Versioning
+
+Build metadata is stamped into `internal/buildinfo` at link time and shown by `avairy version`
+(likewise `avairy-node version` / `avairy-tui version`). The Makefile injects it via
+`-ldflags -X`:
+
+| Field | Default | Source in CI |
+|-------|---------|--------------|
+| `Version` | `git describe` or `dev` | the release tag |
+| `Commit` | short git SHA | `git rev-parse --short HEAD` |
+| `Date` | UTC build time | `date -u` at build |
+
+Override any of them: `make build VERSION=v1.2.3 COMMIT=abc1234 DATE=2026-01-01T00:00:00Z`.
+
+## Releases
+
+Releases are produced by the [`release` workflow](.github/workflows/release.yml). Push a `v*` tag
+(or run the workflow manually with a version), and CI runs `make package`, then publishes a GitHub
+Release with every platform archive, a `SHA256SUMS` file, and `install.sh`. End users install with
+the one-liner in the [README](README.md#install); the script resolves their OS/arch, downloads the
+matching archive, verifies its checksum, and drops the binaries on the `PATH`.
 
 ## Target matrix
 
@@ -35,7 +59,7 @@ targets=(
   linux/arm64   linux/amd64
   freebsd/arm64 freebsd/amd64
 )
-cmds=(avairy avairy-node)
+cmds=(avairy avairy-node avairy-tui)
 
 for t in "${targets[@]}"; do
   os="${t%/*}"; arch="${t#*/}"
@@ -55,7 +79,7 @@ echo "done → dist/"
 chmod +x build-all.sh && ./build-all.sh
 ```
 
-This produces 16 binaries (2 commands × 8 targets) under per-target dirs, e.g.
+This produces 24 binaries (3 commands × 8 targets) under per-target dirs, e.g.
 `dist/darwin-arm64/avairy`, `dist/windows-amd64/avairy-node.exe`,
 `dist/freebsd-arm64/avairy-node`.
 

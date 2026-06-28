@@ -82,6 +82,27 @@ endpoint on localhost. **You** attach a console — locally, from another machin
 See **[DESIGN.md](DESIGN.md)** for the full architecture and **[ADAPTERS.md](ADAPTERS.md)** for how
 each agent family is driven.
 
+## Install
+
+**Linux, macOS, or FreeBSD** — one line picks the right build for your OS/arch, verifies its
+checksum, and installs `avairy`, `avairy-node`, and `avairy-tui`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/noctarius/avairy/main/install.sh | sh
+```
+
+Pin a version or pick the install dir with env vars:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/noctarius/avairy/main/install.sh \
+  | AVAIRY_VERSION=v0.1.0 AVAIRY_INSTALL_DIR="$HOME/.local/bin" sh
+```
+
+**Windows**, or to verify by hand: grab the archive for your platform from the
+[releases page](https://github.com/noctarius/avairy/releases), check it against `SHA256SUMS`, and put
+the binaries on your `PATH`. Every binary reports its build with `avairy version`. Prefer to build
+from source? Read on.
+
 ## Quick start
 
 ### Requirements

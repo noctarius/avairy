@@ -14,6 +14,7 @@ import (
 	"os"
 	"strings"
 
+	"avairy/internal/buildinfo"
 	"avairy/internal/control"
 	"avairy/internal/operator"
 	"avairy/internal/tui"
@@ -22,6 +23,10 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && (os.Args[1] == "version" || os.Args[1] == "-version" || os.Args[1] == "--version") {
+		fmt.Println(buildinfo.String())
+		return
+	}
 	core := flag.String("core", "", "core control API base URL (e.g. https://host:7700); supplied by -join/-join-file")
 	token := flag.String("token", "", "operator API bearer token (from core's startup output / TUI)")
 	caFile := flag.String("ca", "", "PEM cert/CA to trust for an https core (self-signed/internal CA)")

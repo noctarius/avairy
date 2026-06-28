@@ -35,6 +35,7 @@ import (
 	"avairy/internal/adapter/mock"
 	"avairy/internal/agent"
 	"avairy/internal/board"
+	"avairy/internal/buildinfo"
 	"avairy/internal/bus"
 	"avairy/internal/control"
 	"avairy/internal/cost"
@@ -68,6 +69,10 @@ func main() {
 	// keychain, so the web console authenticates by mTLS instead of a URL token (#30).
 	if len(os.Args) > 1 && os.Args[1] == "mint-web-cert" {
 		mintWebCert(os.Args[2:])
+		return
+	}
+	if len(os.Args) > 1 && (os.Args[1] == "version" || os.Args[1] == "-version" || os.Args[1] == "--version") {
+		fmt.Println(buildinfo.String())
 		return
 	}
 

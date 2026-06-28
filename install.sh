@@ -1,0 +1,82 @@
+#!/usr/bin/env sh
+# avairy installer — detects your OS/arch, downloads the matching release archive, verifies its
+# checksum, and installs the avairy / avairy-node / avairy-tui binaries.
+#
+#   curl -fsSL https://raw.githubusercontent.com/noctarius/avairy/main/install.sh | sh
+#
+# Environment overrides:
+#   AVAIRY_VERSION       release tag to install (default: the latest release)
+#   AVAIRY_INSTALL_DIR   where to put the binaries (default: /usr/local/bin if writable, else ~/.local/bin)
+#   AVAIRY_REPO          owner/repo to install from (default: noctarius/avairy)
+set -eu
+
+REPO="${AVAIRY_REPO:-noctarius/avairy}"
+
+err() { echo "avairy install: $*" >&2; exit 1; }
+
+# --- detect platform -------------------------------------------------------
+os=$(uname -s)
+arch=$(uname -m)
+case "$os" in
+	Linux)   OS=linux ;;
+	Darwin)  OS=darwin ;;
+	FreeBSD) OS=freebsd ;;
+	*) err "unsupported OS '$os' (this script covers Linux, macOS, FreeBSD; on Windows download the .zip from the releases page)" ;;
+esac
+case "$arch" in
+	x86_64|amd64)  ARCH=amd64 ;;
+	arm64|aarch64) ARCH=arm64 ;;
+	*) err "unsupported architecture '$arch'" ;;
+esac
+
+command -v curl >/dev/null 2>&1 || err "curl is required"
+command -v tar  >/dev/null 2>&1 || err "tar is required"
+
+# --- resolve version -------------------------------------------------------
+VERSION="${AVAIRY_VERSION:-}"
+if [ -z "$VERSION" ]; then
+	VERSION=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" \
+		| sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1)
+	[ -n "$VERSION" ] || err "could not determine the latest release — set AVAIRY_VERSION explicitly"
+fi
+
+ASSET="avairy_${VERSION}_${OS}_${ARCH}.tar.gz"
+BASE="https://github.com/$REPO/releases/download/$VERSION"
+
+# --- choose an install dir -------------------------------------------------
+BIN="${AVAIRY_INSTALL_DIR:-}"
+if [ -z "$BIN" ]; then
+	if [ -d /usr/local/bin ] && [ -w /usr/local/bin ]; then BIN=/usr/local/bin; else BIN="$HOME/.local/bin"; fi
+fi
+mkdir -p "$BIN" || err "cannot create install dir $BIN"
+
+# --- download + verify + install ------------------------------------------
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+echo "avairy $VERSION → $OS/$ARCH"
+echo "downloading $ASSET ..."
+curl -fSL "$BASE/$ASSET" -o "$tmp/$ASSET" || err "download failed: $BASE/$ASSET"
+
+if curl -fsSL "$BASE/SHA256SUMS" -o "$tmp/SHA256SUMS" 2>/dev/null; then
+	echo "verifying checksum ..."
+	line=$(grep "  $ASSET\$" "$tmp/SHA256SUMS" || true)
+	[ -n "$line" ] || err "no checksum entry for $ASSET"
+	( cd "$tmp" && echo "$line" | { sha256sum -c - 2>/dev/null || shasum -a 256 -c -; } ) || err "checksum verification failed"
+else
+	echo "warning: SHA256SUMS not found — skipping checksum verification" >&2
+fi
+
+tar -xzf "$tmp/$ASSET" -C "$tmp"
+for b in avairy avairy-node avairy-tui; do
+	[ -f "$tmp/$b" ] || err "archive missing $b"
+	mv -f "$tmp/$b" "$BIN/$b"
+	chmod 0755 "$BIN/$b"
+done
+
+echo "installed: avairy, avairy-node, avairy-tui → $BIN"
+case ":$PATH:" in
+	*":$BIN:"*) ;;
+	*) echo "note: $BIN is not on your PATH — add it, e.g.  export PATH=\"$BIN:\$PATH\"" ;;
+esac
+"$BIN/avairy" version 2>/dev/null || true
