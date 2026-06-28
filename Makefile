@@ -1,7 +1,7 @@
 # avairy — build & cross-compile. See BUILD.md for the underlying commands/rationale.
 # avairy is pure Go (no CGO), so every target cross-compiles from any host.
 
-CMDS      := avairy avairy-node avairy-tui
+CMDS      := avairy
 DIST      := dist
 PLATFORMS := darwin/arm64 darwin/amd64 \
              windows/arm64 windows/amd64 \

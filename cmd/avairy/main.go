@@ -58,6 +58,8 @@ func main() {
 		Version: buildinfo.Version,
 		Commands: []*cli.Command{
 			coreCommand(),
+			nodeCommand(),
+			tuiCommand(),
 			hookCommand(),
 			{Name: "version", Usage: "print the build version", Action: func(context.Context, *cli.Command) error {
 				fmt.Println(buildinfo.String())

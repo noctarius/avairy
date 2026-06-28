@@ -1,15 +1,7 @@
-// Command avairy-node is the avairy node daemon: a single cross-platform binary that
-// enrolls with core, serves a local MCP proxy for agents on this machine, continuously
-// syncs a workspace directory to/from the canonical hub, and heartbeats. It dials core
-// (node→core outbound, NAT-friendly); the channel is HTTP here and TLS in production.
-//
-//	avairy-node -core http://core:7700 -core-mcp http://core:7701 -token <T> \
-//	            -id linux-box -workspace ./repo -proxy 127.0.0.1:7800
 package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"net"
 	"net/http"
@@ -22,10 +14,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/urfave/cli/v3"
+
 	"avairy/internal/adapter"
 	"avairy/internal/adapter/claudecode"
 	"avairy/internal/agent"
-	"avairy/internal/buildinfo"
 	"avairy/internal/bus"
 	"avairy/internal/control"
 	"avairy/internal/gating"
@@ -33,36 +26,59 @@ import (
 	"avairy/internal/workspace"
 )
 
-func main() {
-	// `avairy-node hook -gate <url>` is the PreToolUse hook shim Claude invokes per tool call;
-	// it must run before flag parsing (its args are its own).
-	if len(os.Args) > 1 && os.Args[1] == "hook" {
-		gating.RunHookShim(os.Args[2:])
-		return
+// nodeCommand groups the node-daemon subcommands. A node enrolls with core, serves a localhost MCP
+// proxy for the agent on this machine, syncs a workspace to/from the canonical hub, and heartbeats.
+func nodeCommand() *cli.Command {
+	return &cli.Command{
+		Name:  "node",
+		Usage: "run an agent daemon on this machine",
+		Commands: []*cli.Command{{
+			Name:  "join",
+			Usage: "enroll with core and run the daemon (MCP proxy + workspace sync + optional agent)",
+			Flags: []cli.Flag{
+				&cli.StringFlag{Name: "core", Usage: "core control API base URL (or supplied by --join)"},
+				&cli.StringFlag{Name: "core-mcp", Usage: "core MCP bus base URL for the local proxy (or via --join)"},
+				&cli.StringFlag{Name: "token", Usage: "one-time enrollment token (or a client cert via --join)"},
+				&cli.StringFlag{Name: "id", Usage: "node id — also the agent's bus identity"},
+				&cli.StringFlag{Name: "os", Value: runtime.GOOS, Usage: "node OS capability"},
+				&cli.StringFlag{Name: "workspace", Usage: "workspace directory to sync (optional)"},
+				&cli.StringFlag{Name: "proxy", Value: "127.0.0.1:7800", Usage: "local MCP proxy listen address"},
+				&cli.DurationFlag{Name: "interval", Value: 2 * time.Second, Usage: "sync/heartbeat interval"},
+				&cli.StringFlag{Name: "family", Usage: "spawn & drive the agent here: claude | codex | copilot | grok (empty = proxy only)"},
+				&cli.StringFlag{Name: "model", Usage: "model for the spawned agent (family default if empty)"},
+				&cli.StringFlag{Name: "role", Usage: "system prompt / role for the spawned agent"},
+				&cli.BoolFlag{Name: "gate-edits", Usage: "also require operator approval for file edits"},
+				&cli.StringFlag{Name: "ca", Usage: "PEM cert/CA to trust for an https core (self-signed/internal CA)"},
+				&cli.BoolFlag{Name: "insecure", Usage: "skip TLS verification for an https core (DEV ONLY — exposes the channel to MITM)"},
+				&cli.StringFlag{Name: "join", Usage: "join string from core (core URL + CA + token/cert); supplies --core/--token/--ca"},
+				&cli.StringFlag{Name: "join-file", Usage: "file containing a join string (e.g. core's .avairy/join)"},
+				&cli.DurationFlag{Name: "idle-sleep", Usage: "park this node's idle agent after this long quiet; the next directed message respawns it (resuming its session)"},
+			},
+			Action: runNodeJoin,
+		}},
 	}
-	if len(os.Args) > 1 && (os.Args[1] == "version" || os.Args[1] == "-version" || os.Args[1] == "--version") {
-		fmt.Println(buildinfo.String())
-		return
-	}
+}
 
-	core := flag.String("core", "", "core control API base URL (required)")
-	coreMCP := flag.String("core-mcp", "", "core MCP bus base URL for the local proxy")
-	token := flag.String("token", "", "one-time enrollment token (required)")
-	id := flag.String("id", "", "node id — also the agent's bus identity (required). Run one process per agent.")
-	osName := flag.String("os", runtime.GOOS, "node OS capability")
-	ws := flag.String("workspace", "", "workspace directory to sync (optional)")
-	proxy := flag.String("proxy", "127.0.0.1:7800", "local MCP proxy listen address")
-	interval := flag.Duration("interval", 2*time.Second, "sync/heartbeat interval")
-	family := flag.String("family", "", "spawn & drive the agent here: claude | codex | copilot | grok (empty = proxy only, run the agent yourself)")
-	model := flag.String("model", "", "model for the spawned agent (family default if empty)")
-	role := flag.String("role", "", "system prompt / role for the spawned agent")
-	gateEdits := flag.Bool("gate-edits", false, "also require operator approval for file edits (per-edit gating; allow-for-session avoids per-diff prompts)")
-	caFile := flag.String("ca", "", "PEM cert/CA to trust for an https core (self-signed/internal CA)")
-	insecure := flag.Bool("insecure", false, "skip TLS verification for an https core (DEV ONLY — exposes the channel to MITM)")
-	join := flag.String("join", "", "join string from core (carries core URL + CA + token or client cert); supplies -core/-token/-ca")
-	joinFile := flag.String("join-file", "", "file containing a join string (e.g. core's .avairy/join)")
-	idleSleep := flag.Duration("idle-sleep", 0, "tear this node's idle agent subprocess down to a \"sleeping\" state after this long with no activity, respawning (and resuming its session) on the next directed message (#28); 0 = stay resident")
-	flag.Parse()
+// runNodeJoin enrolls and runs the daemon. Flags are read into *flag locals so the wiring is
+// unchanged from the original avairy-node main().
+func runNodeJoin(_ context.Context, cmd *cli.Command) error {
+	core := ref(cmd.String("core"))
+	coreMCP := ref(cmd.String("core-mcp"))
+	token := ref(cmd.String("token"))
+	id := ref(cmd.String("id"))
+	osName := ref(cmd.String("os"))
+	ws := ref(cmd.String("workspace"))
+	proxy := ref(cmd.String("proxy"))
+	interval := ref(cmd.Duration("interval"))
+	family := ref(cmd.String("family"))
+	model := ref(cmd.String("model"))
+	role := ref(cmd.String("role"))
+	gateEdits := ref(cmd.Bool("gate-edits"))
+	caFile := ref(cmd.String("ca"))
+	insecure := ref(cmd.Bool("insecure"))
+	join := ref(cmd.String("join"))
+	joinFile := ref(cmd.String("join-file"))
+	idleSleep := ref(cmd.Duration("idle-sleep"))
 
 	// A join bundle supplies core URL + how to trust/authenticate in one string, overriding the
 	// individual flags (DESIGN.md §4). It carries either an enrollment token or an mTLS client cert.
@@ -70,13 +86,12 @@ func main() {
 	if *join != "" || *joinFile != "" {
 		jb, err := control.ReadJoin(*join, *joinFile)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "avairy-node:", err)
-			os.Exit(1)
+			return err
 		}
 		*core = jb.Core
 		joinCA = jb.CA
 		if jb.Bus != "" && *coreMCP == "" {
-			*coreMCP = jb.Bus // so -family works from a join alone (needs the MCP bus base)
+			*coreMCP = jb.Bus // so --family works from a join alone (needs the MCP bus base)
 		}
 		if jb.Token != "" {
 			*token = jb.Token
@@ -89,28 +104,25 @@ func main() {
 
 	mtls := len(clientCertPEM) > 0
 	if *core == "" || *id == "" || (*token == "" && !mtls) {
-		fmt.Fprintln(os.Stderr, "avairy-node: need -core and -id, plus -token (or a join with a client cert)")
-		os.Exit(2)
+		return fmt.Errorf("need --core and --id, plus --token (or a join with a client cert)")
 	}
 
 	// The local workspace is this node's synced copy; create it if absent (it gets populated
 	// by SyncDown from the canonical hub).
 	if *ws != "" {
 		if err := os.MkdirAll(*ws, 0o755); err != nil {
-			fmt.Fprintln(os.Stderr, "avairy-node: workspace:", err)
-			os.Exit(1)
+			return fmt.Errorf("workspace: %w", err)
 		}
 	}
 
 	n := control.NewNode(*core, *id)
 	// TLS trust + (optional) mTLS client identity. A join's CA/client-cert take precedence; else
-	// -ca / -insecure. With a publicly-trusted cert and no client cert, none of this is needed.
+	// --ca / --insecure. With a publicly-trusted cert and no client cert, none of this is needed.
 	switch {
 	case len(joinCA) > 0 || mtls:
 		client, err := control.TLSClientPEM(joinCA, *insecure, clientCertPEM, clientKeyPEM)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "avairy-node: tls:", err)
-			os.Exit(1)
+			return fmt.Errorf("tls: %w", err)
 		}
 		n.HTTP = client
 		// mTLS auth is stateless on core, so the node can transparently re-enroll if core
@@ -119,14 +131,12 @@ func main() {
 	case *caFile != "" || *insecure:
 		client, err := control.TLSClient(*caFile, *insecure)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "avairy-node: tls:", err)
-			os.Exit(1)
+			return fmt.Errorf("tls: %w", err)
 		}
 		n.HTTP = client
 	}
 	if err := n.Enroll(*token, *osName, map[string]string{"os": *osName}); err != nil {
-		fmt.Fprintln(os.Stderr, "avairy-node: enroll:", err)
-		os.Exit(1)
+		return fmt.Errorf("enroll: %w", err)
 	}
 	fmt.Printf("enrolled node %q (os=%s) with core %s\n", *id, *osName, *core)
 
@@ -135,7 +145,7 @@ func main() {
 	// and report a spurious conflict on every file.
 	if *ws != "" {
 		if err := n.ResumeFromHub(*ws); err != nil {
-			fmt.Fprintln(os.Stderr, "avairy-node: resume from hub:", err)
+			fmt.Fprintln(os.Stderr, "avairy node: resume from hub:", err)
 		}
 	}
 
@@ -144,8 +154,7 @@ func main() {
 	if *coreMCP != "" {
 		h, err := n.MCPProxy(*coreMCP, *id)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "avairy-node: proxy:", err)
-			os.Exit(1)
+			return fmt.Errorf("proxy: %w", err)
 		}
 		mux := http.NewServeMux()
 		mux.Handle("/gate", gating.HookHandler(gateDecider(n, *id, *gateEdits)))
@@ -153,7 +162,7 @@ func main() {
 		go func() {
 			fmt.Printf("MCP proxy for agent %q at http://%s/mcp → %s (gate at /gate)\n", *id, *proxy, *coreMCP)
 			if err := http.ListenAndServe(*proxy, mux); err != nil {
-				fmt.Fprintln(os.Stderr, "avairy-node: proxy server:", err)
+				fmt.Fprintln(os.Stderr, "avairy node: proxy server:", err)
 			}
 		}()
 	}
@@ -185,12 +194,10 @@ func main() {
 	// Optionally spawn & drive the agent on this node, wired to the local MCP proxy.
 	if *family != "" {
 		if *coreMCP == "" {
-			fmt.Fprintln(os.Stderr, "avairy-node: -family requires -core-mcp")
-			os.Exit(2)
+			return fmt.Errorf("--family requires --core-mcp")
 		}
 		if err := spawnAgent(ctx, n, *family, *id, *role, *model, *ws, *proxy, mirrorDir, agent.SessionPersistent, *gateEdits, *idleSleep); err != nil {
-			fmt.Fprintln(os.Stderr, "avairy-node: spawn agent:", err)
-			os.Exit(1)
+			return fmt.Errorf("spawn agent: %w", err)
 		}
 	}
 
@@ -213,7 +220,7 @@ func main() {
 	var watch <-chan struct{}
 	if *ws != "" {
 		if ch, err := workspace.Watch(ctx, *ws, workspace.IgnoreFor(*ws)); err != nil {
-			fmt.Fprintln(os.Stderr, "avairy-node: watch (falling back to poll):", err)
+			fmt.Fprintln(os.Stderr, "avairy node: watch (falling back to poll):", err)
 		} else {
 			watch = ch
 		}
@@ -229,8 +236,8 @@ func main() {
 	for {
 		select {
 		case <-ctx.Done():
-			fmt.Println("avairy-node: shutting down")
-			return
+			fmt.Println("avairy node: shutting down")
+			return nil
 		case <-watch:
 			syncUp() // local change → propagate now
 		case <-ticker.C:
@@ -252,8 +259,8 @@ func main() {
 				}
 			}
 			// Operator-spawned ephemeral consults targeted at this node (#24).
-			for _, cmd := range n.TakeConsults() {
-				nodeConsults.apply(ctx, cmd)
+			for _, c := range n.TakeConsults() {
+				nodeConsults.apply(ctx, c)
 			}
 			syncUp()
 			if *ws != "" {
@@ -298,7 +305,7 @@ func refreshMirror(ctx context.Context, n *control.Node, mirrorDir string) {
 		return // already current (nothing new)
 	}
 	if err := git.UpdateMirror(ctx, mirrorDir, b); err != nil {
-		fmt.Fprintln(os.Stderr, "avairy-node: mirror update:", err)
+		fmt.Fprintln(os.Stderr, "avairy node: mirror update:", err)
 	}
 }
 
@@ -337,7 +344,7 @@ func (m *nodeConsultMgr) apply(parent context.Context, cmd control.ConsultComman
 	switch cmd.Action {
 	case "open":
 		if m.coreMCP == "" {
-			fmt.Fprintln(os.Stderr, "consult: cannot spawn without -core-mcp")
+			fmt.Fprintln(os.Stderr, "consult: cannot spawn without --core-mcp")
 			return
 		}
 		fam := cmd.Family
@@ -504,7 +511,7 @@ func spawnAgent(ctx context.Context, n *control.Node, family, agentID, role, mod
 			s, err := spawn(sctx)
 			if err != nil {
 				sc()
-				fmt.Fprintln(os.Stderr, "avairy-node: respawn agent:", err)
+				fmt.Fprintln(os.Stderr, "avairy node: respawn agent:", err)
 				return false
 			}
 			sess, sessCancel = s, sc
