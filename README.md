@@ -125,29 +125,17 @@ Pin a version (the `| iex` form can't take arguments, so build a scriptblock); `
 
 ## Quick start
 
-### Requirements
-
-- **Go 1.26+** to build.
-- For *live* agents, the relevant CLI installed and logged in: `claude`, `codex`,
-  `copilot` (`copilot login`), and/or `grok` (xAI auth). avairy uses each CLI's own auth.
-
-### Build
-
-```sh
-go build ./...
-go test ./...
-```
-
-This produces one binary, **`avairy`**, with subcommands: `core` (run core + the operator TUI),
-`node` (the agent daemon), `tui` (the remote console), and `core add-node`/`add-operator` (invite
-participants). See **[BUILD.md](BUILD.md)** for packaging details.
+These use the installed `avairy` binary (see [Install](#install)). For *live* agents you also need
+the relevant CLI installed and logged in: `claude`, `codex`, `copilot` (`copilot login`), and/or
+`grok` (xAI auth) — avairy uses each CLI's own auth. (Hacking on avairy instead of installing a
+release? See [Build from source](#build-from-source).)
 
 ### Try it with zero credits
 
-The fastest way to see the loop — two mock agents, no API calls:
+The fastest way to see the loop — two mock agents, no API calls, no logins:
 
 ```sh
-go run ./cmd/avairy core run --demo
+avairy core run --demo
 ```
 
 A TUI opens with `alice` and `bob`. Type to talk to them, watch the conversation, tasks, and
@@ -157,17 +145,17 @@ handovers. Without `--demo`, core starts **no agents** — you bring them with `
 
 ```sh
 # alice = real Claude Code (default, cheapest model)
-go run ./cmd/avairy core run --live
+avairy core run --live
 # alice = real Codex
-go run ./cmd/avairy core run --live --family codex
+avairy core run --live --family codex
 # pick the model
-go run ./cmd/avairy core run --live --model sonnet
+avairy core run --live --model sonnet
 ```
 
 A non-interactive one-shot — send a message, print the journal, exit (handy for scripts/CI):
 
 ```sh
-go run ./cmd/avairy core run --live \
+avairy core run --live \
    --send "create a task titled ping that requires os=linux"
 ```
 
@@ -491,6 +479,22 @@ fsnotify-driven cross-OS file sync, agent- and operator-reconciled conflicts, th
 coordination, and a remote operator console (standalone TUI and browser).
 
 See **[STATUS.md](STATUS.md)** for the detailed picture and remaining work.
+
+## Build from source
+
+Most people should install a release (see [Install](#install)). To build it yourself — or to hack on
+avairy — you need **Go 1.26+**:
+
+```sh
+go build ./...   # produces ./avairy
+go test ./...
+```
+
+This produces one binary, **`avairy`**, with subcommands: `core` (run core + the operator TUI),
+`node` (the agent daemon), `tui` (the remote console), and `core add-node`/`add-operator` (invite
+participants). To run straight from a checkout without installing, substitute `go run ./cmd/avairy`
+for `avairy` in any command above — e.g. `go run ./cmd/avairy core run --demo`. See
+**[BUILD.md](BUILD.md)** for cross-compiling and packaging.
 
 ## Further reading
 
