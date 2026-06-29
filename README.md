@@ -216,7 +216,7 @@ avairy node join --core http://<your-ip>:7700 \
             --family claude
 ```
 
-(`--core-mcp` defaults to `--core` — the bus is on the same endpoint — so you don't pass it.)
+(The MCP bus rides `/mcp` on `--core`, so there's nothing else to point the node at.)
 
 Prefer mTLS for anything beyond a trusted LAN — a token is a bearer credential; a certificate is an
 identity (and persists; a token node is treated as ephemeral).
@@ -439,7 +439,7 @@ prints the full set; `avairy version` prints the build.
 
 **`avairy core add-node --id <node> --advertise <host>`** issues an mTLS client-cert join (prints
 it). **`avairy core add-operator --advertise <host>`** mints an operator identity → a browser `.p12`
-plus a join for `tui connect`. (Both accept `--advertise-port`, or an explicit `--core <url>`.)
+plus a join for `tui connect`. (Both take `--advertise-port` to override the default `7700`.)
 `avairy hook …` is the internal PreToolUse shim (not run by hand).
 
 ### `avairy node join` (the agent daemon — one per agent)
@@ -447,8 +447,7 @@ plus a join for `tui connect`. (Both accept `--advertise-port`, or an explicit `
 | Flag                                  | Default          | What it does                                                                          |
 |---------------------------------------|------------------|---------------------------------------------------------------------------------------|
 | `--join <str>` / `--join-file <path>` | —                | **Recommended:** one bundled string — core URL + CA + token/cert.                     |
-| `--core <url>`                        | —                | Core control API URL (if not using a join).                                           |
-| `--core-mcp <url>`                    | `--core`         | Core MCP bus base URL for the local proxy (bus rides `/mcp` on the control endpoint). |
+| `--core <url>`                        | —                | Core control API URL (if not using a join)                                            |
 | `--token <tok>`                       | —                | Enrollment token (or a client cert via a join bundle).                                |
 | `--id <name>`                         | —                | Node id — also the agent's bus identity.                                              |
 | `--os <name>`                         | host OS          | OS capability this node advertises.                                                   |

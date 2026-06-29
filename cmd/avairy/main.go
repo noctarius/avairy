@@ -1120,19 +1120,12 @@ func addNodeCommand() *cli.Command {
 		Usage: "invite a node: mint an mTLS client-cert join bundle (prints the join string)",
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "id", Required: true, Usage: "node id (becomes the client cert identity)"},
-			&cli.StringFlag{Name: "advertise", Usage: "core host/IP — derives --core (https://host:<advertise-port>)"},
-			&cli.StringFlag{Name: "advertise-port", Value: defaultPort, Usage: "core port (for --advertise-derived --core)"},
-			&cli.StringFlag{Name: "core", Usage: "control API URL the node will dial (https://…); overrides --advertise"},
+			&cli.StringFlag{Name: "advertise", Required: true, Usage: "core host/IP the node will dial (must match core's --advertise / cert SAN)"},
+			&cli.StringFlag{Name: "advertise-port", Value: defaultPort, Usage: "core port the node will dial"},
 			&cli.StringFlag{Name: "dir", Value: ".avairy", Usage: "directory holding the CA (ca.crt/ca.key)"},
 		},
 		Action: func(_ context.Context, cmd *cli.Command) error {
-			coreURL := cmd.String("core")
-			if adv := cmd.String("advertise"); adv != "" && coreURL == "" {
-				coreURL = "https://" + net.JoinHostPort(adv, cmd.String("advertise-port"))
-			}
-			if coreURL == "" {
-				return fmt.Errorf("need --advertise <host> (or an explicit --core URL)")
-			}
+			coreURL := "https://" + net.JoinHostPort(cmd.String("advertise"), cmd.String("advertise-port"))
 			ca, err := control.EnsureCA(cmd.String("dir"))
 			if err != nil {
 				return fmt.Errorf("ca: %w", err)
@@ -1161,19 +1154,15 @@ func addOperatorCommand() *cli.Command {
 		Usage: "invite an operator console: mint a cert (.p12 for the browser + join for `tui connect`)",
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "name", Value: "operator", Usage: "operator identity embedded in the cert"},
-			&cli.StringFlag{Name: "advertise", Usage: "core host/IP — derives --core (https://host:<advertise-port>)"},
-			&cli.StringFlag{Name: "advertise-port", Value: defaultPort, Usage: "core port (for --advertise-derived --core)"},
-			&cli.StringFlag{Name: "core", Usage: "control API URL the console will dial (https://…); overrides --advertise"},
+			&cli.StringFlag{Name: "advertise", Required: true, Usage: "core host/IP the console will dial (must match core's --advertise / cert SAN)"},
+			&cli.StringFlag{Name: "advertise-port", Value: defaultPort, Usage: "core port the console will dial"},
 			&cli.StringFlag{Name: "dir", Value: ".avairy", Usage: "directory holding the CA (ca.crt/ca.key)"},
 			&cli.StringFlag{Name: "p12", Value: "operator.p12", Usage: "output PKCS#12 file to import into the browser"},
 			&cli.StringFlag{Name: "join", Value: "operator.join", Usage: "output join bundle for `avairy tui connect --join-file`"},
 			&cli.StringFlag{Name: "password", Usage: "PKCS#12 password (default: random, printed)"},
 		},
 		Action: func(_ context.Context, cmd *cli.Command) error {
-			coreURL := cmd.String("core")
-			if coreURL == "" && cmd.String("advertise") != "" {
-				coreURL = "https://" + net.JoinHostPort(cmd.String("advertise"), cmd.String("advertise-port"))
-			}
+			coreURL := "https://" + net.JoinHostPort(cmd.String("advertise"), cmd.String("advertise-port"))
 			ca, err := control.EnsureCA(cmd.String("dir"))
 			if err != nil {
 				return fmt.Errorf("ca: %w", err)
@@ -1193,10 +1182,6 @@ func addOperatorCommand() *cli.Command {
 			}
 			fmt.Printf("wrote %s (password: %s) — import into your browser/OS keychain, then open the console with NO ?token=\n", cmd.String("p12"), pw)
 			// …and a join bundle carrying the same cert+key, for the remote TUI (mTLS).
-			if coreURL == "" {
-				fmt.Fprintln(os.Stderr, "note: no --core/--advertise given, so no join bundle for `tui connect` was written (the .p12 still works in a browser)")
-				return nil
-			}
 			cert, key, err := ca.OperatorTLS(name)
 			if err != nil {
 				return fmt.Errorf("operator cert: %w", err)

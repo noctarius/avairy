@@ -15,7 +15,7 @@ import (
 // travels with the token" is automatic — no copying cert files by hand.
 type JoinBundle struct {
 	Core       string `json:"core"`                 // control API URL (https://… when TLS)
-	Bus        string `json:"bus,omitempty"`        // MCP bus base URL (supplies -core-mcp, needed by -family)
+	Bus        string `json:"bus,omitempty"`        // MCP bus base URL for the node's proxy
 	CA         []byte `json:"ca,omitempty"`         // PEM of core's CA cert to trust (empty = public/none)
 	Token      string `json:"token,omitempty"`      // one-time enrollment token
 	NodeID     string `json:"nodeId,omitempty"`     // suggested/required node id (matches a client cert CN)

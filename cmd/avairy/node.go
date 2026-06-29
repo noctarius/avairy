@@ -37,7 +37,6 @@ func nodeCommand() *cli.Command {
 			Usage: "enroll with core and run the daemon (MCP proxy + workspace sync + optional agent)",
 			Flags: []cli.Flag{
 				&cli.StringFlag{Name: "core", Usage: "core control API base URL (or supplied by --join)"},
-				&cli.StringFlag{Name: "core-mcp", Usage: "core MCP bus base URL for the local proxy (default: --core / the join's bus; the bus rides /mcp on the control endpoint)"},
 				&cli.StringFlag{Name: "token", Usage: "one-time enrollment token (or a client cert via --join)"},
 				&cli.StringFlag{Name: "id", Usage: "node id — also the agent's bus identity"},
 				&cli.StringFlag{Name: "os", Value: runtime.GOOS, Usage: "node OS capability"},
@@ -63,7 +62,7 @@ func nodeCommand() *cli.Command {
 // unchanged from the original avairy-node main().
 func runNodeJoin(_ context.Context, cmd *cli.Command) error {
 	core := ref(cmd.String("core"))
-	coreMCP := ref(cmd.String("core-mcp"))
+	coreMCP := ref("") // the MCP bus base for the local proxy; derived from the join's Bus or --core below
 	token := ref(cmd.String("token"))
 	id := ref(cmd.String("id"))
 	osName := ref(cmd.String("os"))
@@ -90,7 +89,7 @@ func runNodeJoin(_ context.Context, cmd *cli.Command) error {
 		}
 		*core = jb.Core
 		joinCA = jb.CA
-		if jb.Bus != "" && *coreMCP == "" {
+		if jb.Bus != "" {
 			*coreMCP = jb.Bus // so --family works from a join alone (needs the MCP bus base)
 		}
 		if jb.Token != "" {
@@ -106,8 +105,8 @@ func runNodeJoin(_ context.Context, cmd *cli.Command) error {
 	if *core == "" || *id == "" || (*token == "" && !mtls) {
 		return fmt.Errorf("need --core and --id, plus --token (or a join with a client cert)")
 	}
-	// The MCP bus rides /mcp on the control endpoint, so the bus base == the core URL. Default it
-	// (the local proxy appends /mcp); an explicit --core-mcp or a join's Bus still wins.
+	// The MCP bus rides /mcp on the control endpoint, so the bus base == the core URL. When no join
+	// bundle supplied it (token join), default to --core; the local proxy appends /mcp.
 	if *coreMCP == "" {
 		*coreMCP = *core
 	}
@@ -196,11 +195,9 @@ func runNodeJoin(_ context.Context, cmd *cli.Command) error {
 		}()
 	}
 
-	// Optionally spawn & drive the agent on this node, wired to the local MCP proxy.
+	// Optionally spawn & drive the agent on this node, wired to the local MCP proxy. coreMCP is
+	// always set by now (the join's Bus or --core), so the proxy below has a target.
 	if *family != "" {
-		if *coreMCP == "" {
-			return fmt.Errorf("--family requires --core-mcp")
-		}
 		if err := spawnAgent(ctx, n, *family, *id, *role, *model, *ws, *proxy, mirrorDir, agent.SessionPersistent, *gateEdits, *idleSleep); err != nil {
 			return fmt.Errorf("spawn agent: %w", err)
 		}
@@ -349,7 +346,7 @@ func (m *nodeConsultMgr) apply(parent context.Context, cmd control.ConsultComman
 	switch cmd.Action {
 	case "open":
 		if m.coreMCP == "" {
-			fmt.Fprintln(os.Stderr, "consult: cannot spawn without --core-mcp")
+			fmt.Fprintln(os.Stderr, "consult: cannot spawn without a core MCP bus base")
 			return
 		}
 		fam := cmd.Family
