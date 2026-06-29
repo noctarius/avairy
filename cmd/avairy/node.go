@@ -58,6 +58,21 @@ func nodeCommand() *cli.Command {
 	}
 }
 
+// nodeCaps assembles the capability map a node reports at enroll: its OS, plus — when the daemon
+// drives an agent — the agent family and (if pinned) the model. Empty values are omitted, so a
+// proxy-only node reports just its OS and an unpinned agent reports no model. These land in the
+// core's NodeInfo.Caps, the bus roster (list_agents), and the node_enrolled journal record.
+func nodeCaps(os, family, model string) map[string]string {
+	caps := map[string]string{"os": os}
+	if family != "" {
+		caps["family"] = family
+	}
+	if model != "" {
+		caps["model"] = model
+	}
+	return caps
+}
+
 // runNodeJoin enrolls and runs the daemon. Flags are read into *flag locals so the wiring is
 // unchanged from the original avairy-node main().
 func runNodeJoin(_ context.Context, cmd *cli.Command) error {
@@ -139,7 +154,7 @@ func runNodeJoin(_ context.Context, cmd *cli.Command) error {
 		}
 		n.HTTP = client
 	}
-	if err := n.Enroll(*token, *osName, map[string]string{"os": *osName}); err != nil {
+	if err := n.Enroll(*token, *osName, nodeCaps(*osName, *family, *model)); err != nil {
 		return fmt.Errorf("enroll: %w", err)
 	}
 	fmt.Printf("enrolled node %q (os=%s) with core %s\n", *id, *osName, *core)
