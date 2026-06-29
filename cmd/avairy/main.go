@@ -93,8 +93,7 @@ func coreFlags() []cli.Flag {
 		&cli.StringFlag{Name: "family", Value: "claude", Usage: "live agent family: claude | codex | copilot | grok"},
 		&cli.StringFlag{Name: "model", Value: "haiku", Usage: "model for the live agent (kept cheap by default)"},
 		&cli.StringFlag{Name: "send", Usage: "one-shot (dev): send this to a local 'alice', print the journal, and exit"},
-		&cli.StringFlag{Name: "control-addr", Usage: "serve the node control + operator API here (e.g. 0.0.0.0:7700)"},
-		&cli.StringFlag{Name: "mcp-addr", Value: "127.0.0.1:7702", Usage: "MCP bus listen address (0.0.0.0:7702 to allow remote nodes)"},
+		&cli.StringFlag{Name: "control-addr", Usage: "serve the node control + operator API (and the MCP bus at /mcp) here (e.g. 0.0.0.0:7700)"},
 		&cli.StringFlag{Name: "advertise", Usage: "host/IP remote nodes use to reach this core"},
 		&cli.StringFlag{Name: "workspace", Usage: "operator project dir to seed/sync into the canonical hub"},
 		&cli.StringFlag{Name: "tls-cert", Usage: "PEM cert file: serve the control channel over TLS"},
@@ -136,7 +135,6 @@ func runCore(_ context.Context, cmd *cli.Command, headlessMode bool) error {
 	send := ref(cmd.String("send"))
 	model := ref(cmd.String("model"))
 	controlAddr := ref(cmd.String("control-addr"))
-	mcpAddr := ref(cmd.String("mcp-addr"))
 	advertise := ref(cmd.String("advertise"))
 	workspaceDir := ref(cmd.String("workspace"))
 	tlsCert := ref(cmd.String("tls-cert"))
@@ -220,7 +218,7 @@ func runCore(_ context.Context, cmd *cli.Command, headlessMode bool) error {
 
 	// Self-managed TLS material (DESIGN.md §4), shared by the MCP bus and the control channel, so
 	// both encrypted listeners use one cert and the CA travels to nodes in the join bundle.
-	ca, serverCert, caPEM := serverTLS(*tlsAuto, *advertise, *mcpAddr, *controlAddr)
+	ca, serverCert, caPEM := serverTLS(*tlsAuto, *advertise, *controlAddr)
 
 	// HTTP servers' per-connection errors (e.g. a browser refusing the self-signed cert, which the
 	// peer reports as a TLS alert) must NOT hit the terminal — under the TUI's alt-screen they
@@ -231,8 +229,9 @@ func runCore(_ context.Context, cmd *cli.Command, headlessMode bool) error {
 		defer f.Close()
 	}
 
-	// Local agents on this machine always reach the bus via a PLAIN loopback listener — they
-	// never need TLS, even when the remote-facing bus is encrypted.
+	// Agents on THIS machine (core --live, ephemeral consults) reach the bus via a PLAIN loopback
+	// listener — they never cross the network, so they never need TLS. Remote nodes instead reach
+	// the bus at /mcp on the control listener (mounted in serveControlAPI), so there's one port.
 	lnLocal, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		fail("listen local bus", err)
@@ -240,26 +239,6 @@ func runCore(_ context.Context, cmd *cli.Command, headlessMode bool) error {
 	go (&http.Server{Handler: mcpSrv.HTTPHandler(), ErrorLog: httpLog}).Serve(lnLocal)
 	_, localPort, _ := net.SplitHostPort(lnLocal.Addr().String())
 	busURL := "http://127.0.0.1:" + localPort + mcp.EndpointPath
-
-	// Remote-facing bus on -mcp-addr: TLS when configured (a node's MCP proxy trusts the CA),
-	// else plain. Carries inter-agent messages, which would otherwise cross the wire in cleartext.
-	ln, err := net.Listen("tcp", *mcpAddr)
-	if err != nil {
-		fail("listen", err)
-	}
-	busScheme := "http"
-	busSrv := &http.Server{Handler: mcpSrv.HTTPHandler(), ErrorLog: httpLog}
-	switch {
-	case *tlsAuto:
-		busScheme = "https"
-		busSrv.TLSConfig = &tls.Config{Certificates: []tls.Certificate{serverCert}}
-		go busSrv.ServeTLS(ln, "", "")
-	case *tlsCert != "" && *tlsKey != "":
-		busScheme = "https"
-		go busSrv.ServeTLS(ln, *tlsCert, *tlsKey)
-	default:
-		go busSrv.Serve(ln)
-	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -281,7 +260,7 @@ func runCore(_ context.Context, cmd *cli.Command, headlessMode bool) error {
 		defer serveControlAPI(controlDeps{
 			ctx: ctx, jrnl: jrnl, b: b, mcpSrv: mcpSrv, svc: svc,
 			approvals: approvals, conflicts: conflictBroker, consults: consults,
-			ca: ca, serverCert: serverCert, caPEM: caPEM, busScheme: busScheme, busLn: ln,
+			ca: ca, serverCert: serverCert, caPEM: caPEM,
 			opToken: opToken, httpLog: httpLog, mtlsEnabled: mtlsEnabled,
 			controlAddr: controlAddr, workspaceDir: workspaceDir, tlsCert: tlsCert, tlsKey: tlsKey,
 			advertise: advertise, send: send, tlsAuto: tlsAuto, web: web, headless: headless,
@@ -352,8 +331,6 @@ type controlDeps struct {
 	ca          *control.CA
 	serverCert  tls.Certificate
 	caPEM       []byte
-	busScheme   string
-	busLn       net.Listener
 	opToken     string
 	httpLog     *log.Logger
 	mtlsEnabled bool
@@ -369,7 +346,7 @@ func serveControlAPI(d controlDeps) func() {
 	ctx, jrnl, b, mcpSrv, svc := d.ctx, d.jrnl, d.b, d.mcpSrv, d.svc
 	approvals, conflictBroker, consults := d.approvals, d.conflicts, d.consults
 	ca, serverCert, caPEM := d.ca, d.serverCert, d.caPEM
-	busScheme, ln, opToken, httpLog, mtlsEnabled := d.busScheme, d.busLn, d.opToken, d.httpLog, d.mtlsEnabled
+	opToken, httpLog, mtlsEnabled := d.opToken, d.httpLog, d.mtlsEnabled
 	controlAddr, workspaceDir, tlsCert, tlsKey, advertise, send := d.controlAddr, d.workspaceDir, d.tlsCert, d.tlsKey, d.advertise, d.send
 	tlsAuto, web, headless := d.tlsAuto, d.web, d.headless
 
@@ -457,10 +434,13 @@ func serveControlAPI(d controlDeps) func() {
 		}
 		return out
 	}
-	// Serve the operator API (#18) alongside the node control API on one listener (shared TLS):
-	// /operator/* → remote TUI/web clients; everything else → the node channel.
+	// One listener serves all three planes (shared TLS): /mcp → the MCP bus (remote nodes' proxies
+	// reach it here over mTLS — no separate bus port); /operator/* → remote TUI/web clients;
+	// everything else → the node control channel (enroll/heartbeat/sync). Local agents on core use
+	// the plain loopback bus instead; only remote nodes hit /mcp here.
 	rootHandler := func() http.Handler {
 		mux := http.NewServeMux()
+		mux.Handle(mcp.EndpointPath, mcpSrv.HTTPHandler())
 		mux.Handle("/operator/", operator.NewServer(svc, opToken, *web).Handler())
 		mux.Handle("/", core.Handler())
 		return mux
@@ -495,10 +475,12 @@ func serveControlAPI(d controlDeps) func() {
 	go core.RunLiveness(ctx) // mark nodes offline when heartbeats lapse
 
 	ctrlURL := ctrlScheme + "://" + advertised(*advertise, *controlAddr)
-	busBase := busScheme + "://" + advertised(*advertise, ln.Addr().String())
+	// The MCP bus rides the same endpoint; the node's proxy dials this base and appends /mcp, so the
+	// bundled base must NOT carry the path. One reachable port (control) now covers control + bus.
+	busBase := ctrlURL
 	warn := ""
-	if unreachableHost(hostOf(advertised(*advertise, ln.Addr().String()))) {
-		warn = "host not reachable from other machines — pass --advertise <ip/host> and bind --control-addr/--mcp-addr to 0.0.0.0:PORT"
+	if unreachableHost(hostOf(advertised(*advertise, *controlAddr))) {
+		warn = "host not reachable from other machines — pass --advertise <ip/host> and bind --control-addr to 0.0.0.0:PORT"
 	}
 	// Token enrollment (opt-in, temporary): write a one-string join bundle (core URL + CA + token)
 	// for the next node, refreshed when the token is read or rotated. Skipped when token joins are
@@ -545,7 +527,7 @@ func serveControlAPI(d controlDeps) func() {
 	// Under the TUI's alt-screen, stdout is hidden — so the token/join is shown in the TUI. Only
 	// print here when there's no TUI (headless serve, or a one-shot --send).
 	if *headless || *send != "" {
-		fmt.Printf("control API:  %s\nMCP bus base: %s\n", ctrlURL, busBase)
+		fmt.Printf("control API:  %s\nMCP bus:      %s%s (shared port)\n", ctrlURL, ctrlURL, mcp.EndpointPath)
 		if !mtlsEnabled {
 			fmt.Printf("enroll token: %s\nnode join:    %s\n", curToken(), joinPath)
 		}
@@ -640,10 +622,10 @@ func setupSeedWorkspace(ctx context.Context, mcpSrv *mcp.Server, hub *workspace.
 	return commitFn, bundleFn, cleanup
 }
 
-// serverTLS builds the self-managed CA + one server cert covering the advertised control/bus hosts
-// and loopback (DESIGN.md §4), shared by the MCP bus and the control channel. Returns zero values
-// when tlsAuto is off.
-func serverTLS(tlsAuto bool, advertise, mcpAddr, controlAddr string) (*control.CA, tls.Certificate, []byte) {
+// serverTLS builds the self-managed CA + one server cert covering the advertised control host and
+// loopback (DESIGN.md §4); the single control listener serves the control channel, the operator API,
+// and the MCP bus (/mcp). Returns zero values when tlsAuto is off.
+func serverTLS(tlsAuto bool, advertise, controlAddr string) (*control.CA, tls.Certificate, []byte) {
 	if !tlsAuto {
 		return nil, tls.Certificate{}, nil
 	}
@@ -652,7 +634,6 @@ func serverTLS(tlsAuto bool, advertise, mcpAddr, controlAddr string) (*control.C
 		fail("ca", err)
 	}
 	cert, err := ca.ServerTLS([]string{
-		hostOf(advertised(advertise, mcpAddr)),
 		hostOf(advertised(advertise, controlAddr)),
 		"127.0.0.1", "localhost", "::1",
 	})
@@ -1124,12 +1105,9 @@ func truncateForBus(b []byte) string {
 	return string(b[:max]) + "\n… (truncated)"
 }
 
-// Default ports avairy serves on, used to infer URLs from -advertise: control on 7700 (the
-// convention), the MCP bus on 7702 (matches -mcp-addr's default). Give -core/-mcp to override.
-const (
-	defaultControlPort = "7700"
-	defaultBusPort     = "7702"
-)
+// defaultControlPort is the conventional port avairy's control listener serves on (control channel +
+// operator API + the MCP bus at /mcp), used to infer --core from --advertise. Give --core to override.
+const defaultControlPort = "7700"
 
 // addNodeCommand (`avairy core add-node`) invites a node by minting an mTLS client-cert join
 // bundle from the self-managed CA — no enrollment token. The node it's given to authenticates by
@@ -1140,20 +1118,14 @@ func addNodeCommand() *cli.Command {
 		Usage: "invite a node: mint an mTLS client-cert join bundle (prints the join string)",
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "id", Required: true, Usage: "node id (becomes the client cert identity)"},
-			&cli.StringFlag{Name: "advertise", Usage: "core host/IP — derives --core (https://host:7700) and --mcp (https://host:7702)"},
+			&cli.StringFlag{Name: "advertise", Usage: "core host/IP — derives --core (https://host:7700)"},
 			&cli.StringFlag{Name: "core", Usage: "control API URL the node will dial (https://…); overrides --advertise"},
-			&cli.StringFlag{Name: "mcp", Usage: "MCP bus base URL to bundle (so the node can run the agent); overrides --advertise"},
 			&cli.StringFlag{Name: "dir", Value: ".avairy", Usage: "directory holding the CA (ca.crt/ca.key)"},
 		},
 		Action: func(_ context.Context, cmd *cli.Command) error {
-			coreURL, busURL := cmd.String("core"), cmd.String("mcp")
-			if adv := cmd.String("advertise"); adv != "" {
-				if coreURL == "" {
-					coreURL = "https://" + adv + ":" + defaultControlPort
-				}
-				if busURL == "" {
-					busURL = "https://" + adv + ":" + defaultBusPort
-				}
+			coreURL := cmd.String("core")
+			if adv := cmd.String("advertise"); adv != "" && coreURL == "" {
+				coreURL = "https://" + adv + ":" + defaultControlPort
 			}
 			if coreURL == "" {
 				return fmt.Errorf("need --advertise <host> (or an explicit --core URL)")
@@ -1167,7 +1139,9 @@ func addNodeCommand() *cli.Command {
 				return fmt.Errorf("client cert: %w", err)
 			}
 			fmt.Println(control.EncodeJoin(control.JoinBundle{
-				Core: coreURL, Bus: busURL, CA: ca.CertPEM(), NodeID: cmd.String("id"), ClientCert: cert, ClientKey: key,
+				// Bus == Core: the bus rides /mcp on the control endpoint, and the node's proxy appends
+				// /mcp to this base. One reachable port covers both.
+				Core: coreURL, Bus: coreURL, CA: ca.CertPEM(), NodeID: cmd.String("id"), ClientCert: cert, ClientKey: key,
 			}))
 			return nil
 		},

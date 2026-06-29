@@ -187,10 +187,16 @@ recipients to cancel their current turn.
 
 ### 4.3 MCP server — the agent-facing surface (`internal/mcp`)
 
-avairy core runs an **MCP server** (wrapping `mark3labs/mcp-go`) exposed at `/mcp` over HTTP. Every
-agent connects to a **localhost MCP endpoint on its own node**; the node daemon reverse-proxies that
-to core and stamps the caller's identity (`X-Avairy-Agent`). The agent sees only "a local MCP
-server" — network topology is invisible.
+avairy core runs an **MCP server** (wrapping `mark3labs/mcp-go`) served at `/mcp`. Every agent
+connects to a **localhost MCP endpoint on its own node**; the node daemon reverse-proxies that to
+core and stamps the caller's identity (`X-Avairy-Agent`). The agent sees only "a local MCP server" —
+network topology is invisible.
+
+For **remote nodes**, `/mcp` is mounted on the **control listener** (`--control-addr`) — so the bus,
+the control channel, and the operator API all share **one port** over the same mTLS, and a node's
+proxy dials the control URL and appends `/mcp`. **Core-local** agents (`--live`, ephemeral consults)
+instead reach the server over a plain loopback listener (ephemeral port) that never crosses the
+network. There is no separate bus port.
 
 **Identity & no-spoofing.** `agentFromContext(ctx)` resolves the caller from the injected header;
 `Bus.Publish` is stamped with that id. An agent cannot post as another.

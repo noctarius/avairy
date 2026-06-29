@@ -169,14 +169,15 @@ client certificate, so there's no shared secret to leak and the channel is encry
 **1. On your machine, start core** with its own CA and a project to share:
 
 ```sh
-avairy core run --control-addr 0.0.0.0:7700 --mcp-addr 0.0.0.0:7702 \
+avairy core run --control-addr 0.0.0.0:7700 \
        --advertise <your-ip> --tls-auto --workspace ./project
 ```
 
-`--tls-auto` creates and persists a CA under `.avairy/` and serves **both** the control channel and
-the MCP bus over HTTPS. `--workspace ./project` seeds the canonical workspace and keeps it synced
-both ways, so every node gets a working copy and node edits flow back to your directory. (Use
-`avairy core serve …` for the same thing headless, with no TUI.)
+`--tls-auto` creates and persists a CA under `.avairy/` and serves the control channel, the operator
+API, **and the MCP bus (at `/mcp`)** over HTTPS — all on the **one** `--control-addr` port, so that's
+the only port remote nodes need to reach. `--workspace ./project` seeds the canonical workspace and
+keeps it synced both ways, so every node gets a working copy and node edits flow back to your
+directory. (Use `avairy core serve …` for the same thing headless, with no TUI.)
 
 **2. Invite a node** — one bundled string carrying the core URL, the CA to trust, and a client
 certificate (no token):
@@ -206,16 +207,17 @@ first joins with is **bound to that node**, so a restarted daemon rejoins with t
 `--token`/`--id`. (Without `--allow-token-join`, the only way in is a minted cert — secure by default.)
 
 ```sh
-avairy core run --control-addr 0.0.0.0:7700 --mcp-addr 0.0.0.0:7702 \
+avairy core run --control-addr 0.0.0.0:7700 \
        --advertise <your-ip> --allow-token-join --workspace ./project
 
 avairy node join --core http://<your-ip>:7700 \
-            --core-mcp http://<your-ip>:7702 \
             --token <enroll-token> \
             --id linux-box \
             --workspace ./repo \
             --family claude
 ```
+
+(`--core-mcp` defaults to `--core` — the bus is on the same endpoint — so you don't pass it.)
 
 Prefer mTLS for anything beyond a trusted LAN — a token is a bearer credential; a certificate is an
 identity (and persists; a token node is treated as ephemeral).
@@ -232,13 +234,14 @@ first question. Assume your machine is reachable at `192.0.2.10`.
 **1. Start core** (your machine) with its own CA and the project to share:
 
 ```sh
-avairy core run --control-addr 0.0.0.0:7700 --mcp-addr 0.0.0.0:7702 \
+avairy core run --control-addr 0.0.0.0:7700 \
        --advertise 192.0.2.10 --tls-auto --web --workspace ./project
 ```
 
-The operator TUI opens. Core has written its CA to `.avairy/` and is serving control + bus over
-HTTPS. `--web` also serves the **browser console** — core prints its URL (and the TUI's control line
-shows it), so you can drive the fleet from a browser instead of, or alongside, the TUI.
+The operator TUI opens. Core has written its CA to `.avairy/` and is serving control, operator API,
+and the MCP bus over HTTPS on the one `:7700` port. `--web` also serves the **browser console** —
+core prints its URL (and the TUI's control line shows it), so you can drive the fleet from a browser
+instead of, or alongside, the TUI.
 
 **2. Invite each node** (a second terminal on the core machine):
 
@@ -422,8 +425,7 @@ prints the full set; `avairy version` prints the build.
 | `--family`                  | `claude`         | Live agent family: `claude` \| `codex` \| `copilot` \| `grok`.                     |
 | `--model`                   | `haiku`          | Model for the live agent (kept cheap by default).                                  |
 | `--send <msg>`              | —                | One-shot: send to a local `alice`, print the journal, exit.                        |
-| `--control-addr <addr>`     | —                | Serve the node control + operator API here (e.g. `0.0.0.0:7700`).                  |
-| `--mcp-addr <addr>`         | `127.0.0.1:7702` | MCP bus listen address (`0.0.0.0:7702` to allow remote nodes).                     |
+| `--control-addr <addr>`     | —                | Serve the control + operator API **and the MCP bus (`/mcp`)** here, one port (e.g. `0.0.0.0:7700`). |
 | `--advertise <host>`        | listen host      | Host/IP remote nodes use to reach this core.                                       |
 | `--workspace <dir>`         | —                | Project dir to seed/sync into the canonical hub.                                   |
 | `--tls-auto`                | off              | **Recommended:** self-manage a CA and serve control + bus over TLS (enables mTLS). |
@@ -446,7 +448,7 @@ plus a join for `tui connect`. `avairy hook …` is the internal PreToolUse shim
 |---------------------------------------|------------------|---------------------------------------------------------------------------------------|
 | `--join <str>` / `--join-file <path>` | —                | **Recommended:** one bundled string — core URL + CA + token/cert.                     |
 | `--core <url>`                        | —                | Core control API URL (if not using a join).                                           |
-| `--core-mcp <url>`                    | —                | Core MCP bus base URL for the local proxy.                                            |
+| `--core-mcp <url>`                    | `--core`         | Core MCP bus base URL for the local proxy (bus rides `/mcp` on the control endpoint). |
 | `--token <tok>`                       | —                | Enrollment token (or a client cert via a join bundle).                                |
 | `--id <name>`                         | —                | Node id — also the agent's bus identity.                                              |
 | `--os <name>`                         | host OS          | OS capability this node advertises.                                                   |

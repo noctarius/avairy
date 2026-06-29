@@ -127,10 +127,10 @@ Ranked roughly by value-to-effort within each group.
    - **Auto-reenroll**: an mTLS node re-enrolls automatically on a 401 (e.g. after a core
      restart drops its session) and retries — cert auth is stateless on core, so it recovers
      without a node restart. (Token nodes can't: their binding is in-memory only — see #12.)
-   - ✅ **MCP bus TLS too**: local agents get a dedicated plain loopback listener (never need
-     TLS), while the remote-facing bus on `-mcp-addr` is served TLS with the same self-CA cert;
-     a node's MCP proxy reuses its CA-trusting transport to reach it. So a remote agent's
-     inter-agent traffic is no longer cleartext either.
+   - ✅ **MCP bus TLS + one port**: local agents get a dedicated plain loopback listener (never
+     need TLS), while remote nodes reach the bus at `/mcp` on the **control listener** — so the
+     bus, control channel, and operator API share one TLS port. A node's MCP proxy reuses its
+     CA-trusting transport to reach it, so a remote agent's inter-agent traffic isn't cleartext.
 
 9. ~~**Dead-node detection.**~~ ✅ Done. `Core.RunLiveness` marks a node offline when its
    heartbeats lapse past `LivenessTimeout` (15s) and online again on return, journaling each
