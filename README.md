@@ -169,22 +169,22 @@ client certificate, so there's no shared secret to leak and the channel is encry
 **1. On your machine, start core** with its own CA and a project to share:
 
 ```sh
-avairy core run --control-addr 0.0.0.0:7700 \
-       --advertise <your-ip> --tls-auto --workspace ./project
+avairy core run --advertise <your-ip> --tls-auto --workspace ./project
 ```
 
-`--tls-auto` creates and persists a CA under `.avairy/` and serves the control channel, the operator
-API, **and the MCP bus (at `/mcp`)** over HTTPS — all on the **one** `--control-addr` port, so that's
-the only port remote nodes need to reach. `--workspace ./project` seeds the canonical workspace and
-keeps it synced both ways, so every node gets a working copy and node edits flow back to your
-directory. (Use `avairy core serve …` for the same thing headless, with no TUI.)
+`--advertise <your-ip>` is the host remote nodes dial; setting it binds core on `0.0.0.0:7700` and
+serves the control channel, the operator API, **and the MCP bus (at `/mcp`)** over HTTPS — all on
+that **one** port, so it's the only port remote nodes need to reach. (Use `--advertise-port` to pick
+a port other than 7700; omit `--advertise` entirely for a local-only core.) `--tls-auto` creates and
+persists a CA under `.avairy/`. `--workspace ./project` seeds the canonical workspace and keeps it
+synced both ways, so every node gets a working copy and node edits flow back to your directory. (Use
+`avairy core serve …` for the same thing headless, with no TUI.)
 
 **2. Invite a node** — one bundled string carrying the core URL, the CA to trust, and a client
 certificate (no token):
 
 ```sh
-avairy core add-node --id linux-box \
-       --core https://<your-ip>:7700 > linux-box.join
+avairy core add-node --id linux-box --advertise <your-ip> > linux-box.join
 ```
 
 **3. On the remote machine, join** with that single string and let the daemon run the agent:
@@ -207,8 +207,7 @@ first joins with is **bound to that node**, so a restarted daemon rejoins with t
 `--token`/`--id`. (Without `--allow-token-join`, the only way in is a minted cert — secure by default.)
 
 ```sh
-avairy core run --control-addr 0.0.0.0:7700 \
-       --advertise <your-ip> --allow-token-join --workspace ./project
+avairy core run --advertise <your-ip> --allow-token-join --workspace ./project
 
 avairy node join --core http://<your-ip>:7700 \
             --token <enroll-token> \
@@ -234,20 +233,20 @@ first question. Assume your machine is reachable at `192.0.2.10`.
 **1. Start core** (your machine) with its own CA and the project to share:
 
 ```sh
-avairy core run --control-addr 0.0.0.0:7700 \
-       --advertise 192.0.2.10 --tls-auto --web --workspace ./project
+avairy core run --advertise 192.0.2.10 --tls-auto --web --workspace ./project
 ```
 
 The operator TUI opens. Core has written its CA to `.avairy/` and is serving control, operator API,
-and the MCP bus over HTTPS on the one `:7700` port. `--web` also serves the **browser console** —
+and the MCP bus over HTTPS on the one `:7700` port (bound `0.0.0.0`). `--web` also serves the
+**browser console** —
 core prints its URL (and the TUI's control line shows it), so you can drive the fleet from a browser
 instead of, or alongside, the TUI.
 
 **2. Invite each node** (a second terminal on the core machine):
 
 ```sh
-avairy core add-node --id linux-box --core https://192.0.2.10:7700 > linux-box.join
-avairy core add-node --id macos-box --core https://192.0.2.10:7700 > macos-box.join
+avairy core add-node --id linux-box --advertise 192.0.2.10 > linux-box.join
+avairy core add-node --id macos-box --advertise 192.0.2.10 > macos-box.join
 ```
 
 Each `.join` is one line of text — the core URL, the CA to trust, and that node's certificate.
@@ -425,8 +424,8 @@ prints the full set; `avairy version` prints the build.
 | `--family`                  | `claude`         | Live agent family: `claude` \| `codex` \| `copilot` \| `grok`.                     |
 | `--model`                   | `haiku`          | Model for the live agent (kept cheap by default).                                  |
 | `--send <msg>`              | —                | One-shot: send to a local `alice`, print the journal, exit.                        |
-| `--control-addr <addr>`     | —                | Serve the control + operator API **and the MCP bus (`/mcp`)** here, one port (e.g. `0.0.0.0:7700`). |
-| `--advertise <host>`        | listen host      | Host/IP remote nodes use to reach this core.                                       |
+| `--advertise <host>`        | —                | Host/IP remote nodes dial; setting it serves control + operator API + MCP bus (`/mcp`) on one port, bound `0.0.0.0`. Omit ⇒ local-only. |
+| `--advertise-port <port>`   | `7700`           | Port to bind (`0.0.0.0`) and advertise.                                            |
 | `--workspace <dir>`         | —                | Project dir to seed/sync into the canonical hub.                                   |
 | `--tls-auto`                | off              | **Recommended:** self-manage a CA and serve control + bus over TLS (enables mTLS). |
 | `--allow-token-join`        | off              | Allow temporary token-based node enrollment (default: mTLS cert joins only).       |
@@ -438,9 +437,10 @@ prints the full set; `avairy version` prints the build.
 | `--agent-budget <usd>`      | 0 (off)          | Per-agent spend cap: cross it and that agent is interrupted.                       |
 | `--idle-sleep <dur>`        | 0 (off)          | Park an idle core agent (e.g. `10m`); the next directed message respawns it.       |
 
-**`avairy core add-node --id <node> --core <https-url>`** issues an mTLS client-cert join (prints
-it). **`avairy core add-operator [--core <url>]`** mints an operator identity → a browser `.p12`
-plus a join for `tui connect`. `avairy hook …` is the internal PreToolUse shim (not run by hand).
+**`avairy core add-node --id <node> --advertise <host>`** issues an mTLS client-cert join (prints
+it). **`avairy core add-operator --advertise <host>`** mints an operator identity → a browser `.p12`
+plus a join for `tui connect`. (Both accept `--advertise-port`, or an explicit `--core <url>`.)
+`avairy hook …` is the internal PreToolUse shim (not run by hand).
 
 ### `avairy node join` (the agent daemon — one per agent)
 

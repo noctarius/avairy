@@ -233,9 +233,9 @@ Ranked roughly by value-to-effort within each group.
     in-process or attached from another machine.
     - **(a) core + attached TUI** — as today; `avairy` builds `operator.Services` and runs
       `tui.Run(svc.Deps())` in-process.
-    - **(b) core serving + remote TUI** — `avairy -control-addr … -headless` serves the **operator
-      API** (`/operator/*`) on the control listener, sharing its TLS. `avairy-tui -join-file
-      .avairy/operator-join` (or `-core/-token/-ca`) attaches and renders the identical UI.
+    - **(b) core serving + remote TUI** — `avairy core serve --advertise … ` serves the **operator
+      API** (`/operator/*`) on the one listener, sharing its TLS. `avairy tui connect --join-file
+      .avairy/operator-join` (or `--core/--token/--ca`) attaches and renders the identical UI.
 
     New `internal/operator` package: `Services` (the live surface — journal + bus/board/approvals/
     conflicts actions) yields both `Deps()` (in-process) and `NewServer()` (HTTP). The API is a

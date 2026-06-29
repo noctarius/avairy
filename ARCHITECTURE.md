@@ -192,11 +192,11 @@ connects to a **localhost MCP endpoint on its own node**; the node daemon revers
 core and stamps the caller's identity (`X-Avairy-Agent`). The agent sees only "a local MCP server" —
 network topology is invisible.
 
-For **remote nodes**, `/mcp` is mounted on the **control listener** (`--control-addr`) — so the bus,
-the control channel, and the operator API all share **one port** over the same mTLS, and a node's
-proxy dials the control URL and appends `/mcp`. **Core-local** agents (`--live`, ephemeral consults)
-instead reach the server over a plain loopback listener (ephemeral port) that never crosses the
-network. There is no separate bus port.
+For **remote nodes**, `/mcp` is mounted on the **control listener** (the single port set up by
+`--advertise`, bound `0.0.0.0:7700` by default) — so the bus, the control channel, and the operator
+API all share **one port** over the same mTLS, and a node's proxy dials the core URL and appends
+`/mcp`. **Core-local** agents (`--live`, ephemeral consults) instead reach the server over a plain
+loopback listener (ephemeral port) that never crosses the network. There is no separate bus port.
 
 **Identity & no-spoofing.** `agentFromContext(ctx)` resolves the caller from the injected header;
 `Bus.Publish` is stamped with that id. An agent cannot post as another.
@@ -477,10 +477,11 @@ highlighted.
 ### 5.1 Bootstrap & node join
 
 ```
-operator: avairy core run --tls-auto
-   → EnsureCA (.avairy/ca.{crt,key}); start bus, MCP, control API, hub, facilitator, TUI
-operator: avairy core add-node --id linux        → prints a JoinBundle (CA + client cert/key)
-on node:  avairy node join --join <bundle> --family claude --workspace ~/proj --core-mcp …
+operator: avairy core run --advertise <ip> --tls-auto
+   → EnsureCA (.avairy/ca.{crt,key}); bind 0.0.0.0:7700; start bus(/mcp), control API, operator
+     API, hub, facilitator, TUI — all on the one port
+operator: avairy core add-node --id linux --advertise <ip>   → prints a JoinBundle (CA + cert/key)
+on node:  avairy node join --join <bundle> --family claude --workspace ~/proj
    → ReadJoin → Enroll (mTLS) → ResumeFromHub → start MCP proxy + /gate → spawn agent
    → heartbeat/sync loop every 2s
 ```

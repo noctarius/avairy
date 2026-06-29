@@ -4,7 +4,7 @@
 //	go run ./cmd/avairy -demo           # TUI with mock agents alice+bob (zero credits)
 //	go run ./cmd/avairy -live           # alice is a real Claude Code agent on the MCP bus
 //	go run ./cmd/avairy -live -family grok
-//	go run ./cmd/avairy -control-addr :7700 -headless   # serve, no TUI (nodes enroll; ctrl+c to stop)
+//	go run ./cmd/avairy --advertise <ip> --headless     # serve, no TUI (nodes enroll; ctrl+c to stop)
 //	go run ./cmd/avairy -live -send "create a task titled ping"
 //	                                    # one real turn, print the journal, exit (for verification)
 package main
@@ -93,8 +93,8 @@ func coreFlags() []cli.Flag {
 		&cli.StringFlag{Name: "family", Value: "claude", Usage: "live agent family: claude | codex | copilot | grok"},
 		&cli.StringFlag{Name: "model", Value: "haiku", Usage: "model for the live agent (kept cheap by default)"},
 		&cli.StringFlag{Name: "send", Usage: "one-shot (dev): send this to a local 'alice', print the journal, and exit"},
-		&cli.StringFlag{Name: "control-addr", Usage: "serve the node control + operator API (and the MCP bus at /mcp) here (e.g. 0.0.0.0:7700)"},
-		&cli.StringFlag{Name: "advertise", Usage: "host/IP remote nodes use to reach this core"},
+		&cli.StringFlag{Name: "advertise", Usage: "host/IP remote nodes use to reach this core; setting it serves the control + operator API + MCP bus (one port, bound 0.0.0.0). Omit for a local-only core."},
+		&cli.StringFlag{Name: "advertise-port", Value: defaultPort, Usage: "port to bind (0.0.0.0) and advertise"},
 		&cli.StringFlag{Name: "workspace", Usage: "operator project dir to seed/sync into the canonical hub"},
 		&cli.StringFlag{Name: "tls-cert", Usage: "PEM cert file: serve the control channel over TLS"},
 		&cli.StringFlag{Name: "tls-key", Usage: "PEM private key file for --tls-cert"},
@@ -134,8 +134,8 @@ func runCore(_ context.Context, cmd *cli.Command, headlessMode bool) error {
 	headless := ref(headlessMode)
 	send := ref(cmd.String("send"))
 	model := ref(cmd.String("model"))
-	controlAddr := ref(cmd.String("control-addr"))
 	advertise := ref(cmd.String("advertise"))
+	advertisePort := ref(cmd.String("advertise-port"))
 	workspaceDir := ref(cmd.String("workspace"))
 	tlsCert := ref(cmd.String("tls-cert"))
 	tlsKey := ref(cmd.String("tls-key"))
@@ -218,7 +218,7 @@ func runCore(_ context.Context, cmd *cli.Command, headlessMode bool) error {
 
 	// Self-managed TLS material (DESIGN.md §4), shared by the MCP bus and the control channel, so
 	// both encrypted listeners use one cert and the CA travels to nodes in the join bundle.
-	ca, serverCert, caPEM := serverTLS(*tlsAuto, *advertise, *controlAddr)
+	ca, serverCert, caPEM := serverTLS(*tlsAuto, *advertise)
 
 	// HTTP servers' per-connection errors (e.g. a browser refusing the self-signed cert, which the
 	// peer reports as a TLS alert) must NOT hit the terminal — under the TUI's alt-screen they
@@ -256,21 +256,21 @@ func runCore(_ context.Context, cmd *cli.Command, headlessMode bool) error {
 	// Optionally serve the node control + operator API so remote daemons enroll/sync and remote
 	// consoles attach. All of it (hub, seed sync, control.Core, servers, join bundles) lives in
 	// serveControlAPI; it returns a cleanup to run at exit.
-	if *controlAddr != "" {
+	if *advertise != "" {
 		defer serveControlAPI(controlDeps{
 			ctx: ctx, jrnl: jrnl, b: b, mcpSrv: mcpSrv, svc: svc,
 			approvals: approvals, conflicts: conflictBroker, consults: consults,
 			ca: ca, serverCert: serverCert, caPEM: caPEM,
 			opToken: opToken, httpLog: httpLog, mtlsEnabled: mtlsEnabled,
-			controlAddr: controlAddr, workspaceDir: workspaceDir, tlsCert: tlsCert, tlsKey: tlsKey,
-			advertise: advertise, send: send, tlsAuto: tlsAuto, web: web, headless: headless,
+			workspaceDir: workspaceDir, tlsCert: tlsCert, tlsKey: tlsKey,
+			advertise: advertise, advertisePort: advertisePort, send: send, tlsAuto: tlsAuto, web: web, headless: headless,
 		})()
 	}
 
 	// Background services: the facilitator nudges stuck agents and routes @facilitator requests; the
 	// cost monitor enforces budgets. An LLM-backed fresh look / dispatch picker needs a real agent
 	// family, so it's gated to -live or a control server (a -demo mock loop must not spend credits).
-	realAgents := *live || *controlAddr != ""
+	realAgents := *live || *advertise != ""
 	startFacilitator(ctx, b, mcpSrv, bd, jrnl, realAgents, *family, *model)
 	startCostMonitor(jrnl, b, *agentBudget, *budget)
 	startFacilitatorDispatch(ctx, b, mcpSrv, jrnl, realAgents, *family, *model)
@@ -335,8 +335,8 @@ type controlDeps struct {
 	httpLog     *log.Logger
 	mtlsEnabled bool
 
-	controlAddr, workspaceDir, tlsCert, tlsKey, advertise, send *string
-	tlsAuto, web, headless                                      *bool
+	workspaceDir, tlsCert, tlsKey, advertise, advertisePort, send *string
+	tlsAuto, web, headless                                        *bool
 }
 
 // serveControlAPI stands up the node control API + operator API on one listener: restores/persists
@@ -347,7 +347,8 @@ func serveControlAPI(d controlDeps) func() {
 	approvals, conflictBroker, consults := d.approvals, d.conflicts, d.consults
 	ca, serverCert, caPEM := d.ca, d.serverCert, d.caPEM
 	opToken, httpLog, mtlsEnabled := d.opToken, d.httpLog, d.mtlsEnabled
-	controlAddr, workspaceDir, tlsCert, tlsKey, advertise, send := d.controlAddr, d.workspaceDir, d.tlsCert, d.tlsKey, d.advertise, d.send
+	workspaceDir, tlsCert, tlsKey, advertise, advertisePort, send := d.workspaceDir, d.tlsCert, d.tlsKey, d.advertise, d.advertisePort, d.send
+	bindAddr := "0.0.0.0:" + *advertisePort // one listener, all interfaces; --advertise is the host nodes dial
 	tlsAuto, web, headless := d.tlsAuto, d.web, d.headless
 
 	var commitFn func(string) (string, error)                    // operator-initiated /commit; nil unless git is enabled
@@ -446,7 +447,7 @@ func serveControlAPI(d controlDeps) func() {
 		return mux
 	}
 	ctrlScheme := "http"
-	ctrlSrv := &http.Server{Addr: *controlAddr, Handler: rootHandler(), ErrorLog: httpLog}
+	ctrlSrv := &http.Server{Addr: bindAddr, Handler: rootHandler(), ErrorLog: httpLog}
 	serve := func() error {
 		return ctrlSrv.ListenAndServe()
 	}
@@ -474,13 +475,13 @@ func serveControlAPI(d controlDeps) func() {
 	}()
 	go core.RunLiveness(ctx) // mark nodes offline when heartbeats lapse
 
-	ctrlURL := ctrlScheme + "://" + advertised(*advertise, *controlAddr)
+	ctrlURL := ctrlScheme + "://" + net.JoinHostPort(*advertise, *advertisePort)
 	// The MCP bus rides the same endpoint; the node's proxy dials this base and appends /mcp, so the
-	// bundled base must NOT carry the path. One reachable port (control) now covers control + bus.
+	// bundled base must NOT carry the path. One reachable port now covers control + operator + bus.
 	busBase := ctrlURL
 	warn := ""
-	if unreachableHost(hostOf(advertised(*advertise, *controlAddr))) {
-		warn = "host not reachable from other machines — pass --advertise <ip/host> and bind --control-addr to 0.0.0.0:PORT"
+	if unreachableHost(*advertise) {
+		warn = "advertised host " + *advertise + " isn't reachable from other machines — pass --advertise <routable ip/host>"
 	}
 	// Token enrollment (opt-in, temporary): write a one-string join bundle (core URL + CA + token)
 	// for the next node, refreshed when the token is read or rotated. Skipped when token joins are
@@ -625,7 +626,7 @@ func setupSeedWorkspace(ctx context.Context, mcpSrv *mcp.Server, hub *workspace.
 // serverTLS builds the self-managed CA + one server cert covering the advertised control host and
 // loopback (DESIGN.md §4); the single control listener serves the control channel, the operator API,
 // and the MCP bus (/mcp). Returns zero values when tlsAuto is off.
-func serverTLS(tlsAuto bool, advertise, controlAddr string) (*control.CA, tls.Certificate, []byte) {
+func serverTLS(tlsAuto bool, advertise string) (*control.CA, tls.Certificate, []byte) {
 	if !tlsAuto {
 		return nil, tls.Certificate{}, nil
 	}
@@ -634,7 +635,7 @@ func serverTLS(tlsAuto bool, advertise, controlAddr string) (*control.CA, tls.Ce
 		fail("ca", err)
 	}
 	cert, err := ca.ServerTLS([]string{
-		hostOf(advertised(advertise, controlAddr)),
+		advertise,
 		"127.0.0.1", "localhost", "::1",
 	})
 	if err != nil {
@@ -858,7 +859,7 @@ func (cm *consultMgr) Open(target, family string) (string, error) {
 // it (with that OS/filesystem) and wires it to the bus on its next heartbeat (#24).
 func (cm *consultMgr) openOnNode(node, family string) (string, error) {
 	if cm.core == nil {
-		return "", fmt.Errorf("node-targeted consults need the control API (-control-addr)")
+		return "", fmt.Errorf("node-targeted consults need the control API (--advertise)")
 	}
 	if !cm.core.NodeOnline(node) {
 		return "", fmt.Errorf("node %q is not online", node)
@@ -1105,9 +1106,10 @@ func truncateForBus(b []byte) string {
 	return string(b[:max]) + "\n… (truncated)"
 }
 
-// defaultControlPort is the conventional port avairy's control listener serves on (control channel +
-// operator API + the MCP bus at /mcp), used to infer --core from --advertise. Give --core to override.
-const defaultControlPort = "7700"
+// defaultPort is the conventional port avairy's single listener serves on (control channel +
+// operator API + the MCP bus at /mcp). It's the default for --advertise-port and is used to infer
+// --core from --advertise. Override with --advertise-port (or an explicit --core URL).
+const defaultPort = "7700"
 
 // addNodeCommand (`avairy core add-node`) invites a node by minting an mTLS client-cert join
 // bundle from the self-managed CA — no enrollment token. The node it's given to authenticates by
@@ -1118,14 +1120,15 @@ func addNodeCommand() *cli.Command {
 		Usage: "invite a node: mint an mTLS client-cert join bundle (prints the join string)",
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "id", Required: true, Usage: "node id (becomes the client cert identity)"},
-			&cli.StringFlag{Name: "advertise", Usage: "core host/IP — derives --core (https://host:7700)"},
+			&cli.StringFlag{Name: "advertise", Usage: "core host/IP — derives --core (https://host:<advertise-port>)"},
+			&cli.StringFlag{Name: "advertise-port", Value: defaultPort, Usage: "core port (for --advertise-derived --core)"},
 			&cli.StringFlag{Name: "core", Usage: "control API URL the node will dial (https://…); overrides --advertise"},
 			&cli.StringFlag{Name: "dir", Value: ".avairy", Usage: "directory holding the CA (ca.crt/ca.key)"},
 		},
 		Action: func(_ context.Context, cmd *cli.Command) error {
 			coreURL := cmd.String("core")
 			if adv := cmd.String("advertise"); adv != "" && coreURL == "" {
-				coreURL = "https://" + adv + ":" + defaultControlPort
+				coreURL = "https://" + net.JoinHostPort(adv, cmd.String("advertise-port"))
 			}
 			if coreURL == "" {
 				return fmt.Errorf("need --advertise <host> (or an explicit --core URL)")
@@ -1158,7 +1161,8 @@ func addOperatorCommand() *cli.Command {
 		Usage: "invite an operator console: mint a cert (.p12 for the browser + join for `tui connect`)",
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "name", Value: "operator", Usage: "operator identity embedded in the cert"},
-			&cli.StringFlag{Name: "advertise", Usage: "core host/IP — derives --core (https://host:7700)"},
+			&cli.StringFlag{Name: "advertise", Usage: "core host/IP — derives --core (https://host:<advertise-port>)"},
+			&cli.StringFlag{Name: "advertise-port", Value: defaultPort, Usage: "core port (for --advertise-derived --core)"},
 			&cli.StringFlag{Name: "core", Usage: "control API URL the console will dial (https://…); overrides --advertise"},
 			&cli.StringFlag{Name: "dir", Value: ".avairy", Usage: "directory holding the CA (ca.crt/ca.key)"},
 			&cli.StringFlag{Name: "p12", Value: "operator.p12", Usage: "output PKCS#12 file to import into the browser"},
@@ -1168,7 +1172,7 @@ func addOperatorCommand() *cli.Command {
 		Action: func(_ context.Context, cmd *cli.Command) error {
 			coreURL := cmd.String("core")
 			if coreURL == "" && cmd.String("advertise") != "" {
-				coreURL = "https://" + cmd.String("advertise") + ":" + defaultControlPort
+				coreURL = "https://" + net.JoinHostPort(cmd.String("advertise"), cmd.String("advertise-port"))
 			}
 			ca, err := control.EnsureCA(cmd.String("dir"))
 			if err != nil {
@@ -1302,26 +1306,6 @@ func summarize(data any) string {
 func fail(what string, err error) {
 	fmt.Fprintln(os.Stderr, "avairy:", what, ":", err)
 	os.Exit(1)
-}
-
-// advertised returns the host:port remote nodes should dial: the -advertise host (if given)
-// combined with the bound port, else the bound address as-is.
-func advertised(adv, bound string) string {
-	_, port, _ := net.SplitHostPort(bound)
-	if adv == "" {
-		return bound
-	}
-	if _, _, err := net.SplitHostPort(adv); err == nil {
-		return adv // already host:port
-	}
-	return net.JoinHostPort(adv, port)
-}
-
-func hostOf(hostport string) string {
-	if h, _, err := net.SplitHostPort(hostport); err == nil {
-		return h
-	}
-	return hostport
 }
 
 // unreachableHost reports whether a host can't be dialed from another machine.
