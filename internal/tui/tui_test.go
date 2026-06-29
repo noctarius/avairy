@@ -307,6 +307,29 @@ func TestSystemRecordsFleet(t *testing.T) {
 	}
 }
 
+// A node that enrolls WITH an agent family must appear in the fleet immediately (online/idle), not
+// stay invisible until its first turn; a re-enroll after an offline lapse brings it back online.
+func TestNodeEnrolledWithFamilyShowsOnline(t *testing.T) {
+	m, _, _ := newTestModel()
+	caps := map[string]string{"os": "linux", "family": "claude"}
+	m.apply(journal.Record{Seq: 1, Kind: journal.KindSystem, Actor: "claude-linux",
+		Data: map[string]any{"event": "node_enrolled", "os": "linux", "caps": caps}})
+	if a := m.agents["claude-linux"]; a == nil || a.status != "idle" {
+		t.Fatalf("an agent-driving node should appear idle on enroll, got %+v", a)
+	}
+
+	m.apply(journal.Record{Seq: 2, Kind: journal.KindSystem, Actor: "claude-linux",
+		Data: map[string]any{"event": "node_offline"}})
+	if m.agents["claude-linux"].status != "offline" {
+		t.Fatal("node_offline should mark it offline")
+	}
+	m.apply(journal.Record{Seq: 3, Kind: journal.KindSystem, Actor: "claude-linux",
+		Data: map[string]any{"event": "node_rejoined", "os": "linux", "caps": caps}})
+	if got := m.agents["claude-linux"].status; got != "idle" {
+		t.Fatalf("node_rejoined should bring it back online, got %q", got)
+	}
+}
+
 // Esc never quits; quitting takes two ctrl+c in succession (any other key disarms).
 func TestQuitRequiresDoubleCtrlC(t *testing.T) {
 	m, _, _ := newTestModel()

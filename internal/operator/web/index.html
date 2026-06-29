@@ -812,6 +812,12 @@
               );
             }
             break;
+          case "node_enrolled":
+          case "node_rejoined":
+            // A node that drives an agent (reports a "family" cap) is on the bus the moment it
+            // enrolls — show it online/idle right away. A proxy-only node (no family) gets no chip.
+            if (d.caps && d.caps.family) setStatus(actor, "idle");
+            break;
           case "node_offline":
             if (agents.has(actor)) setStatus(actor, "offline");
             break;

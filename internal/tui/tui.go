@@ -715,6 +715,14 @@ func (m *Model) applySystem(actor string, d map[string]any) {
 		if m.control != nil && m.control.CurrentToken != nil {
 			m.token = m.control.CurrentToken()
 		}
+		// A node that drives an agent (reports a "family" cap) is on the bus the moment it
+		// enrolls — surface it as online/idle right away instead of waiting for its first turn. A
+		// proxy-only node (no family) gets no fleet entry, same as before.
+		if capString(d["caps"], "family") != "" {
+			if a := m.touchAgent(actor); a != nil {
+				a.status = "idle"
+			}
+		}
 	case "node_offline":
 		// Heartbeats lapsed (node id == agent id). Mark an existing fleet entry offline;
 		// don't create one (avoid a phantom for a node that never had an agent).
@@ -799,6 +807,19 @@ func (m *Model) addConversation(line string) {
 	if len(m.conv) > 500 {
 		m.conv = m.conv[len(m.conv)-500:]
 	}
+}
+
+// capString reads a capability from a system record's "caps" value, which is a map[string]string
+// when applied in-process but a map[string]any once it has round-tripped through JSON (remote TUI).
+func capString(caps any, key string) string {
+	switch c := caps.(type) {
+	case map[string]string:
+		return c[key]
+	case map[string]any:
+		s, _ := c[key].(string)
+		return s
+	}
+	return ""
 }
 
 func (m *Model) touchAgent(id string) *agentState {
