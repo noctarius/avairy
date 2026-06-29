@@ -39,9 +39,10 @@ Releases are produced by the [`release` workflow](.github/workflows/release.yml)
 Cut one either way: **push the tag** (`git tag v1.2.3 && git push origin v1.2.3`), or **run the
 workflow manually** with the version — which creates and pushes the tag for you. CI validates the
 semver, runs `make test vet` then `make package`, and publishes a GitHub Release with every platform
-archive, a `SHA256SUMS` file, and `install.sh`. End users install with the one-liner in the
-[README](README.md#install); the script resolves their OS/arch, downloads the matching archive,
-verifies its checksum, and drops the binaries on the `PATH`.
+archive, a `SHA256SUMS` file, and the installers `install.sh` (Linux/macOS/FreeBSD) and
+`install.ps1` (Windows). End users install with the one-liner in the [README](README.md#install);
+each script resolves their OS/arch, downloads the matching archive, verifies its checksum, and drops
+`avairy` on the `PATH`.
 
 ## Target matrix
 

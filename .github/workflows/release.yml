@@ -89,15 +89,20 @@ jobs:
           \`\`\`
 
           Or pin a version: \`curl -fsSL .../install.sh | AVAIRY_VERSION=${VERSION} sh\`.
-          Windows: download the matching \`.zip\` below. Verify downloads against \`SHA256SUMS\`.
 
-          Every binary reports its build with \`avairy version\`.
+          ### Install (Windows)
+
+          \`\`\`powershell
+          irm https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/install.ps1 | iex
+          \`\`\`
+
+          Verify downloads against \`SHA256SUMS\`. Every binary reports its build with \`avairy version\`.
           EOF
           )"
           flags=""
           if [ "${{ steps.meta.outputs.prerelease }}" = "true" ]; then flags="--prerelease"; fi
           gh release create "$VERSION" \
-            dist/*.tar.gz dist/*.zip dist/SHA256SUMS install.sh \
+            dist/*.tar.gz dist/*.zip dist/SHA256SUMS install.sh install.ps1 \
             --title "$VERSION" \
             --notes "$notes" \
             --verify-tag $flags

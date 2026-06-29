@@ -91,16 +91,35 @@ checksum, and installs the single `avairy` binary (core, node, tui, auth are sub
 curl -fsSL https://raw.githubusercontent.com/noctarius/avairy/main/install.sh | sh
 ```
 
-Pin a version by passing the tag (note `sh -s --`, so the arg reaches the script, not `sh`); pick
-the install dir with an env var:
+Pin a version by passing the tag. Additionally, you can pick the install dir with an env var:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/noctarius/avairy/main/install.sh | sh -s -- v0.1.0
 curl -fsSL https://raw.githubusercontent.com/noctarius/avairy/main/install.sh \
-  | AVAIRY_INSTALL_DIR="$HOME/.local/bin" sh -s -- v1.0.0-rc1
+    | sh -s -- v0.1.0
+
+curl -fsSL https://raw.githubusercontent.com/noctarius/avairy/main/install.sh \
+    | AVAIRY_INSTALL_DIR="$HOME/.local/bin" sh -s -- v1.0.0-rc1
 ```
 
-**Windows**, or to verify by hand: grab the archive for your platform from the
+**Windows** (native `avairy.exe`) — the PowerShell counterpart picks the right build, verifies its
+checksum, installs `avairy.exe`, and adds it to your user `PATH`:
+
+```powershell
+irm https://raw.githubusercontent.com/noctarius/avairy/main/install.ps1 | iex
+```
+
+Pin a version (the `| iex` form can't take arguments, so build a scriptblock); `-InstallDir` and the
+`AVAIRY_VERSION`/`AVAIRY_INSTALL_DIR` env vars work too:
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/noctarius/avairy/main/install.ps1))) -Version v1.0.0
+```
+
+> On Windows, avairy is most useful as a **node** (`avairy node join`) or remote **console**
+> (`avairy tui connect`); for running core, WSL2 (use the `sh` line above) is often smoother. A
+> *live* agent needs its CLI (`claude`, `codex`, …) installed and logged in on that machine.
+
+**To verify by hand** (any OS): grab the archive for your platform from the
 [releases page](https://github.com/noctarius/avairy/releases), check it against `SHA256SUMS`, and put
 `avairy` on your `PATH`. It reports its build with `avairy version`. Prefer to build from source? Read on.
 
@@ -454,12 +473,12 @@ plus a join for `tui connect`. `avairy hook …` is the internal PreToolUse shim
 
 ### `avairy tui connect` (remote operator console)
 
-| Flag                                  | What it does                                                                |
-|---------------------------------------|------------------------------------------------------------------------------|
+| Flag                                  | What it does                                                                     |
+|---------------------------------------|----------------------------------------------------------------------------------|
 | `--join <str>` / `--join-file <path>` | Attach with one bundle (core's `.avairy/operator-join`, or `core add-operator`). |
-| `--core <url>`                        | Core control API URL (if not using a join).                                  |
-| `--token <tok>`                       | Operator API token.                                                          |
-| `--ca <file>` / `--insecure`          | Trust a PEM CA for an https core / skip verification (dev only).             |
+| `--core <url>`                        | Core control API URL (if not using a join).                                      |
+| `--token <tok>`                       | Operator API token.                                                              |
+| `--ca <file>` / `--insecure`          | Trust a PEM CA for an https core / skip verification (dev only).                 |
 
 ## Project status
 
