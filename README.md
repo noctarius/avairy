@@ -417,25 +417,25 @@ prints the full set; `avairy version` prints the build.
 
 ### `avairy core run` / `avairy core serve` (core; `run` attaches the TUI, `serve` is headless)
 
-| Flag                        | Default          | What it does                                                                       |
-|-----------------------------|------------------|------------------------------------------------------------------------------------|
-| `--demo`                    | off              | Spawn mock agents `alice`+`bob` (zero credits) to try the loop.                    |
-| `--live`                    | off              | Run `alice` as a real agent on the bus.                                            |
-| `--family`                  | `claude`         | Live agent family: `claude` \| `codex` \| `copilot` \| `grok`.                     |
-| `--model`                   | `haiku`          | Model for the live agent (kept cheap by default).                                  |
-| `--send <msg>`              | —                | One-shot: send to a local `alice`, print the journal, exit.                        |
-| `--advertise <host>`        | —                | Host/IP remote nodes dial; setting it serves control + operator API + MCP bus (`/mcp`) on one port, bound `0.0.0.0`. Omit ⇒ local-only. |
-| `--advertise-port <port>`   | `7700`           | Port to bind (`0.0.0.0`) and advertise.                                            |
-| `--workspace <dir>`         | —                | Project dir to seed/sync into the canonical hub.                                   |
-| `--tls-auto`                | off              | **Recommended:** self-manage a CA and serve control + bus over TLS (enables mTLS). |
-| `--allow-token-join`        | off              | Allow temporary token-based node enrollment (default: mTLS cert joins only).       |
-| `--tls-cert` / `--tls-key`  | —                | Serve the control channel with your own PEM cert/key instead.                      |
-| `--gate-edits`              | off              | Also require operator approval for file edits (not just risky commands).           |
-| `--operator-token <tok>`    | random           | Bearer token for the remote operator API / web console.                            |
-| `--web`                     | off              | Serve the browser operator console at `/operator/ui`.                              |
-| `--budget <usd>`            | 0 (off)          | Fleet spend cap: cross it and every agent is interrupted (you're warned).          |
-| `--agent-budget <usd>`      | 0 (off)          | Per-agent spend cap: cross it and that agent is interrupted.                       |
-| `--idle-sleep <dur>`        | 0 (off)          | Park an idle core agent (e.g. `10m`); the next directed message respawns it.       |
+| Flag                       | Default  | What it does                                                                                                                            |
+|----------------------------|----------|-----------------------------------------------------------------------------------------------------------------------------------------|
+| `--demo`                   | off      | Spawn mock agents `alice`+`bob` (zero credits) to try the loop.                                                                         |
+| `--live`                   | off      | Run `alice` as a real agent on the bus.                                                                                                 |
+| `--family`                 | `claude` | Live agent family: `claude` \| `codex` \| `copilot` \| `grok`.                                                                          |
+| `--model`                  | `haiku`  | Model for the live agent (kept cheap by default).                                                                                       |
+| `--send <msg>`             | —        | One-shot: send to a local `alice`, print the journal, exit.                                                                             |
+| `--advertise <host>`       | —        | Host/IP remote nodes dial; setting it serves control + operator API + MCP bus (`/mcp`) on one port, bound `0.0.0.0`. Omit ⇒ local-only. |
+| `--advertise-port <port>`  | `7700`   | Port to bind (`0.0.0.0`) and advertise.                                                                                                 |
+| `--workspace <dir>`        | —        | Project dir to seed/sync into the canonical hub.                                                                                        |
+| `--tls-auto`               | off      | **Recommended:** self-manage a CA and serve control + bus over TLS (enables mTLS).                                                      |
+| `--allow-token-join`       | off      | Allow temporary token-based node enrollment (default: mTLS cert joins only).                                                            |
+| `--tls-cert` / `--tls-key` | —        | Serve the control channel with your own PEM cert/key instead.                                                                           |
+| `--gate-edits`             | off      | Also require operator approval for file edits (not just risky commands).                                                                |
+| `--operator-token <tok>`   | random   | Bearer token for the remote operator API / web console.                                                                                 |
+| `--web`                    | off      | Serve the browser operator console at `/operator/ui`.                                                                                   |
+| `--budget <usd>`           | 0 (off)  | Fleet spend cap: cross it and every agent is interrupted (you're warned).                                                               |
+| `--agent-budget <usd>`     | 0 (off)  | Per-agent spend cap: cross it and that agent is interrupted.                                                                            |
+| `--idle-sleep <dur>`       | 0 (off)  | Park an idle core agent (e.g. `10m`); the next directed message respawns it.                                                            |
 
 **`avairy core add-node --id <node> --advertise <host>`** issues an mTLS client-cert join (prints
 it). **`avairy core add-operator --advertise <host>`** mints an operator identity → a browser `.p12`
