@@ -24,6 +24,7 @@ type ApprovalRequest struct {
 	Kind    string `json:"kind"`
 	Summary string `json:"summary"`
 	Reason  string `json:"reason,omitempty"`
+	Diff    string `json:"diff,omitempty"` // unified diff for a file edit, for the operator to review
 }
 
 // ApprovalResponse carries the operator's verdict (DecisionAllow | DecisionDeny).

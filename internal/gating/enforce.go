@@ -33,6 +33,7 @@ type Request struct {
 	Summary string         // human-readable, e.g. the command line
 	Details map[string]any // raw family-specific action fields
 	Reason  string         // agent-provided rationale, if any
+	Diff    string         // for a file edit: a unified diff to show the operator (empty otherwise)
 }
 
 // Decision is the coordinator's ruling on a gated action.

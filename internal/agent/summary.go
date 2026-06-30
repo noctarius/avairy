@@ -116,6 +116,11 @@ func TrimInput(in map[string]any) map[string]any {
 	if d := bodyDigest(in); d != "" {
 		out["_digest"] = d
 	}
+	// Keep a capped rendered diff so the consoles can show the change for any edit in the transcript
+	// (#7) even though the raw bodies are dropped. ToolDiff reads it back as "_diff".
+	if d := PatchPreview("", in); d != "" {
+		out["_diff"] = d
+	}
 	return out
 }
 

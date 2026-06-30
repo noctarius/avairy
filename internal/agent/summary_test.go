@@ -1,6 +1,9 @@
 package agent
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestToolSummary(t *testing.T) {
 	cases := []struct {
@@ -47,6 +50,33 @@ func TestActionKey(t *testing.T) {
 	}
 	if ActionKey(read(0)) != ActionKey(read(0)) {
 		t.Fatal("reads at the same offset should key identically")
+	}
+}
+
+func TestPatchPreviewAndToolDiff(t *testing.T) {
+	// Claude Edit: old→new becomes a unified diff mentioning both sides.
+	edit := map[string]any{"file_path": "f.go", "old_string": "a := 1", "new_string": "a := 2"}
+	d := PatchPreview("Edit", edit)
+	if !strings.Contains(d, "-a := 1") || !strings.Contains(d, "+a := 2") {
+		t.Fatalf("edit diff should show both sides:\n%s", d)
+	}
+	// codex apply_patch: an explicit unified patch is passed through.
+	if got := PatchPreview("apply_patch", map[string]any{"patch": "@@ -1 +1 @@\n-x\n+y"}); !strings.Contains(got, "+y") {
+		t.Fatalf("explicit patch should pass through, got %q", got)
+	}
+	// A shell command has no diff.
+	if got := PatchPreview("Bash", map[string]any{"command": "go test ./..."}); got != "" {
+		t.Fatalf("a command has no diff, got %q", got)
+	}
+	// ToolDiff prefers the precomputed "_diff" (the node/shipped path) over re-rendering.
+	tc := &ToolCall{Name: "Edit", Input: map[string]any{"_diff": "precomputed", "old_string": "a", "new_string": "b"}}
+	if got := ToolDiff(tc); got != "precomputed" {
+		t.Fatalf("ToolDiff should use _diff, got %q", got)
+	}
+	// TrimInput leaves a _diff behind for an edit (and still drops the bodies).
+	out := TrimInput(edit)
+	if _, ok := out["_diff"].(string); !ok {
+		t.Fatalf("TrimInput should leave a _diff for an edit, got %v", out)
 	}
 }
 

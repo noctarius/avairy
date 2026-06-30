@@ -72,6 +72,7 @@ type ApprovalItem struct {
 	Kind    string
 	Summary string
 	Reason  string
+	Diff    string // unified diff for a file edit (empty otherwise), shown on demand
 }
 
 // ConflictItem is one owner-less conflict awaiting the operator (resolve themselves or delegate).

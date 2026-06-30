@@ -227,7 +227,7 @@ func (c *Client) pendingApprovals() []tui.ApprovalItem {
 	defer c.mu.Unlock()
 	out := make([]tui.ApprovalItem, 0, len(c.state.Approvals))
 	for _, a := range c.state.Approvals {
-		out = append(out, tui.ApprovalItem{ID: a.ID, AgentID: a.AgentID, Kind: a.Kind, Summary: a.Summary, Reason: a.Reason})
+		out = append(out, tui.ApprovalItem{ID: a.ID, AgentID: a.AgentID, Kind: a.Kind, Summary: a.Summary, Reason: a.Reason, Diff: a.Diff})
 	}
 	return out
 }

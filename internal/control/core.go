@@ -244,7 +244,7 @@ func (c *Core) handleApprove(nodeID string, w http.ResponseWriter, r *http.Reque
 		req.AgentID = nodeID
 	}
 	decision := c.Approvals.Ask(r.Context(), Approval{
-		AgentID: req.AgentID, Kind: req.Kind, Summary: req.Summary, Reason: req.Reason,
+		AgentID: req.AgentID, Kind: req.Kind, Summary: req.Summary, Reason: req.Reason, Diff: req.Diff,
 	})
 	writeJSON(w, ApprovalResponse{Decision: decision})
 }

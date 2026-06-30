@@ -25,6 +25,7 @@ type Approval struct {
 	Kind    string    `json:"kind"`
 	Summary string    `json:"summary"`
 	Reason  string    `json:"reason,omitempty"`
+	Diff    string    `json:"diff,omitempty"` // unified diff for a file edit (#7), shown in the approval card
 	At      time.Time `json:"-"`
 }
 

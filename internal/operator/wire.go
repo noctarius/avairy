@@ -42,6 +42,7 @@ type ApprovalItem struct {
 	Kind    string `json:"kind"`
 	Summary string `json:"summary"`
 	Reason  string `json:"reason,omitempty"`
+	Diff    string `json:"diff,omitempty"` // unified diff for a file edit, shown behind "Show Diff"
 }
 
 // ConflictItem mirrors tui.ConflictItem on the wire.

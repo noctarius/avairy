@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 
+	"avairy/internal/agent"
 	"avairy/internal/gating"
 )
 
@@ -29,7 +30,11 @@ func approvalToRequest(method string, params json.RawMessage) gating.Request {
 	_ = json.Unmarshal(params, &p)
 	switch {
 	case strings.Contains(method, "fileChange"), method == "applyPatchApproval":
-		return gating.Request{Kind: gating.ActionFileWrite, Summary: "file change", Reason: p.Reason}
+		// Best-effort: surface whatever patch/changes the app-server included so the operator can
+		// review the edit (PatchPreview tolerates the various shapes; "" → no diff to show).
+		var raw map[string]any
+		_ = json.Unmarshal(params, &raw)
+		return gating.Request{Kind: gating.ActionFileWrite, Summary: "file change", Reason: p.Reason, Diff: agent.PatchPreview("apply_patch", raw)}
 	default:
 		return gating.Request{Kind: gating.ActionCommand, Summary: strings.Join(p.Command, " "), Reason: p.Reason}
 	}

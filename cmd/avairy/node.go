@@ -629,7 +629,7 @@ func buildAdapter(family, gateURL string, dec gating.Decider) (agent.Adapter, er
 func gateDecider(n *control.Node, agentID string, gateEdits bool) gating.Decider {
 	policy := gating.Policy{GateEdits: gateEdits, Approve: func(ctx context.Context, req gating.Request) (gating.Decision, error) {
 		dec, err := n.RequestApproval(ctx, control.ApprovalRequest{
-			AgentID: agentID, Kind: string(req.Kind), Summary: req.Summary, Reason: req.Reason,
+			AgentID: agentID, Kind: string(req.Kind), Summary: req.Summary, Reason: req.Reason, Diff: req.Diff,
 		})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "GATE ask-core failed, denying [%s] %s: %v\n", req.Kind, req.Summary, err)

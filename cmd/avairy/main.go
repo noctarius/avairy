@@ -921,7 +921,7 @@ func (cm *consultMgr) assignID(base string) string {
 func localGateDecider(approvals *control.Approvals, agentID string, gateEdits bool) gating.Decider {
 	policy := gating.Policy{GateEdits: gateEdits, Approve: func(ctx context.Context, req gating.Request) (gating.Decision, error) {
 		dec := approvals.Ask(ctx, control.Approval{
-			AgentID: agentID, Kind: string(req.Kind), Summary: req.Summary, Reason: req.Reason,
+			AgentID: agentID, Kind: string(req.Kind), Summary: req.Summary, Reason: req.Reason, Diff: req.Diff,
 		})
 		if dec == control.DecisionAllow || dec == control.DecisionAllowForSession {
 			return gating.Allow, nil

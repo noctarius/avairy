@@ -185,7 +185,7 @@ func (s *Services) state() State {
 		st.Notes = s.Notes()
 	}
 	for _, p := range s.Approvals.Pending() {
-		st.Approvals = append(st.Approvals, ApprovalItem{ID: p.ID, AgentID: p.AgentID, Kind: p.Kind, Summary: p.Summary, Reason: p.Reason})
+		st.Approvals = append(st.Approvals, ApprovalItem{ID: p.ID, AgentID: p.AgentID, Kind: p.Kind, Summary: p.Summary, Reason: p.Reason, Diff: p.Diff})
 	}
 	for _, c := range s.Conflicts.Pending() {
 		st.Conflicts = append(st.Conflicts, ConflictItem{ID: c.ID, Path: c.Path, HubVersion: c.HubVersion, Source: c.Source, Detail: c.Detail})
@@ -215,7 +215,7 @@ func (s *Services) Deps() tui.Deps {
 			ps := s.Approvals.Pending()
 			out := make([]tui.ApprovalItem, 0, len(ps))
 			for _, p := range ps {
-				out = append(out, tui.ApprovalItem{ID: p.ID, AgentID: p.AgentID, Kind: p.Kind, Summary: p.Summary, Reason: p.Reason})
+				out = append(out, tui.ApprovalItem{ID: p.ID, AgentID: p.AgentID, Kind: p.Kind, Summary: p.Summary, Reason: p.Reason, Diff: p.Diff})
 			}
 			return out
 		},

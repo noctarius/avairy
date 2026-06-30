@@ -3,6 +3,8 @@ package gating
 import (
 	"encoding/json"
 	"net/http"
+
+	"avairy/internal/agent"
 )
 
 // hookInput is the Claude Code PreToolUse hook payload (subset; see ADAPTERS.md).
@@ -45,9 +47,9 @@ func hookToRequest(in hookInput) Request {
 	case "Bash":
 		cmd, _ := in.ToolInput["command"].(string)
 		return Request{Kind: ActionCommand, Summary: cmd, Details: in.ToolInput}
-	case "Edit", "Write", "NotebookEdit":
+	case "Edit", "Write", "NotebookEdit", "MultiEdit":
 		path, _ := in.ToolInput["file_path"].(string)
-		return Request{Kind: ActionFileWrite, Summary: path, Details: in.ToolInput}
+		return Request{Kind: ActionFileWrite, Summary: path, Details: in.ToolInput, Diff: agent.PatchPreview(in.ToolName, in.ToolInput)}
 	default:
 		return Request{Kind: ActionCommand, Summary: in.ToolName, Details: in.ToolInput}
 	}

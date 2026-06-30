@@ -125,7 +125,8 @@ func permToRequest(kind, title string, rawInput map[string]any) gating.Request {
 	case "delete":
 		return gating.Request{Kind: gating.ActionGitMutate, Summary: title} // force-gated
 	case "edit", "move":
-		return gating.Request{Kind: gating.ActionFileWrite, Summary: title} // gated only with -gate-edits
+		// gated only with -gate-edits; surface the diff for the operator when rawInput carries one.
+		return gating.Request{Kind: gating.ActionFileWrite, Summary: title, Diff: agent.PatchPreview("edit", rawInput)}
 	default: // read, search, fetch, think, other → read-only, never gated
 		return gating.Request{Kind: gating.ActionRead, Summary: title}
 	}
