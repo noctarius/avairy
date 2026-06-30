@@ -324,12 +324,13 @@ func (f *Facilitator) clearCooldown(agentID string, k TriggerKind) {
 	delete(f.lastNudge, nudgeKey(agentID, k))
 }
 
-// signature is the per-step key for loop detection: only tool actions count (interleaved
-// reasoning is ignored), keyed on the full action — tool + identifying arg — so reading 100
-// different files is 100 distinct steps, not a loop. Returns "" for events that don't count.
+// signature is the per-step key for loop detection: only tool actions count (interleaved reasoning
+// is ignored), keyed on the full action via agent.ActionKey — tool + identifying arg + a digest of
+// the edit content + the read region — so reading 100 different files (or editing one file 100
+// different ways) is 100 distinct steps, not a loop. Returns "" for events that don't count.
 func signature(ev agent.Event) string {
 	if ev.Type == agent.EventToolUse && ev.Tool != nil {
-		return "tool:" + agent.ToolSummary(ev.Tool)
+		return "tool:" + agent.ActionKey(ev.Tool)
 	}
 	return ""
 }

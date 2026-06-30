@@ -21,6 +21,35 @@ func TestToolSummary(t *testing.T) {
 	}
 }
 
+func TestActionKey(t *testing.T) {
+	edit := func(oldS, newS string) *ToolCall {
+		return &ToolCall{Name: "Edit", Input: map[string]any{"file_path": "f.go", "old_string": oldS, "new_string": newS}}
+	}
+	// Same file, different content → different keys; identical content → identical key.
+	if a, b := ActionKey(edit("x", "y")), ActionKey(edit("p", "q")); a == b {
+		t.Fatalf("different edits should key differently, both = %q", a)
+	}
+	if a, b := ActionKey(edit("x", "y")), ActionKey(edit("x", "y")); a != b {
+		t.Fatalf("identical edits should key identically, %q vs %q", a, b)
+	}
+	// The digest survives TrimInput (the node path) and yields the same key as the raw input.
+	raw := edit("x", "y")
+	trimmed := &ToolCall{Name: "Edit", Input: TrimInput(raw.Input)}
+	if ActionKey(raw) != ActionKey(trimmed) {
+		t.Fatalf("trimmed edit should key like the raw one: %q vs %q", ActionKey(trimmed), ActionKey(raw))
+	}
+	// Reads at different offsets differ; same offset matches.
+	read := func(off int) *ToolCall {
+		return &ToolCall{Name: "Read", Input: map[string]any{"file_path": "f.go", "offset": off}}
+	}
+	if ActionKey(read(0)) == ActionKey(read(200)) {
+		t.Fatal("reads at different offsets should key differently")
+	}
+	if ActionKey(read(0)) != ActionKey(read(0)) {
+		t.Fatal("reads at the same offset should key identically")
+	}
+}
+
 func TestTrimInput(t *testing.T) {
 	in := map[string]any{
 		"file_path":  "a.go",

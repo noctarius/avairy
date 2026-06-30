@@ -204,6 +204,35 @@ func TestLoop_RepeatedFileEditsAreNotALoop(t *testing.T) {
 	}
 }
 
+// Edit ↔ read ↔ edit on one file, where each edit changes *different* content, is iteration — not a
+// loop. The signature must fold in the edit's content (and a read's offset) so it isn't seen as an
+// A↔B cycle. But re-reading the exact same spot over and over, or re-applying the identical edit
+// against a failing build, still is a loop.
+func TestLoop_ContentAwareEditReadIsNotALoop(t *testing.T) {
+	f := "CMakeLists.txt"
+	edit := func(oldS, newS string) agent.Event {
+		return agent.Event{Type: agent.EventToolUse, Tool: &agent.ToolCall{Name: "Edit",
+			Input: map[string]any{"file_path": f, "old_string": oldS, "new_string": newS}}}
+	}
+	read := func(offset int) agent.Event {
+		return agent.Event{Type: agent.EventToolUse, Tool: &agent.ToolCall{Name: "Read",
+			Input: map[string]any{"file_path": f, "offset": offset}}}
+	}
+	// distinct edits, each verified by re-reading the (same) file — progress, not a loop.
+	if n := loopFires([]agent.Event{edit("a", "A"), read(0), edit("b", "B"), read(0), edit("c", "C"), read(0)}); n != 0 {
+		t.Fatalf("distinct edits interleaved with reads should not be a loop, fired %d", n)
+	}
+	// re-reading the identical span repeatedly is genuinely stuck.
+	if n := loopFires([]agent.Event{read(0), read(0), read(0)}); n != 1 {
+		t.Fatalf("re-reading the same offset should be a loop, fired %d", n)
+	}
+	// the same edit re-applied against a failing build is still a loop.
+	same, build := edit("x", "X"), toolEv("cmake --build build")
+	if n := loopFires([]agent.Event{same, build, same, build, same, build}); n != 1 {
+		t.Fatalf("identical edit↔build oscillation should still be a loop, fired %d", n)
+	}
+}
+
 // Circling detection (#14a): an agent churning the same few actions in no fixed order has no
 // period (so the cycle detector stays silent), but introduces no new action for a stretch → a loop.
 func TestLoop_CirclingDetection(t *testing.T) {
