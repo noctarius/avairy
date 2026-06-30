@@ -330,6 +330,36 @@ func TestNodeEnrolledWithFamilyShowsOnline(t *testing.T) {
 	}
 }
 
+// /diff dumps an agent's most recent edit diff into the conversation; the Approvals view reveals a
+// pending edit's diff inline when toggled with 'd'.
+func TestDiffViewing(t *testing.T) {
+	j := journal.NewMemory()
+	m := NewModel(Deps{Journal: j, Inject: func(string, string) {}})
+	rec := j.Append(journal.KindAgentEvent, "linux", agent.Event{Type: agent.EventToolUse,
+		Tool: &agent.ToolCall{Name: "Edit", Input: map[string]any{"file_path": "f.go", "_diff": "@@ -1 +1 @@\n-a\n+b"}}})
+	m.apply(rec)
+	before := len(m.conv)
+	m.input.SetValue("/diff")
+	m.submit()
+	if len(m.conv) <= before || !strings.Contains(m.conv[len(m.conv)-1], "+b") {
+		t.Fatalf("/diff should add the diff to the conversation")
+	}
+
+	m2 := NewModel(Deps{
+		Journal:          journal.NewMemory(),
+		PendingApprovals: func() []ApprovalItem { return []ApprovalItem{{ID: "a1", AgentID: "linux", Kind: "file_write", Summary: "f.go", Diff: "@@ -1 +1 @@\n-x\n+y"}} },
+		ResolveApproval:  func(string, string) {},
+	})
+	m2.tab = tabApprovals
+	if strings.Contains(strings.Join(m2.bodyLines(), "\n"), "+y") {
+		t.Fatal("approval diff should be hidden until toggled")
+	}
+	m2.handleApprovalKey("d")
+	if !strings.Contains(strings.Join(m2.bodyLines(), "\n"), "+y") {
+		t.Fatal("'d' should reveal the selected approval's diff")
+	}
+}
+
 // /react targets an agent's most recent message (overall, or a named @agent) and forwards the seq
 // + kind to Deps.React.
 func TestReactCommand(t *testing.T) {

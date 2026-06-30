@@ -163,6 +163,12 @@ type Model struct {
 	lastReactSeq   map[string]uint64
 	lastReactAgent string
 
+	// diff viewing (#7): the latest edit diff per agent (for /diff) + the latest agent that edited;
+	// approvalDiff toggles the selected approval's diff inline in the Approvals view.
+	lastEditDiff  map[string]string
+	lastEditAgent string
+	approvalDiff  bool
+
 	control     *ControlInfo
 	token       string
 	approvalSel int             // selected row in the Approvals view
@@ -256,6 +262,7 @@ func NewModel(deps Deps) *Model {
 		seen:         make(map[uint64]bool),
 		conflictExp:  make(map[string]bool),
 		lastReactSeq: make(map[string]uint64),
+		lastEditDiff: make(map[string]string),
 	}
 	if m.control != nil && m.control.CurrentToken != nil {
 		m.token = m.control.CurrentToken()
@@ -415,6 +422,10 @@ func (m *Model) submit() tea.Cmd {
 		m.react(strings.TrimSpace(rest))
 		return nil
 	}
+	if rest, ok := strings.CutPrefix(text, "/diff"); ok {
+		m.showDiff(strings.TrimSpace(rest))
+		return nil
+	}
 	if m.deps.Inject == nil {
 		return nil
 	}
@@ -424,6 +435,40 @@ func (m *Model) submit() tea.Cmd {
 	}
 	m.deps.Inject("", text)
 	return nil
+}
+
+// showDiff dumps the most recent edit diff for an agent into the conversation (scrollable). Args:
+// "[@agent]" — defaults to the agent that edited most recently.
+func (m *Model) showDiff(args string) {
+	target := m.lastEditAgent
+	if f := strings.Fields(args); len(f) > 0 {
+		target = strings.TrimPrefix(f[0], "@")
+	}
+	diff := m.lastEditDiff[target]
+	if target == "" || diff == "" {
+		m.addConversation(helpStyle.Render("/diff: no recent edit to show"))
+		return
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s ── diff ──\n", target)
+	for _, l := range strings.Split(diff, "\n") {
+		b.WriteString(diffLine(l) + "\n")
+	}
+	m.addConversation(strings.TrimRight(b.String(), "\n"))
+}
+
+// diffLine colors a unified-diff line for the terminal: additions green, removals red, hunk headers
+// dimmed.
+func diffLine(s string) string {
+	switch {
+	case strings.HasPrefix(s, "+"):
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("2")).Render(s)
+	case strings.HasPrefix(s, "-"):
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Render(s)
+	case strings.HasPrefix(s, "@@"):
+		return helpStyle.Render(s)
+	}
+	return s
 }
 
 // noteReactTarget remembers an agent's most recent reactable message (its journal seq), so /react
@@ -623,8 +668,11 @@ func (m *Model) handleApprovalKey(s string) bool {
 	case "a":
 		m.resolveSelected(pend, decisionAllowSession)
 		return true
-	case "n", "d":
+	case "n":
 		m.resolveSelected(pend, decisionDeny)
+		return true
+	case "d", "v":
+		m.approvalDiff = !m.approvalDiff // toggle the selected edit's diff inline
 		return true
 	}
 	return false
@@ -739,7 +787,12 @@ func (m *Model) apply(rec journal.Record) {
 				}
 			case agent.EventToolUse:
 				a.status = "working"
-				m.addConversation(fmt.Sprintf("%s ⚙ %s", rec.Actor, agent.ToolSummary(ev.Tool)))
+				summary := agent.ToolSummary(ev.Tool)
+				if df := agent.ToolDiff(ev.Tool); df != "" {
+					m.lastEditDiff[rec.Actor], m.lastEditAgent = df, rec.Actor
+					summary += helpStyle.Render("  (/diff @" + rec.Actor + ")")
+				}
+				m.addConversation(fmt.Sprintf("%s ⚙ %s", rec.Actor, summary))
 			case agent.EventTurnDone:
 				a.status = "idle"
 				if ev.Usage != nil {
@@ -1124,7 +1177,16 @@ func (m *Model) approvalLines() []string {
 		if ap.Reason != "" {
 			line += helpStyle.Render("  — " + ap.Reason)
 		}
+		if ap.Diff != "" {
+			line += helpStyle.Render("  (d: diff)")
+		}
 		out = append(out, line)
+		// Show the selected approval's diff inline when toggled with 'd' (#7).
+		if i == m.approvalSel && m.approvalDiff && ap.Diff != "" {
+			for _, dl := range strings.Split(ap.Diff, "\n") {
+				out = append(out, "    "+diffLine(dl))
+			}
+		}
 	}
 	return out
 }
