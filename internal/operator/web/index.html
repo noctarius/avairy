@@ -245,6 +245,7 @@
         margin: 14px 0;
       }
       .msg {
+        position: relative;
         max-width: 80%;
         padding: 10px 14px;
         border-radius: 16px;
@@ -253,6 +254,43 @@
         white-space: pre-wrap;
         overflow-wrap: anywhere;
         line-height: 1.5;
+      }
+      /* quick-feedback reactions on an agent message: buttons on hover, persistent badge once set */
+      .react {
+        position: absolute;
+        top: 6px;
+        right: 8px;
+        display: flex;
+        gap: 1px;
+        opacity: 0;
+        transition: opacity 0.1s;
+        background: var(--panel2);
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 1px 2px;
+      }
+      .row:hover .react {
+        opacity: 1;
+      }
+      .react button {
+        background: none;
+        border: none;
+        cursor: pointer;
+        font-size: 12px;
+        line-height: 1;
+        padding: 2px 4px;
+        border-radius: 999px;
+        opacity: 0.75;
+      }
+      .react button:hover {
+        opacity: 1;
+        background: var(--chip);
+      }
+      .rbadge {
+        position: absolute;
+        bottom: 4px;
+        right: 8px;
+        font-size: 12px;
       }
       .row.me .msg {
         background: var(--accent);
@@ -809,18 +847,72 @@
         renderFleet();
       }
 
+      // Quick-feedback reactions on agent messages (#react). Only the last REACT_WINDOW text messages
+      // per agent stay reactable (mirrors operator.ReactWindow) — older ones keep any badge but lose
+      // the buttons. 👍/👎 reach the agent without interrupting; ❌ stops it and asks it to reconsider.
+      const REACT_WINDOW = 5;
+      const reactable = new Map(); // agent -> [msg elements, oldest first]
+      const reactEmoji = { up: "👍", down: "👎", reject: "❌" };
+      function react(seq, kind) {
+        post("/operator/react", { seq, kind });
+      }
+      function addReactions(el, seq, agent) {
+        if (!el || !seq || !agent) return;
+        el.dataset.seq = seq;
+        const bar = document.createElement("div");
+        bar.className = "react";
+        const titles = {
+          up: "good — the agent sees it, no interrupt",
+          down: "off-track — the agent sees it, no interrupt",
+          reject: "reject — stop and reconsider now",
+        };
+        for (const k of ["up", "down", "reject"]) {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.textContent = reactEmoji[k];
+          btn.title = titles[k];
+          btn.onclick = () => {
+            react(seq, k);
+            setReactionBadge(seq, k); // optimistic; the journal event re-affirms it
+          };
+          bar.appendChild(btn);
+        }
+        el.appendChild(bar);
+        const list = reactable.get(agent) || [];
+        list.push(el);
+        reactable.set(agent, list);
+        while (list.length > REACT_WINDOW) {
+          const old = list.shift();
+          const b = old.querySelector(".react");
+          if (b) b.remove();
+        }
+      }
+      function setReactionBadge(seq, kind) {
+        const el = logwrap.querySelector(`[data-seq="${seq}"]`);
+        if (!el) return;
+        let badge = el.querySelector(".rbadge");
+        if (!badge) {
+          badge = document.createElement("span");
+          badge.className = "rbadge";
+          el.appendChild(badge);
+        }
+        badge.textContent = reactEmoji[kind] || "";
+      }
+
       function applyRecord(rec) {
         const d = rec.data || {};
         switch (rec.kind) {
-          case "message":
-            if (d.Interrupt) return;
-            bubble(d.From, addrStr(d.To), d.Body, "", true);
+          case "message": {
+            if (d.Interrupt || d.NoWake) return; // NoWake = context-only reaction delivery, not a bubble
+            const el = bubble(d.From, addrStr(d.To), d.Body, "", true);
+            if (d.From && d.From !== "human" && d.From !== "facilitator") addReactions(el, rec.seq, d.From);
             break;
+          }
           case "agent_event":
             if (d.Type === "text") {
               setStatus(rec.actor, "working");
               clearActive(rec.actor); // the agent moved on from its last command
-              bubble(rec.actor, null, d.Text, "", true);
+              addReactions(bubble(rec.actor, null, d.Text, "", true), rec.seq, rec.actor);
             } else if (d.Type === "reasoning") {
               const t = (d.Text || "").trim();
               if (t) {
@@ -866,6 +958,9 @@
                 s === "blocked" || s === "low_confidence" ? "blocked" : s === "done" ? "idle" : "working",
               );
             }
+            break;
+          case "reaction":
+            setReactionBadge(d.seq, d.kind);
             break;
           case "node_enrolled":
           case "node_rejoined":
