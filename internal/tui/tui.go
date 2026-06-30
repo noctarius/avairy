@@ -157,6 +157,11 @@ type Model struct {
 	agentOrder []string
 	cost       float64
 
+	// /react targets: the journal seq of each agent's most recent reactable text message, plus the
+	// latest agent overall (the default target when no @agent is given).
+	lastReactSeq   map[string]uint64
+	lastReactAgent string
+
 	control     *ControlInfo
 	token       string
 	approvalSel int             // selected row in the Approvals view
@@ -240,15 +245,16 @@ func NewModel(deps Deps) *Model {
 
 	sub, _ := deps.Journal.Subscribe()
 	m := &Model{
-		deps:        deps,
-		sub:         sub,
-		width:       100,
-		height:      30,
-		input:       ta,
-		agents:      make(map[string]*agentState),
-		control:     deps.Control,
-		seen:        make(map[uint64]bool),
-		conflictExp: make(map[string]bool),
+		deps:         deps,
+		sub:          sub,
+		width:        100,
+		height:       30,
+		input:        ta,
+		agents:       make(map[string]*agentState),
+		control:      deps.Control,
+		seen:         make(map[uint64]bool),
+		conflictExp:  make(map[string]bool),
+		lastReactSeq: make(map[string]uint64),
 	}
 	if m.control != nil && m.control.CurrentToken != nil {
 		m.token = m.control.CurrentToken()
@@ -404,6 +410,10 @@ func (m *Model) submit() tea.Cmd {
 		m.closeConsult(strings.TrimSpace(rest))
 		return nil
 	}
+	if rest, ok := strings.CutPrefix(text, "/react"); ok {
+		m.react(strings.TrimSpace(rest))
+		return nil
+	}
 	if m.deps.Inject == nil {
 		return nil
 	}
@@ -413,6 +423,53 @@ func (m *Model) submit() tea.Cmd {
 	}
 	m.deps.Inject("", text)
 	return nil
+}
+
+// noteReactTarget remembers an agent's most recent reactable message (its journal seq), so /react
+// can address it without the operator typing a seq.
+func (m *Model) noteReactTarget(agentID string, seq uint64) {
+	if agentID == "" {
+		return
+	}
+	m.lastReactSeq[agentID] = seq
+	m.lastReactAgent = agentID
+}
+
+// react handles "/react <up|down|reject> [@agent]": quick feedback on an agent's latest message. 👍
+// up / 👎 down reach the agent without interrupting; ❌ reject stops it and asks it to reconsider.
+// With no @agent it targets the most recent agent message overall.
+func (m *Model) react(args string) {
+	if m.deps.React == nil {
+		return
+	}
+	kind, target := "", ""
+	for _, f := range strings.Fields(args) {
+		if strings.HasPrefix(f, "@") {
+			target = strings.TrimPrefix(f, "@")
+		} else if kind == "" {
+			kind = f
+		}
+	}
+	switch kind {
+	case "up", "+", "👍":
+		kind = "up"
+	case "down", "-", "👎":
+		kind = "down"
+	case "reject", "x", "stop", "❌":
+		kind = "reject"
+	default:
+		m.addConversation(helpStyle.Render("usage: /react <up|down|reject> [@agent]"))
+		return
+	}
+	if target == "" {
+		target = m.lastReactAgent
+	}
+	seq := m.lastReactSeq[target]
+	if target == "" || seq == 0 {
+		m.addConversation(helpStyle.Render("/react: no recent agent message to react to"))
+		return
+	}
+	m.deps.React(seq, kind)
 }
 
 // commitCmd runs an operator-initiated signed commit off the UI thread (signing can block).
@@ -658,7 +715,13 @@ func (m *Model) apply(rec journal.Record) {
 	switch rec.Kind {
 	case journal.KindMessage:
 		if msg, ok := rec.Data.(bus.Message); ok {
+			if msg.Interrupt || msg.NoWake {
+				return // control / context-only reaction delivery — not shown in the transcript
+			}
 			m.addConversation(fmt.Sprintf("%s → %s: %s", msg.From, addrStr(msg.To), m.highlightMentions(msg.Body)))
+			if msg.From != "human" && msg.From != "facilitator" {
+				m.noteReactTarget(msg.From, rec.Seq)
+			}
 		}
 	case journal.KindAgentEvent:
 		if ev, ok := rec.Data.(agent.Event); ok {
@@ -667,6 +730,7 @@ func (m *Model) apply(rec journal.Record) {
 			case agent.EventText:
 				a.status = "working"
 				m.addConversation(rec.Actor + ":\n" + m.highlightMentions(m.markdown(ev.Text))) // agents emit markdown — render it (#23)
+				m.noteReactTarget(rec.Actor, rec.Seq)
 			case agent.EventReasoning:
 				a.status = "working"
 				if t := strings.TrimSpace(ev.Text); t != "" {
@@ -700,6 +764,13 @@ func (m *Model) apply(rec journal.Record) {
 // lifecycle status and the operator-facing notices shown in the conversation.
 func (m *Model) applySystem(actor string, d map[string]any) {
 	switch d["event"] {
+	case "reaction":
+		kind, _ := d["kind"].(string)
+		emoji := map[string]string{"up": "👍", "down": "👎", "reject": "❌"}[kind]
+		who, _ := d["agent"].(string)
+		if emoji != "" {
+			m.addConversation(helpStyle.Render(fmt.Sprintf("%s reacted to %s", emoji, who)))
+		}
 	case "report_status":
 		// Only agent self-reports affect the fleet (node-lifecycle records carry a node id as
 		// actor, not an agent — they must not create a phantom fleet entry).

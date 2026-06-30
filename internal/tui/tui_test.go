@@ -330,6 +330,41 @@ func TestNodeEnrolledWithFamilyShowsOnline(t *testing.T) {
 	}
 }
 
+// /react targets an agent's most recent message (overall, or a named @agent) and forwards the seq
+// + kind to Deps.React.
+func TestReactCommand(t *testing.T) {
+	j := journal.NewMemory()
+	var gotSeq uint64
+	var gotKind string
+	m := NewModel(Deps{
+		Journal: j,
+		Inject:  func(string, string) {},
+		React:   func(seq uint64, kind string) { gotSeq, gotKind = seq, kind },
+	})
+	rec := j.Append(journal.KindAgentEvent, "linux", agent.Event{Type: agent.EventText, Text: "done the thing"})
+	m.apply(rec)
+
+	m.input.SetValue("/react up")
+	m.submit()
+	if gotSeq != rec.Seq || gotKind != "up" {
+		t.Fatalf("/react up should target seq %d/up, got %d/%q", rec.Seq, gotSeq, gotKind)
+	}
+
+	m.input.SetValue("/react reject @linux")
+	m.submit()
+	if gotSeq != rec.Seq || gotKind != "reject" {
+		t.Fatalf("/react reject @linux should target seq %d/reject, got %d/%q", rec.Seq, gotSeq, gotKind)
+	}
+
+	// No recent message for an unknown agent → no call.
+	gotSeq, gotKind = 0, ""
+	m.input.SetValue("/react up @ghost")
+	m.submit()
+	if gotSeq != 0 || gotKind != "" {
+		t.Fatalf("/react for an unknown agent should be a no-op, got %d/%q", gotSeq, gotKind)
+	}
+}
+
 // Esc never quits; quitting takes two ctrl+c in succession (any other key disarms).
 func TestQuitRequiresDoubleCtrlC(t *testing.T) {
 	m, _, _ := newTestModel()
