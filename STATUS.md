@@ -426,6 +426,49 @@ Ranked roughly by value-to-effort within each group.
     - **Deferred (optional):** PWA-installable console (manifest + service worker + icons) — the
       `.p12` is the substantive "install option"; PWA is a UX nicety we can add later.
 
+### Operator console & feedback (recent)
+
+31. ~~**Live current-action spinner.**~~ ✅ Done (web). Each working agent's in-flight tool card
+    shows a corner spinner (solid accent border), cleared the instant it does anything else / its
+    turn ends / on Stop — so with several parallel agents you see each one's current action.
+
+32. ~~**Single port for everything.**~~ ✅ Done. The MCP bus is mounted at `/mcp` on the control
+    listener (mTLS), so control + operator API + bus share one reachable port; `--control-addr` was
+    replaced by `--advertise` / `--advertise-port` (bind `0.0.0.0:7700` by default). `core add-node`/
+    `add-operator` drop `--core`/`--mcp`; `node join` drops `--core-mcp` (defaults to `--core`).
+
+33. ~~**Node reports agent family + model.**~~ ✅ Done. Enrollment caps now carry `family` (and
+    `model` when pinned), flowing to `NodeInfo.Caps`, the `node_enrolled` journal record, and
+    `list_agents`. An agent-driving node also shows **online the moment it enrolls** (TUI + web),
+    instead of waiting for its first turn — keyed on the `family` cap; proxy-only nodes stay quiet.
+
+34. ~~**Loop detection — content/region aware.**~~ ✅ Done (extends #14). The signature
+    (`agent.ActionKey`) now folds in a digest of the edit content and the read region, so
+    edit→read→edit with *different* edits isn't flagged as an A↔B loop; a repeated identical edit or
+    re-reading the same span still is. `TrimInput` leaves a `_digest` (and a capped `_diff`) behind.
+
+35. ~~**Quick-feedback reactions on agent messages.**~~ ✅ Done (web + TUI). 👍/👎 deliver
+    context-only feedback the agent sees on its next turn without interrupting (a new `bus` NoWake
+    delivery the drivers don't wake on); ❌ hard-stops it and steers a reconsider. Only the last 5
+    text messages per agent are reactable (server-enforced). Web: hover buttons + persistent badge.
+    TUI: `/react up|down|reject [@agent]`.
+
+36. ~~**Present the requested patch (edit diffs).**~~ ✅ Done (web + TUI). A unified diff travels
+    with file edits (`agent.PatchPreview`/`ToolDiff`, all families) — through gating →
+    `control.Approval` → the consoles. Reviewable in a scrollable modal: web has a "▸ diff" link on
+    edit approval cards **and** on every edit in the transcript; the TUI opens an overlay modal
+    (lipgloss Canvas/Layer + a `viewport`) via `d` on an edit approval or `/diff [@agent]`. The
+    allow-once / allow-for-session / deny set already existed (#6); this adds the patch presentation.
+
+### Backlog (next)
+
+37. **TUI mouse + viewport-backed conversation.** The conversation is still a hand-rolled `[]string`
+    with a manual `scroll int`; migrate it to a `bubbles/v2 viewport` (mouse-wheel scrolling, cleaner
+    windowing), then enable mouse input (`tea.WithMouseCellMotion` + zone hit-testing, e.g.
+    `bubblezone`) for clickable diff links, 👍/👎/❌ reactions, and Allow/Session/Deny — point-and-
+    click parity with the web. Do the viewport migration first; it's what makes inline per-message
+    click affordances clean.
+
 ### Single operator
 
 13. The TUI is single-operator by design (v1). Multi-operator is out of scope for now.
