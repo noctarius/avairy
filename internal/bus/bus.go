@@ -69,7 +69,11 @@ type Message struct {
 	Body      string
 	Delivery  agent.Delivery
 	Interrupt bool // a control signal: cancel the recipient's current turn (not a text message)
-	Time      time.Time
+	// NoWake delivers to the recipient's inbox (it sees the message on its next turn via read_inbox)
+	// but does NOT itself trigger a turn — context-only feedback that never interrupts. Used by
+	// 👍/👎 reactions: the agent gets the signal without being woken or spending a turn on it.
+	NoWake bool
+	Time   time.Time
 }
 
 // Bus routes messages and records them to the journal.
@@ -165,6 +169,12 @@ func (b *Bus) Publish(from string, to Addr, body string, d agent.Delivery) Messa
 // Interrupt sends a control signal telling the recipient(s) to cancel their current turn.
 func (b *Bus) Interrupt(from string, to Addr) Message {
 	return b.publish(Message{From: from, To: to, Body: "⎋ stop", Delivery: agent.DeliveryInterrupt, Interrupt: true})
+}
+
+// PublishContext delivers a context-only message: it lands in the recipient's inbox (seen on its
+// next turn) but never wakes it or triggers a turn. For passive feedback like 👍/👎 reactions.
+func (b *Bus) PublishContext(from string, to Addr, body string) Message {
+	return b.publish(Message{From: from, To: to, Body: body, Delivery: agent.DeliverySteer, NoWake: true})
 }
 
 func (b *Bus) publish(msg Message) Message {

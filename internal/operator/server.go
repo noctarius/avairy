@@ -48,6 +48,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc(PathStream, s.auth(s.handleStream))
 	mux.HandleFunc(PathState, s.auth(s.handleState))
 	mux.HandleFunc(PathInject, s.auth(s.handleInject))
+	mux.HandleFunc(PathReact, s.auth(s.handleReact))
 	mux.HandleFunc(PathInterrupt, s.auth(s.handleInterrupt))
 	mux.HandleFunc(PathApproval, s.auth(s.handleApproval))
 	mux.HandleFunc(PathConflict, s.auth(s.handleConflict))
@@ -143,6 +144,15 @@ func (s *Server) handleInject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.svc.Inject(req.Target, req.Body)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleReact(w http.ResponseWriter, r *http.Request) {
+	var req reactRequest
+	if !readJSON(w, r, &req) {
+		return
+	}
+	s.svc.React(req.Seq, req.Kind)
 	w.WriteHeader(http.StatusNoContent)
 }
 

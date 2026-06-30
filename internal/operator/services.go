@@ -65,6 +65,93 @@ func splitAddressedMention(s string) (mention, rest string) {
 // Interrupt stops whatever agents are running (broadcast interrupt).
 func (s *Services) Interrupt() { s.Bus.Interrupt("human", bus.Broadcast()) }
 
+// Reaction kinds an operator attaches to an agent message (the quick-feedback control).
+const (
+	ReactUp     = "up"     // 👍 positive — delivered as context, no interrupt
+	ReactDown   = "down"   // 👎 negative — delivered as context, no interrupt
+	ReactReject = "reject" // ❌ hard stop + reconsider — interrupt the agent and steer it to rethink
+)
+
+// ReactWindow is how many of an agent's most recent text messages stay reactable. Older messages
+// keep any badge they already have but can no longer be reacted to — reacting to something an agent
+// has long moved past would just deliver stale feedback. The consoles mirror this for the buttons.
+const ReactWindow = 5
+
+// React records the operator's 👍/👎/❌ on the agent message at journal seq and acts on it: 👍/👎
+// reach the agent as context-only feedback (seen on its next turn, never interrupting); ❌
+// interrupts the agent now and steers it to reconsider that step. The reaction is journaled so both
+// consoles can render the badge and it survives a reload. Only the agent's last ReactWindow text
+// messages are reactable; anything older is ignored.
+func (s *Services) React(seq uint64, kind string) {
+	agentID, snippet, ok := s.reactable(seq)
+	if !ok {
+		return // unknown seq, not an agent message, or too old to react to
+	}
+	s.Journal.Append(journal.KindSystem, "human", map[string]any{
+		"event": "reaction", "seq": seq, "kind": kind, "agent": agentID,
+	})
+	to := bus.Agent(agentID)
+	switch kind {
+	case ReactUp:
+		s.Bus.PublishContext("human", to, "👍 the operator approved this step: \""+snippet+"\"")
+	case ReactDown:
+		s.Bus.PublishContext("human", to, "👎 the operator flagged this step as off-track: \""+snippet+"\" — reconsider it on your next step (no need to stop now).")
+	case ReactReject:
+		s.Bus.Interrupt("human", to)
+		s.Bus.Publish("human", to, "✗ the operator REJECTED this step: \""+snippet+"\". Stop this approach now and reconsider before continuing.", agent.DeliverySteer)
+	}
+}
+
+// reactable reports the agent and a short quote for the message at seq, and whether it's currently
+// reactable — i.e. among that agent's last ReactWindow text messages (tool actions don't count).
+// This both finds the target and enforces the recency limit, so a stale client can't react to an
+// old message and deliver confusing late feedback.
+func (s *Services) reactable(seq uint64) (agentID, snippet string, ok bool) {
+	type entry struct {
+		seq  uint64
+		text string
+	}
+	byAgent := map[string][]entry{}
+	for _, r := range s.Journal.Records() {
+		var who, text string
+		switch r.Kind {
+		case journal.KindAgentEvent:
+			if ev, k := r.Data.(agent.Event); k && ev.Type == agent.EventText {
+				who, text = r.Actor, ev.Text
+			}
+		case journal.KindMessage:
+			// an agent's own utterance (send_message) — not the human, facilitator, or a
+			// control/reaction-delivery message.
+			if m, k := r.Data.(bus.Message); k && m.From != "human" && m.From != "facilitator" && !m.Interrupt && !m.NoWake {
+				who, text = m.From, m.Body
+			}
+		}
+		if who != "" {
+			byAgent[who] = append(byAgent[who], entry{r.Seq, text})
+		}
+	}
+	for who, es := range byAgent {
+		start := len(es) - ReactWindow
+		if start < 0 {
+			start = 0
+		}
+		for _, e := range es[start:] {
+			if e.seq == seq {
+				return who, snip(e.text), true
+			}
+		}
+	}
+	return "", "", false
+}
+
+func snip(s string) string {
+	s = strings.TrimSpace(strings.ReplaceAll(s, "\n", " "))
+	if len(s) > 100 {
+		s = s[:100] + "…"
+	}
+	return s
+}
+
 // ResolveApproval delivers the operator's verdict on a gated action to the waiting agent.
 func (s *Services) ResolveApproval(id, decision string) { s.Approvals.Resolve(id, decision) }
 
@@ -118,6 +205,7 @@ func (s *Services) Deps() tui.Deps {
 		Notes:           s.Notes,
 		Inject:          s.Inject,
 		Interrupt:       s.Interrupt,
+		React:           s.React,
 		ResolveApproval: s.ResolveApproval,
 		ResolveConflict: s.ResolveConflict,
 		Consult:         s.Consult,

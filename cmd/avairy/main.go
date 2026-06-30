@@ -431,7 +431,7 @@ func serveControlAPI(d controlDeps) func() {
 	core.InboxDrainer = func(agentID string) []control.InboxMessage {
 		var out []control.InboxMessage
 		for _, m := range mcpSrv.DrainInbox(agentID) {
-			out = append(out, control.InboxMessage{ID: m.ID, From: m.From, Body: m.Body, Delivery: string(m.Delivery), Interrupt: m.Interrupt, ToKind: string(m.To.Kind)})
+			out = append(out, control.InboxMessage{ID: m.ID, From: m.From, Body: m.Body, Delivery: string(m.Delivery), Interrupt: m.Interrupt, NoWake: m.NoWake, ToKind: string(m.To.Kind)})
 		}
 		return out
 	}

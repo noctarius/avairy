@@ -155,6 +155,9 @@ func (s *Supervisor) Run(ctx context.Context) {
 				}
 				continue
 			}
+			if msg.NoWake {
+				continue // context-only (e.g. a 👍/👎 reaction): already in read_inbox; don't trigger a turn
+			}
 			// Only wake-worthy messages (direct, or human/facilitator broadcast, within the
 			// autonomous-wake budget — #25) trigger a turn or a respawn. Context-only chatter is
 			// ignored here; a sleeping agent stays asleep.

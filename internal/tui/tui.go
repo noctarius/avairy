@@ -35,6 +35,9 @@ type Deps struct {
 	// Interrupt stops whatever agents are running (broadcast interrupt). Both nil-safe via guards.
 	Inject    func(target, body string)
 	Interrupt func()
+	// React attaches quick feedback to the agent message at journal seq: "up"/"down" reach the agent
+	// as context (no interrupt), "reject" hard-stops it and asks it to reconsider. Nil disables it.
+	React func(seq uint64, kind string)
 	// Tasks returns the current task board (the Tasks view). Nil → empty.
 	Tasks func() []board.Task
 	// Notes returns the shared blackboard (the Notes view, #27). Nil → empty.

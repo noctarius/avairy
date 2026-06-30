@@ -147,6 +147,32 @@ func TestSupervisor_TeamWakeCarriesClaimInstruction(t *testing.T) {
 	}
 }
 
+// A context-only (NoWake) message — e.g. a 👍/👎 reaction — is delivered to the agent's inbox but
+// must NOT trigger a turn; a normal directed message still does. (The mock echoes delivered text, so
+// an echo == a turn happened.)
+func TestSupervisor_NoWakeDoesNotTriggerTurn(t *testing.T) {
+	jrnl := journal.NewMemory()
+	b := bus.New(jrnl)
+	var spawns int32
+
+	s := New("alice", []string{"backend"}, spawnerFor(mock.New(), &spawns), b, jrnl, 0)
+	go s.Run(t.Context())
+	if !waitFor(t, func() bool { return atomic.LoadInt32(&spawns) == 1 }) {
+		t.Fatal("no startup spawn")
+	}
+
+	b.PublishContext("human", bus.Agent("alice"), "👍 nice work")
+	time.Sleep(150 * time.Millisecond)
+	if hasText(jrnl, "👍 nice work") {
+		t.Fatal("a context-only message must not trigger a turn")
+	}
+
+	b.Publish("human", bus.Agent("alice"), "do this", agent.DeliverySteer)
+	if !waitFor(t, func() bool { return hasText(jrnl, "do this") }) {
+		t.Fatal("a normal directed message should trigger a turn")
+	}
+}
+
 // --- helpers ---
 
 func hasTextContaining(j journal.Log, sub string) bool {

@@ -176,6 +176,7 @@ func (c *Client) Deps() tui.Deps {
 		Notes:            c.notes,
 		Inject:           c.inject,
 		Interrupt:        c.interrupt,
+		React:            c.react,
 		PendingApprovals: c.pendingApprovals,
 		ResolveApproval:  c.resolveApproval,
 		PendingConflicts: c.pendingConflicts,
@@ -254,6 +255,9 @@ func (c *Client) inject(target, body string) {
 	_ = c.post(PathInject, injectRequest{Target: target, Body: body}, nil)
 }
 func (c *Client) interrupt() { _ = c.post(PathInterrupt, struct{}{}, nil) }
+func (c *Client) react(seq uint64, kind string) {
+	_ = c.post(PathReact, reactRequest{Seq: seq, Kind: kind}, nil)
+}
 func (c *Client) resolveApproval(id, decision string) {
 	_ = c.post(PathApproval, approvalDecision{ID: id, Decision: decision}, nil)
 }

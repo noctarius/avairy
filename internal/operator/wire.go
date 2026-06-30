@@ -19,6 +19,7 @@ const (
 	PathStream    = "/operator/stream"    // GET: SSE of journal records (backfill, then live)
 	PathState     = "/operator/state"     // GET: a snapshot of tasks/approvals/conflicts/roster/control
 	PathInject    = "/operator/inject"    // POST: publish a human message
+	PathReact     = "/operator/react"     // POST: 👍/👎/❌ on an agent message (by journal seq)
 	PathInterrupt = "/operator/interrupt" // POST: stop running agents
 	PathApproval  = "/operator/approval"  // POST: resolve a gated action
 	PathConflict  = "/operator/conflict"  // POST: resolve/delegate an owner-less conflict
@@ -78,6 +79,10 @@ type State struct {
 // Action request/response bodies.
 type (
 	injectRequest    struct{ Target, Body string }
+	reactRequest     struct {
+		Seq  uint64 `json:"seq"`
+		Kind string `json:"kind"`
+	}
 	approvalDecision struct{ ID, Decision string }
 	conflictDecision struct{ ID, Decision, Target string }
 	commitRequest    struct{ Message string }

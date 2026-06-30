@@ -55,6 +55,7 @@ type InboxMessage struct {
 	Body      string `json:"body"`
 	Delivery  string `json:"delivery"`
 	Interrupt bool   `json:"interrupt,omitempty"` // cancel the agent's current turn
+	NoWake    bool   `json:"noWake,omitempty"`    // context-only: read via read_inbox but doesn't trigger a turn
 	ToKind    string `json:"toKind,omitempty"`    // "agent" | "role" | "broadcast" — for the node's wake policy (#25)
 }
 

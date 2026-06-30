@@ -575,6 +575,9 @@ func spawnAgent(ctx context.Context, n *control.Node, family, agentID, role, mod
 							}
 							continue
 						}
+						if m.NoWake {
+							continue // context-only (👍/👎 reaction): the agent reads it via read_inbox; no turn
+						}
 						// Bus hardening (#25): only wake the agent for messages that should trigger a
 						// turn (direct, or human/facilitator, within the autonomous-wake budget).
 						if !waker.Wake(m.From, bus.ToKind(m.ToKind), false, time.Now()) {

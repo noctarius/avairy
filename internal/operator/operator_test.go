@@ -3,6 +3,7 @@ package operator_test
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -261,4 +262,63 @@ func TestServicesInjectParsesLeadingMention(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("plain message did not broadcast")
 	}
+}
+
+// React: 👍 delivers context-only feedback (no interrupt), ❌ interrupts then steers a reconsider,
+// each journals a reaction badge — and a message older than the per-agent window is ignored.
+func TestReact(t *testing.T) {
+	j := journal.NewMemory()
+	b := bus.New(j)
+	svc := &operator.Services{Journal: j, Bus: b}
+
+	rec := j.Append(journal.KindAgentEvent, "linux", agent.Event{Type: agent.EventText, Text: "editing the hash"})
+	inbox, _ := b.Subscribe("linux")
+
+	svc.React(rec.Seq, operator.ReactUp)
+	got := drainMsgs(inbox)
+	if len(got) != 1 || !got[0].NoWake || got[0].Interrupt {
+		t.Fatalf("👍 should deliver one context-only (NoWake) message, got %+v", got)
+	}
+	if !hasReaction(j, rec.Seq, "up") {
+		t.Fatal("👍 should journal a reaction badge")
+	}
+
+	svc.React(rec.Seq, operator.ReactReject)
+	got = drainMsgs(inbox)
+	if len(got) != 2 || !got[0].Interrupt || got[1].Interrupt || got[1].NoWake {
+		t.Fatalf("❌ should interrupt then steer a reconsider, got %+v", got)
+	}
+
+	// Push enough newer messages that rec falls out of linux's last-ReactWindow → no longer reactable.
+	for i := 0; i < operator.ReactWindow; i++ {
+		j.Append(journal.KindAgentEvent, "linux", agent.Event{Type: agent.EventText, Text: fmt.Sprintf("step %d", i)})
+	}
+	svc.React(rec.Seq, operator.ReactUp)
+	if got := drainMsgs(inbox); len(got) != 0 {
+		t.Fatalf("reacting to a message older than the window should be a no-op, got %+v", got)
+	}
+}
+
+func drainMsgs(ch <-chan bus.Message) []bus.Message {
+	var out []bus.Message
+	for {
+		select {
+		case m := <-ch:
+			out = append(out, m)
+		default:
+			return out
+		}
+	}
+}
+
+func hasReaction(j journal.Log, seq uint64, kind string) bool {
+	for _, r := range j.Records() {
+		if r.Kind != journal.KindSystem {
+			continue
+		}
+		if d, ok := r.Data.(map[string]any); ok && d["event"] == "reaction" && d["seq"] == seq && d["kind"] == kind {
+			return true
+		}
+	}
+	return false
 }
