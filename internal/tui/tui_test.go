@@ -330,19 +330,30 @@ func TestNodeEnrolledWithFamilyShowsOnline(t *testing.T) {
 	}
 }
 
-// /diff dumps an agent's most recent edit diff into the conversation; the Approvals view reveals a
-// pending edit's diff inline when toggled with 'd'.
+// /diff opens an agent's most recent edit diff in the scrollable modal; esc closes it; and 'd' on a
+// pending edit approval opens that edit's diff in the same modal.
 func TestDiffViewing(t *testing.T) {
 	j := journal.NewMemory()
 	m := NewModel(Deps{Journal: j, Inject: func(string, string) {}})
+	m.width, m.height = 120, 40
 	rec := j.Append(journal.KindAgentEvent, "linux", agent.Event{Type: agent.EventToolUse,
 		Tool: &agent.ToolCall{Name: "Edit", Input: map[string]any{"file_path": "f.go", "_diff": "@@ -1 +1 @@\n-a\n+b"}}})
 	m.apply(rec)
-	before := len(m.conv)
+
 	m.input.SetValue("/diff")
 	m.submit()
-	if len(m.conv) <= before || !strings.Contains(m.conv[len(m.conv)-1], "+b") {
-		t.Fatalf("/diff should add the diff to the conversation")
+	if !m.diffOpen {
+		t.Fatal("/diff should open the modal")
+	}
+	if !strings.Contains(m.diffVP.View(), "+b") {
+		t.Fatalf("modal should show the diff, got:\n%s", m.diffVP.View())
+	}
+	if !strings.Contains(m.composed(), "─") {
+		t.Fatal("composed view should overlay the bordered modal")
+	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if m.diffOpen {
+		t.Fatal("esc should close the modal")
 	}
 
 	m2 := NewModel(Deps{
@@ -350,13 +361,11 @@ func TestDiffViewing(t *testing.T) {
 		PendingApprovals: func() []ApprovalItem { return []ApprovalItem{{ID: "a1", AgentID: "linux", Kind: "file_write", Summary: "f.go", Diff: "@@ -1 +1 @@\n-x\n+y"}} },
 		ResolveApproval:  func(string, string) {},
 	})
+	m2.width, m2.height = 120, 40
 	m2.tab = tabApprovals
-	if strings.Contains(strings.Join(m2.bodyLines(), "\n"), "+y") {
-		t.Fatal("approval diff should be hidden until toggled")
-	}
 	m2.handleApprovalKey("d")
-	if !strings.Contains(strings.Join(m2.bodyLines(), "\n"), "+y") {
-		t.Fatal("'d' should reveal the selected approval's diff")
+	if !m2.diffOpen || !strings.Contains(m2.diffVP.View(), "+y") {
+		t.Fatal("'d' on an edit approval should open its diff in the modal")
 	}
 }
 

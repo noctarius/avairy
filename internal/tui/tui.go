@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"charm.land/bubbles/v2/textarea"
+	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/glamour"
@@ -163,11 +164,13 @@ type Model struct {
 	lastReactSeq   map[string]uint64
 	lastReactAgent string
 
-	// diff viewing (#7): the latest edit diff per agent (for /diff) + the latest agent that edited;
-	// approvalDiff toggles the selected approval's diff inline in the Approvals view.
+	// diff viewing (#7): the latest edit diff per agent (for /diff) + the latest agent that edited.
+	// The diff itself opens in a scrollable overlay modal (lipgloss Canvas/Layer + a viewport).
 	lastEditDiff  map[string]string
 	lastEditAgent string
-	approvalDiff  bool
+	diffOpen      bool
+	diffTitle     string
+	diffVP        viewport.Model
 
 	control     *ControlInfo
 	token       string
@@ -263,6 +266,7 @@ func NewModel(deps Deps) *Model {
 		conflictExp:  make(map[string]bool),
 		lastReactSeq: make(map[string]uint64),
 		lastEditDiff: make(map[string]string),
+		diffVP:       viewport.New(),
 	}
 	if m.control != nil && m.control.CurrentToken != nil {
 		m.token = m.control.CurrentToken()
@@ -304,6 +308,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.input.SetWidth(msg.Width - 2)
+		if m.diffOpen {
+			m.sizeDiffVP()
+		}
 		return m, nil
 
 	case recordMsg:
@@ -336,6 +343,21 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyPressMsg:
+		// The diff modal is modal: it captures input. Esc/q close it; everything else scrolls the
+		// viewport. (ctrl+c still quits so the operator is never trapped.)
+		if m.diffOpen {
+			switch s := msg.String(); s {
+			case "esc", "q":
+				m.diffOpen = false
+				return m, nil
+			case "ctrl+c":
+				return m, tea.Quit
+			default:
+				var cmd tea.Cmd
+				m.diffVP, cmd = m.diffVP.Update(msg)
+				return m, cmd
+			}
+		}
 		// Ctrl+C twice in succession quits; the first press just arms (hint in the footer).
 		// Any other key disarms. Esc stops running agents; it no longer quits.
 		s := msg.String()
@@ -437,8 +459,8 @@ func (m *Model) submit() tea.Cmd {
 	return nil
 }
 
-// showDiff dumps the most recent edit diff for an agent into the conversation (scrollable). Args:
-// "[@agent]" — defaults to the agent that edited most recently.
+// showDiff opens the most recent edit diff for an agent in the modal. Args: "[@agent]" — defaults
+// to the agent that edited most recently.
 func (m *Model) showDiff(args string) {
 	target := m.lastEditAgent
 	if f := strings.Fields(args); len(f) > 0 {
@@ -449,26 +471,49 @@ func (m *Model) showDiff(args string) {
 		m.addConversation(helpStyle.Render("/diff: no recent edit to show"))
 		return
 	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "%s ── diff ──\n", target)
-	for _, l := range strings.Split(diff, "\n") {
-		b.WriteString(diffLine(l) + "\n")
-	}
-	m.addConversation(strings.TrimRight(b.String(), "\n"))
+	m.openDiff(target+" · latest edit", diff)
 }
 
-// diffLine colors a unified-diff line for the terminal: additions green, removals red, hunk headers
-// dimmed.
-func diffLine(s string) string {
-	switch {
-	case strings.HasPrefix(s, "+"):
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("2")).Render(s)
-	case strings.HasPrefix(s, "-"):
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Render(s)
-	case strings.HasPrefix(s, "@@"):
-		return helpStyle.Render(s)
+// openDiff shows a diff in the scrollable overlay modal.
+func (m *Model) openDiff(title, diff string) {
+	m.diffTitle = title
+	m.diffOpen = true
+	m.sizeDiffVP()
+	m.diffVP.SetContent(colorizeDiff(diff))
+	m.diffVP.GotoTop()
+}
+
+// sizeDiffVP fits the modal viewport to the current terminal (leaving room for the border + chrome).
+func (m *Model) sizeDiffVP() {
+	m.diffVP.SetWidth(clampInt(m.width-8, 20, 100))
+	m.diffVP.SetHeight(clampInt(m.height-8, 5, 30))
+}
+
+func clampInt(v, lo, hi int) int {
+	if v < lo {
+		return lo
 	}
-	return s
+	if v > hi {
+		return hi
+	}
+	return v
+}
+
+// colorizeDiff colors a unified diff for the terminal: additions green, removals red, hunk headers
+// dimmed.
+func colorizeDiff(diff string) string {
+	lines := strings.Split(diff, "\n")
+	for i, s := range lines {
+		switch {
+		case strings.HasPrefix(s, "+"):
+			lines[i] = lipgloss.NewStyle().Foreground(lipgloss.Color("2")).Render(s)
+		case strings.HasPrefix(s, "-"):
+			lines[i] = lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Render(s)
+		case strings.HasPrefix(s, "@@"):
+			lines[i] = helpStyle.Render(s)
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 // noteReactTarget remembers an agent's most recent reactable message (its journal seq), so /react
@@ -672,7 +717,10 @@ func (m *Model) handleApprovalKey(s string) bool {
 		m.resolveSelected(pend, decisionDeny)
 		return true
 	case "d", "v":
-		m.approvalDiff = !m.approvalDiff // toggle the selected edit's diff inline
+		if m.approvalSel >= 0 && m.approvalSel < len(pend) && pend[m.approvalSel].Diff != "" {
+			ap := pend[m.approvalSel]
+			m.openDiff(ap.AgentID+" · "+ap.Kind, ap.Diff) // review the edit in the scrollable modal
+		}
 		return true
 	}
 	return false
@@ -977,12 +1025,41 @@ func addrStr(a bus.Addr) string {
 }
 
 func (m *Model) View() tea.View {
-	v := tea.NewView(m.render())
+	v := tea.NewView(m.composed())
 	v.AltScreen = true
 	// Request enhanced keyboard reporting (Kitty protocol) so shift+enter is distinguishable
 	// where the terminal supports it.
 	v.KeyboardEnhancements = tea.KeyboardEnhancements{ReportAlternateKeys: true}
 	return v
+}
+
+// composed renders the screen, overlaying the diff modal on top when open via lipgloss compositing
+// (Canvas + Layers) so the background stays visible around the centered box.
+func (m *Model) composed() string {
+	base := m.render()
+	if !m.diffOpen {
+		return base
+	}
+	box := m.diffModalBox()
+	cx := clampInt((m.width-lipgloss.Width(box))/2, 0, m.width)
+	cy := clampInt((m.height-lipgloss.Height(box))/2, 0, m.height)
+	return lipgloss.NewCanvas(m.width, m.height).
+		Compose(lipgloss.NewLayer(base)).
+		Compose(lipgloss.NewLayer(box).X(cx).Y(cy)).
+		Render()
+}
+
+// diffModalBox is the bordered modal: a title, the scrollable diff viewport, and a key hint.
+func (m *Model) diffModalBox() string {
+	head := activeTab.Render(truncate(m.diffTitle, m.diffVP.Width()))
+	foot := helpStyle.Render("↑/↓ pgup/pgdn scroll · esc/q close")
+	body := head + "\n" + m.diffVP.View() + "\n" + foot
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("4")).
+		Background(lipgloss.Color("0")).
+		Padding(0, 1).
+		Render(body)
 }
 
 func (m *Model) render() string {
@@ -1181,12 +1258,6 @@ func (m *Model) approvalLines() []string {
 			line += helpStyle.Render("  (d: diff)")
 		}
 		out = append(out, line)
-		// Show the selected approval's diff inline when toggled with 'd' (#7).
-		if i == m.approvalSel && m.approvalDiff && ap.Diff != "" {
-			for _, dl := range strings.Split(ap.Diff, "\n") {
-				out = append(out, "    "+diffLine(dl))
-			}
-		}
 	}
 	return out
 }
