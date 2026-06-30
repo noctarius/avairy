@@ -356,6 +356,32 @@
         background: transparent;
         border-style: dashed;
       }
+      /* The command an agent is currently running: solid accent border + a corner spinner, so with
+         several agents in parallel you can see each one's live action at a glance. */
+      .msg.running {
+        position: relative;
+        padding-right: 28px;
+        border-style: solid;
+        border-color: var(--accent);
+        color: var(--ink);
+      }
+      .msg.running::after {
+        content: "";
+        position: absolute;
+        top: 9px;
+        right: 9px;
+        width: 11px;
+        height: 11px;
+        border: 2px solid var(--line);
+        border-top-color: var(--accent);
+        border-radius: 50%;
+        animation: avairy-spin 0.7s linear infinite;
+      }
+      @keyframes avairy-spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
       .err .msg {
         border-color: var(--err);
         color: var(--err);
@@ -718,6 +744,7 @@
         row.appendChild(m);
         logwrap.appendChild(row);
         if (stick) toBottom();
+        return m;
       }
       function sysline(text) {
         clearEmpty();
@@ -755,9 +782,30 @@
         }
         return t.Name || "tool";
       }
+      // The tool card each agent is currently running (agent id -> .msg element), so we can show a
+      // spinner on it and clear it the moment that agent does anything else or stops.
+      const activeTool = new Map();
+      function markActive(id, el) {
+        if (!id || !el) return;
+        clearActive(id);
+        el.classList.add("running");
+        activeTool.set(id, el);
+      }
+      function clearActive(id) {
+        const el = activeTool.get(id);
+        if (el) {
+          el.classList.remove("running");
+          activeTool.delete(id);
+        }
+      }
+      function clearAllActive() {
+        activeTool.forEach((el) => el.classList.remove("running"));
+        activeTool.clear();
+      }
       function setStatus(id, st) {
         if (!id || id === "human") return;
         agents.set(id, st);
+        if (st !== "working") clearActive(id); // idle/offline/sleeping/blocked → no live command
         renderFleet();
       }
 
@@ -771,16 +819,22 @@
           case "agent_event":
             if (d.Type === "text") {
               setStatus(rec.actor, "working");
+              clearActive(rec.actor); // the agent moved on from its last command
               bubble(rec.actor, null, d.Text, "", true);
             } else if (d.Type === "reasoning") {
               const t = (d.Text || "").trim();
               if (t) {
                 setStatus(rec.actor, "working");
+                clearActive(rec.actor);
                 bubble(rec.actor, null, "💭 " + t, "think");
               }
             } else if (d.Type === "tool_use") {
               setStatus(rec.actor, "working");
-              bubble(rec.actor, null, "⚙ " + toolSummary(d.Tool), "tool");
+              // The new command is now this agent's live action: spin it (and stop spinning the
+              // previous one). markActive clears the agent's prior active card first.
+              markActive(rec.actor, bubble(rec.actor, null, "⚙ " + toolSummary(d.Tool), "tool"));
+            } else if (d.Type === "tool_result") {
+              clearActive(rec.actor); // command finished
             } else if (d.Type === "turn_done") {
               setStatus(rec.actor, "idle");
               if (d.Usage) {
@@ -790,6 +844,7 @@
                 renderFleet();
               }
             } else if (d.Type === "error") {
+              clearActive(rec.actor);
               bubble(rec.actor, null, "⚠ " + d.Text, "err");
             }
             break;
@@ -1127,7 +1182,10 @@
         ta.style.height = Math.min(ta.scrollHeight, 180) + "px";
       }
       $("send").onclick = send;
-      $("stop").onclick = () => post("/operator/interrupt", {});
+      $("stop").onclick = () => {
+        clearAllActive(); // stop the spinners now; statuses settle as turns end
+        post("/operator/interrupt", {});
+      };
       $("msg").addEventListener("input", grow);
       $("msg").addEventListener("keydown", (e) => {
         if (e.key === "Enter" && !e.shiftKey) {
