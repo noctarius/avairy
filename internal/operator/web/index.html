@@ -574,6 +574,63 @@
         border-color: var(--line);
         color: var(--muted);
       }
+      /* a small "diff" affordance: on an edit's approval card and on edit bubbles in the transcript */
+      .difflink {
+        display: inline-block;
+        margin-top: 6px;
+        font-size: 11px;
+        color: var(--accent);
+        cursor: pointer;
+        user-select: none;
+      }
+      .difflink:hover {
+        text-decoration: underline;
+      }
+      /* scrollable diff modal (shared by approvals and the transcript) */
+      .modal {
+        display: none;
+        position: fixed;
+        inset: 0;
+        z-index: 50;
+        background: rgba(0, 0, 0, 0.55);
+        align-items: center;
+        justify-content: center;
+      }
+      .modal-box {
+        display: flex;
+        flex-direction: column;
+        width: min(900px, 92vw);
+        max-height: 82vh;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        overflow: hidden;
+      }
+      .modal-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 10px 14px;
+        border-bottom: 1px solid var(--line);
+        font-family: ui-monospace, Menlo, monospace;
+        font-size: 12.5px;
+        color: var(--muted);
+      }
+      .modal-head button {
+        background: none;
+        border: none;
+        color: var(--muted);
+        cursor: pointer;
+        font-size: 14px;
+      }
+      .modal-body {
+        margin: 0;
+        padding: 12px 14px;
+        overflow: auto;
+        font-size: 12.5px;
+        line-height: 1.45;
+      }
       .card select {
         width: 100%;
         margin-bottom: 7px;
@@ -644,6 +701,16 @@
         <h3>Conflicts <span class="count" id="cfCount" style="display: none">0</span></h3>
         <div id="conflicts"><div class="empty">none</div></div>
       </aside>
+    </div>
+
+    <div id="diffModal" class="modal" onclick="if (event.target === this) closeDiff();">
+      <div class="modal-box">
+        <div class="modal-head">
+          <span id="diffTitle">diff</span>
+          <button type="button" onclick="closeDiff()">✕</button>
+        </div>
+        <pre class="modal-body"><code id="diffBody" class="language-diff"></code></pre>
+      </div>
     </div>
 
     <script>
@@ -887,6 +954,39 @@
           if (b) b.remove();
         }
       }
+      // Diff viewing (#7): a scrollable modal shared by edit approvals ("Show Diff") and any edit in
+      // the transcript (a "diff" link on the bubble).
+      function openDiff(text, title) {
+        $("diffTitle").textContent = title || "diff";
+        const code = $("diffBody");
+        code.removeAttribute("data-highlighted");
+        code.className = "language-diff";
+        code.textContent = text || "(no diff)";
+        if (window.hljs) hljs.highlightElement(code);
+        $("diffModal").style.display = "flex";
+      }
+      function closeDiff() {
+        $("diffModal").style.display = "none";
+      }
+      // toolDiff returns the diff for a tool call: the precomputed _diff (shipped node events), else a
+      // simple before/after from raw old/new (core-local agents journal untrimmed). "" if not an edit.
+      function toolDiff(tool) {
+        const inp = (tool && tool.Input) || {};
+        if (typeof inp._diff === "string" && inp._diff) return inp._diff;
+        if (typeof inp.old_string === "string" || typeof inp.new_string === "string") {
+          return "--- before\n" + (inp.old_string || "") + "\n+++ after\n" + (inp.new_string || "");
+        }
+        if (typeof inp.content === "string" && inp.content) return inp.content;
+        return "";
+      }
+      function addDiffLink(el, diff, title) {
+        if (!el || !diff) return;
+        const a = document.createElement("span");
+        a.className = "difflink";
+        a.textContent = "▸ diff";
+        a.onclick = () => openDiff(diff, title);
+        el.appendChild(a);
+      }
       function setReactionBadge(seq, kind) {
         const el = logwrap.querySelector(`[data-seq="${seq}"]`);
         if (!el) return;
@@ -924,7 +1024,9 @@
               setStatus(rec.actor, "working");
               // The new command is now this agent's live action: spin it (and stop spinning the
               // previous one). markActive clears the agent's prior active card first.
-              markActive(rec.actor, bubble(rec.actor, null, "⚙ " + toolSummary(d.Tool), "tool"));
+              const tEl = bubble(rec.actor, null, "⚙ " + toolSummary(d.Tool), "tool");
+              markActive(rec.actor, tEl);
+              addDiffLink(tEl, toolDiff(d.Tool), toolSummary(d.Tool)); // edits get a "diff" link
             } else if (d.Type === "tool_result") {
               clearActive(rec.actor); // command finished
             } else if (d.Type === "turn_done") {
@@ -1128,11 +1230,12 @@
         <button class="no" data-d="deny">Deny</button></div>`;
           d.querySelector(".head").textContent = `${a.agentId} · ${a.kind}`;
           d.querySelector(".meta").textContent = a.summary + (a.reason ? " — " + a.reason : "");
-          d.querySelectorAll("button").forEach(
+          d.querySelectorAll(".acts button").forEach(
             (b) =>
               (b.onclick = () =>
                 post("/operator/approval", { ID: a.id, Decision: b.dataset.d }).then(refresh)),
           );
+          if (a.diff) addDiffLink(d, a.diff, a.summary); // review the edit before deciding
           el.appendChild(d);
         });
       }
@@ -1276,6 +1379,9 @@
         ta.style.height = "auto";
         ta.style.height = Math.min(ta.scrollHeight, 180) + "px";
       }
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && $("diffModal").style.display === "flex") closeDiff();
+      });
       $("send").onclick = send;
       $("stop").onclick = () => {
         clearAllActive(); // stop the spinners now; statuses settle as turns end
