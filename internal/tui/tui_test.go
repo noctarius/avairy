@@ -373,6 +373,21 @@ func TestMouseClick(t *testing.T) {
 	}
 }
 
+// Message bodies (human and agent) render as markdown: a human message with a fenced code block
+// shows the code, not the literal ``` fences.
+func TestMessageMarkdownRendered(t *testing.T) {
+	m, _, _ := newTestModel()
+	m.apply(journal.Record{Seq: 1, Kind: journal.KindMessage, Actor: "human",
+		Data: bus.Message{From: "human", To: bus.Agent("linux"), Body: "try:\n\n```c\nint x = 1;\n```"}})
+	got := convText(m)
+	if strings.Contains(got, "```") {
+		t.Fatalf("code fences should be rendered away, not shown raw:\n%s", got)
+	}
+	if !strings.Contains(got, "int x = 1;") {
+		t.Fatalf("code content should survive:\n%s", got)
+	}
+}
+
 // While an agent is mid-turn the conversation shows a transient "is working…" hint; it clears when
 // the agent goes idle (turn_done).
 func TestWorkingHint(t *testing.T) {

@@ -152,6 +152,7 @@ type agentState struct {
 // system lines carry only text.
 type convEntry struct {
 	text      string // rendered display (may be multi-line); for markdown, a cache of `md` at width `mdW`
+	header    string // the author line above a markdown body (re-prepended on re-wrap)
 	md        string // markdown source (non-empty ⇒ text is re-rendered when the width changes)
 	mdW       int    // the width `text` was rendered at, so a resize can re-wrap it
 	seq       uint64 // journal seq — reaction/diff target (0 for meta lines)
@@ -942,7 +943,9 @@ func (m *Model) apply(rec journal.Record) {
 			if msg.Interrupt || msg.NoWake {
 				return // control / context-only reaction delivery — not shown in the transcript
 			}
-			e := convEntry{text: fmt.Sprintf("%s → %s: %s", authorLabel(msg.From), addrStr(msg.To), m.highlightMentions(msg.Body)), seq: rec.Seq}
+			header := authorLabel(msg.From) + helpStyle.Render(" → "+addrStr(msg.To))
+			e := convEntry{header: header, md: msg.Body, mdW: m.width,
+				text: header + "\n" + m.highlightMentions(m.markdown(msg.Body)), seq: rec.Seq}
 			if msg.From != "human" && msg.From != "facilitator" {
 				e.agent, e.reactable = msg.From, true
 				m.noteReactTarget(msg.From, rec.Seq)
@@ -957,8 +960,10 @@ func (m *Model) apply(rec journal.Record) {
 				a.status = "working"
 				// Keep the markdown source so convLines can re-wrap it when the width changes (a
 				// backfilled entry is first rendered at the default width, before the real size #23).
+				header := authorLabel(rec.Actor)
 				m.pushEntry(convEntry{
-					text: authorLabel(rec.Actor) + "\n" + m.highlightMentions(m.markdown(ev.Text)), md: ev.Text, mdW: m.width, seq: rec.Seq, agent: rec.Actor, reactable: true})
+					header: header, md: ev.Text, mdW: m.width,
+					text: header + "\n" + m.highlightMentions(m.markdown(ev.Text)), seq: rec.Seq, agent: rec.Actor, reactable: true})
 				m.noteReactTarget(rec.Actor, rec.Seq)
 			case agent.EventReasoning:
 				a.status = "working"
@@ -1378,7 +1383,7 @@ func (m *Model) convLines() []string {
 	// changed, so steady-state rendering does no extra work.
 	for i := range m.conv {
 		if e := &m.conv[i]; e.md != "" && e.mdW != m.width {
-			e.text = authorLabel(e.agent) + "\n" + m.highlightMentions(m.markdown(e.md))
+			e.text = e.header + "\n" + m.highlightMentions(m.markdown(e.md))
 			e.mdW = m.width
 		}
 	}
