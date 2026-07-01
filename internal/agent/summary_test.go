@@ -51,6 +51,25 @@ func TestActionKey(t *testing.T) {
 	if ActionKey(read(0)) != ActionKey(read(0)) {
 		t.Fatal("reads at the same offset should key identically")
 	}
+	// codex fileChange: distinct edits (different paths/diffs) must key differently, so three
+	// separate fileChanges aren't mistaken for a stuck loop by the facilitator.
+	fc := func(path, diff string) *ToolCall {
+		return &ToolCall{Name: "fileChange", Input: map[string]any{"type": "fileChange", "changes": []any{
+			map[string]any{"path": path, "kind": "update", "diff": diff},
+		}}}
+	}
+	if a, b := ActionKey(fc("a.c", "-x\n+y")), ActionKey(fc("b.c", "-p\n+q")); a == b {
+		t.Fatalf("distinct fileChanges should key differently, both = %q", a)
+	}
+	if a, b := ActionKey(fc("a.c", "-x\n+y")), ActionKey(fc("a.c", "-x\n+y")); a != b {
+		t.Fatalf("identical fileChanges should key identically, %q vs %q", a, b)
+	}
+	// And the key survives TrimInput (the node-shipped path drops the bodies, keeps a digest).
+	rawFC := fc("a.c", "-x\n+y")
+	trimFC := &ToolCall{Name: "fileChange", Input: TrimInput(rawFC.Input)}
+	if ActionKey(rawFC) != ActionKey(trimFC) {
+		t.Fatalf("trimmed fileChange should key like the raw one: %q vs %q", ActionKey(trimFC), ActionKey(rawFC))
+	}
 }
 
 func TestPatchPreviewAndToolDiff(t *testing.T) {
@@ -68,6 +87,14 @@ func TestPatchPreviewAndToolDiff(t *testing.T) {
 	changes := map[string]any{"changes": map[string]any{"a.go": map[string]any{"unified_diff": "@@ -1 +1 @@\n-p\n+q"}}}
 	if got := PatchPreview("apply_patch", changes); !strings.Contains(got, "+q") {
 		t.Fatalf("changes map should render each file's diff, got %q", got)
+	}
+	// codex app-server fileChange: `changes` is an ARRAY of {path, kind, diff} — each diff is
+	// already a unified diff and must render (otherwise the console shows no diff link).
+	fc := map[string]any{"type": "fileChange", "changes": []any{
+		map[string]any{"path": "src/foo.c", "kind": "update", "diff": "@@ -1 +1 @@\n-old\n+new"},
+	}}
+	if got := PatchPreview("fileChange", fc); !strings.Contains(got, "+new") || !strings.Contains(got, "src/foo.c") {
+		t.Fatalf("fileChange array should render each change's diff with its path, got %q", got)
 	}
 	// ACP edit: oldText/newText (and an empty old side = pure insertion) render.
 	if got := PatchPreview("edit", map[string]any{"file_path": "f.go", "oldText": "", "newText": "hi"}); !strings.Contains(got, "+hi") {

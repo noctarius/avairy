@@ -69,6 +69,32 @@ func PatchPreview(toolName string, input map[string]any) string {
 			return capLines(b.String())
 		}
 	}
+	// 4b. A changes array (codex app-server fileChange): [{path, kind, diff}, …]. Each diff is
+	// already unified; prefix the path (unless the diff already names it) so multi-file changes
+	// stay legible.
+	if arr, ok := input["changes"].([]any); ok {
+		var b strings.Builder
+		for _, e := range arr {
+			m, ok := e.(map[string]any)
+			if !ok {
+				continue
+			}
+			path, _ := firstString(m, "path", "file_path")
+			if p, ok := firstString(m, "diff", "unified_diff", "patch"); ok {
+				if path != "" && !strings.Contains(p, path) {
+					fmt.Fprintf(&b, "--- %s\n", path)
+				}
+				b.WriteString(p + "\n")
+			} else if d, ok := oldNewDiff(path, m); ok {
+				b.WriteString(d + "\n")
+			} else if body, ok := firstString(m, "content", "new_content", "contents"); ok {
+				b.WriteString(diffOf(path, "", body) + "\n")
+			}
+		}
+		if b.Len() > 0 {
+			return capLines(b.String())
+		}
+	}
 	// 5. A full new body (Write / NotebookEdit / create): show it as an all-added diff.
 	if body, ok := firstString(input, "content", "file_text", "new_str"); ok {
 		return capLines(diffOf(file, "", body))

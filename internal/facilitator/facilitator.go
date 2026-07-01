@@ -339,6 +339,7 @@ func signature(ev agent.Event) string {
 // the stuck-repetition the loop detector hunts for. Covers the common families' edit/write tools.
 var fileMutators = map[string]bool{
 	"Edit": true, "Write": true, "MultiEdit": true, "NotebookEdit": true, "apply_patch": true,
+	"fileChange": true, // codex app-server edit item
 }
 
 func mutatesFiles(tc *agent.ToolCall) bool {

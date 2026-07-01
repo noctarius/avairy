@@ -204,6 +204,27 @@ func TestLoop_RepeatedFileEditsAreNotALoop(t *testing.T) {
 	}
 }
 
+// codex edits arrive as `fileChange` items (a distinct tool name) whose payload is a `changes`
+// array. They must be treated like any other edit: distinct fileChanges are progress, not a loop.
+func TestLoop_CodexFileChangesAreNotALoop(t *testing.T) {
+	fc := func(path, diff string) agent.Event {
+		return agent.Event{Type: agent.EventToolUse, Tool: &agent.ToolCall{Name: "fileChange",
+			Input: map[string]any{"type": "fileChange", "changes": []any{
+				map[string]any{"path": path, "kind": "update", "diff": diff},
+			}}}}
+	}
+	// Distinct edits to distinct files — clearly progress.
+	seq := []agent.Event{fc("a.c", "-1\n+2"), fc("b.c", "-3\n+4"), fc("c.c", "-5\n+6")}
+	if n := loopFires(seq); n != 0 {
+		t.Fatalf("three distinct fileChanges are progress, not a loop; fired %d", n)
+	}
+	// Even repeated edits to the same file are progress (each is a new change), like Edit.
+	same := fc("a.c", "-1\n+2")
+	if n := loopFires([]agent.Event{same, same, same, same}); n != 0 {
+		t.Fatalf("repeated fileChanges to one file must not trip the loop detector; fired %d", n)
+	}
+}
+
 // Edit ↔ read ↔ edit on one file, where each edit changes *different* content, is iteration — not a
 // loop. The signature must fold in the edit's content (and a read's offset) so it isn't seen as an
 // A↔B cycle. But re-reading the exact same spot over and over, or re-applying the identical edit

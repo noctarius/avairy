@@ -41,7 +41,9 @@ func ActionKey(tc *ToolCall) string {
 }
 
 // bodyKeys are the large diff/body fields TrimInput drops; they identify *what* an edit changed.
-var bodyKeys = []string{"content", "new_string", "old_string", "file_text", "patch", "edits"}
+// "changes" is codex's fileChange payload (an array of {path, kind, diff}) — folding it into the
+// digest is what lets distinct fileChanges key apart instead of all collapsing to "fileChange".
+var bodyKeys = []string{"content", "new_string", "old_string", "file_text", "patch", "edits", "changes"}
 
 // contentDigest fingerprints an edit's change: the precomputed "_digest" TrimInput left behind (the
 // node path, where bodies were already stripped), else a hash of the raw body fields still present
@@ -89,7 +91,27 @@ func actionDetail(in map[string]any) string {
 			return trunc(firstLineEllipsis(v), 120)
 		}
 	}
+	// codex fileChange carries its path inside the changes array, not a top-level field. (TrimInput
+	// lifts the same value to a top-level "path", so trimmed and raw inputs summarize identically.)
+	if p := changesPath(in); p != "" {
+		return trunc(p, 120)
+	}
 	return ""
+}
+
+// changesPath returns the first path in a codex fileChange `changes` array ([{path, kind, diff}, …]),
+// or "" if absent — the identifying file for the summary and (via TrimInput) the shipped input.
+func changesPath(in map[string]any) string {
+	arr, ok := in["changes"].([]any)
+	if !ok || len(arr) == 0 {
+		return ""
+	}
+	m, ok := arr[0].(map[string]any)
+	if !ok {
+		return ""
+	}
+	p, _ := m["path"].(string)
+	return p
 }
 
 // TrimInput returns a copy of a tool input safe to ship over the wire and store in the journal:
@@ -102,7 +124,7 @@ func TrimInput(in map[string]any) map[string]any {
 	out := make(map[string]any, len(in))
 	for k, v := range in {
 		switch k {
-		case "content", "new_string", "old_string", "file_text", "patch", "edits":
+		case "content", "new_string", "old_string", "file_text", "patch", "edits", "changes":
 			continue // bodies/diffs: too big to ship
 		}
 		if s, ok := v.(string); ok {
@@ -115,6 +137,13 @@ func TrimInput(in map[string]any) map[string]any {
 	// (#14) without shipping the whole body. ActionKey reads it back as "_digest".
 	if d := bodyDigest(in); d != "" {
 		out["_digest"] = d
+	}
+	// codex fileChange has no top-level path (it lives in the dropped "changes"); lift it so the
+	// shipped summary names the file and keys the same as the untrimmed input.
+	if _, ok := out["path"]; !ok {
+		if p := changesPath(in); p != "" {
+			out["path"] = p
+		}
 	}
 	// Keep a capped rendered diff so the consoles can show the change for any edit in the transcript
 	// (#7) even though the raw bodies are dropped. ToolDiff reads it back as "_diff".
