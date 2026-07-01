@@ -480,8 +480,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.input.InsertRune('\n')
 			return m, nil
 		case "enter":
+			target := m.selectedTarget() // sticky: keep addressing the same recipient after send
 			cmd := m.submit()
 			m.input.Reset()
+			if target != "broadcast" {
+				m.setTarget(target)
+			}
 			return m, cmd
 		}
 	}

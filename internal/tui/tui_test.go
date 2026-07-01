@@ -300,6 +300,38 @@ func TestSubmitBroadcast(t *testing.T) {
 	}
 }
 
+// After sending a directed message, the recipient stays selected (sticky) rather than
+// snapping back to broadcast — so a back-and-forth with one agent doesn't need re-@-ing it.
+func TestRecipientStickyAfterSend(t *testing.T) {
+	m, _, _ := newTestModel()
+	m.touchAgent("linux") // so @linux is a known recipient
+	m.input.SetValue("@linux first question")
+	if got := m.selectedTarget(); got != "linux" {
+		t.Fatalf("precondition: selected target = %q, want linux", got)
+	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	if got := m.selectedTarget(); got != "linux" {
+		t.Fatalf("after send, selected target = %q, want it to stay linux", got)
+	}
+	if !strings.HasPrefix(m.input.Value(), "@linux ") {
+		t.Fatalf("after send, input = %q, want the @linux prefix preserved", m.input.Value())
+	}
+}
+
+// Broadcast is the default and must not gain a stray prefix after sending.
+func TestBroadcastNotStickyPrefixed(t *testing.T) {
+	m, _, _ := newTestModel()
+	m.input.SetValue("standup in 5")
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if v := m.input.Value(); v != "" {
+		t.Fatalf("after a broadcast send, input = %q, want empty", v)
+	}
+	if got := m.selectedTarget(); got != "broadcast" {
+		t.Fatalf("selected target = %q, want broadcast", got)
+	}
+}
+
 // Node-lifecycle system records must not appear as agents in the fleet; only agent
 // report_status does.
 func TestSystemRecordsFleet(t *testing.T) {
