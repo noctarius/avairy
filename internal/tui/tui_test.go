@@ -330,6 +330,25 @@ func TestNodeEnrolledWithFamilyShowsOnline(t *testing.T) {
 	}
 }
 
+// The mouse wheel scrolls the body: wheel-up scrolls back, wheel-down returns toward the tail.
+func TestMouseWheelScrolls(t *testing.T) {
+	m, _, _ := newTestModel()
+	m.height = 20
+	for i := 0; i < 40; i++ {
+		m.apply(journal.Record{Seq: uint64(i + 1), Kind: journal.KindMessage, Actor: "human",
+			Data: bus.Message{From: "human", To: bus.Broadcast(), Body: fmt.Sprintf("line-%d", i)}})
+	}
+	m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelUp})
+	if m.scroll == 0 {
+		t.Fatal("wheel up should scroll back")
+	}
+	up := m.scroll
+	m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown})
+	if m.scroll >= up {
+		t.Fatalf("wheel down should scroll toward the tail: %d then %d", up, m.scroll)
+	}
+}
+
 // /diff opens an agent's most recent edit diff in the scrollable modal; esc closes it; and 'd' on a
 // pending edit approval opens that edit's diff in the same modal.
 func TestDiffViewing(t *testing.T) {

@@ -313,6 +313,24 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case tea.MouseWheelMsg:
+		const step = 3
+		if m.diffOpen { // scroll the modal
+			if msg.Button == tea.MouseWheelUp {
+				m.diffVP.ScrollUp(step)
+			} else if msg.Button == tea.MouseWheelDown {
+				m.diffVP.ScrollDown(step)
+			}
+			return m, nil
+		}
+		switch msg.Button { // scroll the body (clamped in render)
+		case tea.MouseWheelUp:
+			m.scroll += step
+		case tea.MouseWheelDown:
+			m.scroll = max(0, m.scroll-step)
+		}
+		return m, nil
+
 	case recordMsg:
 		before := len(m.visualLines())
 		m.apply(journal.Record(msg))
@@ -1027,6 +1045,7 @@ func addrStr(a bus.Addr) string {
 func (m *Model) View() tea.View {
 	v := tea.NewView(m.composed())
 	v.AltScreen = true
+	v.MouseMode = tea.MouseModeCellMotion // mouse wheel scrolls the body / the diff modal (#37)
 	// Request enhanced keyboard reporting (Kitty protocol) so shift+enter is distinguishable
 	// where the terminal supports it.
 	v.KeyboardEnhancements = tea.KeyboardEnhancements{ReportAlternateKeys: true}
