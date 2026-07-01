@@ -465,11 +465,13 @@ Ranked roughly by value-to-effort within each group.
 37. **TUI mouse + clickable affordances.** ⏳ In progress.
     - ✅ **Mouse + wheel scroll.** `v.MouseMode = MouseModeCellMotion`; the wheel scrolls the body
       and the diff modal (`TestMouseWheelScrolls`).
-    - **Clickable affordances (next):** point-and-click 👍/👎/❌ reactions, diff links, and
-      Allow/Session/Deny, via v2's `View.OnMouse` content hit-testing. Needs a small zone-tracking
-      layer — `bubblezone` targets classic `github.com/charmbracelet/bubbletea` (v1) and won't take
-      our `charm.land/v2` mouse msgs, so either hand-roll marker-based zones or compute positions in
-      `OnMouse`.
+    - ✅ **Click-zone layer + clickable tabs/approvals.** A v2-native marker-based zone layer
+      (`internal/tui/zones.go`, ANSI/wide-rune-aware via `x/ansi`; `bubblezone` is v1-only): click a
+      tab to switch, and each approval renders clickable `[allow] [session] [deny] [diff]`.
+      (`TestZonesScanAndHit`, `TestMouseClick`.)
+    - **Conversational affordances (next):** clickable per-message 👍/👎/❌ reactions and diff links.
+      These aren't rendered inline in the flat-string conversation today, so they want the structured
+      / viewport conversation below first.
     - **Viewport migration (now optional).** Originally planned as the foundation, but wheel-scroll
       works on the existing `scroll int` model and `OnMouse` hit-tests the last render regardless, so
       the `bubbles/v2 viewport` swap is just a code-cleanliness refactor — deprioritized.
