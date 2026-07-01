@@ -80,18 +80,19 @@ func TestScrollback(t *testing.T) {
 		t.Fatalf("at the tail: latest visible, oldest hidden:\n%s", v)
 	}
 
-	m.scroll = 30 // scroll up
+	m.scroll = 1 << 30 // scroll to the top (clamped in render) — spacing-agnostic
 	v = m.render()
-	if strings.Contains(v, "line-39") || !strings.Contains(v, "line-9") {
-		t.Fatalf("scrolled up: latest hidden, older visible:\n%s", v)
+	if strings.Contains(v, "line-39") || !strings.Contains(v, "line-0") {
+		t.Fatalf("scrolled to top: latest hidden, oldest visible:\n%s", v)
 	}
 
-	// A new record while scrolled grows the offset by the added rows (viewport stays put).
-	before := m.scroll
+	// A new record while scrolled grows the offset by exactly the rows it added (viewport stays put).
+	m.scroll = 20
+	before, lines := m.scroll, len(m.visualLines())
 	m.Update(recordMsg(journal.Record{Seq: 100, Kind: journal.KindMessage, Actor: "human",
 		Data: bus.Message{From: "human", To: bus.Broadcast(), Body: "NEW"}}))
-	if m.scroll != before+1 {
-		t.Fatalf("scroll should grow by the new row: got %d, want %d", m.scroll, before+1)
+	if grew := len(m.visualLines()) - lines; m.scroll != before+grew {
+		t.Fatalf("scroll should grow by the added rows (%d): got %d, want %d", grew, m.scroll, before+grew)
 	}
 
 	m.scroll = 0 // back to the tail

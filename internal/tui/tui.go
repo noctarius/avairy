@@ -5,12 +5,14 @@ package tui
 
 import (
 	"fmt"
+	"hash/fnv"
 	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
 	"strings"
 
+	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
@@ -201,7 +203,8 @@ type Model struct {
 	md      *glamour.TermRenderer // markdown renderer for agent text (#23); rebuilt on width change
 	mdWidth int
 
-	zones *zones // click regions recorded on each render, for mouse hit-testing (#37)
+	zones *zones        // click regions recorded on each render, for mouse hit-testing (#37)
+	spin  spinner.Model // animated spinner shown next to a working agent (like the web, #37)
 
 	seen map[uint64]bool
 }
@@ -262,6 +265,18 @@ var (
 // mentionRe matches an @<id> token (the id charset agents use as bus identities).
 var mentionRe = regexp.MustCompile(`@[A-Za-z0-9_.-]+`)
 
+// agentPalette are distinct 256-colors cycled per participant id (stable via a hash), so each
+// speaker's author label has a consistent color — the way the web console colors names.
+var agentPalette = []string{"39", "212", "114", "215", "141", "180", "45", "209", "78", "170"}
+
+// authorLabel renders a participant id as a bold, per-id-colored label for a message header.
+func authorLabel(id string) string {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(id))
+	c := lipgloss.Color(agentPalette[h.Sum32()%uint32(len(agentPalette))])
+	return lipgloss.NewStyle().Foreground(c).Bold(true).Render(id)
+}
+
 // NewModel builds the model, backfilling existing journal records and subscribing to new ones.
 func NewModel(deps Deps) *Model {
 	ta := textarea.New()
@@ -288,7 +303,9 @@ func NewModel(deps Deps) *Model {
 		lastEditDiff: make(map[string]string),
 		diffVP:       viewport.New(),
 		zones:        newZones(),
+		spin:         spinner.New(spinner.WithSpinner(spinner.MiniDot)),
 	}
+	m.spin.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("10")) // green, matches the working dot
 	if m.control != nil && m.control.CurrentToken != nil {
 		m.token = m.control.CurrentToken()
 	}
@@ -311,7 +328,7 @@ func (m *Model) refreshRoster() {
 }
 
 func (m *Model) Init() tea.Cmd {
-	return tea.Batch(m.input.Focus(), listen(m.sub))
+	return tea.Batch(m.input.Focus(), listen(m.sub), m.spin.Tick)
 }
 
 func listen(sub <-chan journal.Record) tea.Cmd {
@@ -333,6 +350,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.sizeDiffVP()
 		}
 		return m, nil
+
+	case spinner.TickMsg:
+		var cmd tea.Cmd
+		m.spin, cmd = m.spin.Update(msg) // advances the frame and reschedules the next tick
+		return m, cmd
 
 	case tea.MouseClickMsg:
 		if m.diffOpen || msg.Button != tea.MouseLeft {
@@ -920,7 +942,7 @@ func (m *Model) apply(rec journal.Record) {
 			if msg.Interrupt || msg.NoWake {
 				return // control / context-only reaction delivery — not shown in the transcript
 			}
-			e := convEntry{text: fmt.Sprintf("%s → %s: %s", msg.From, addrStr(msg.To), m.highlightMentions(msg.Body)), seq: rec.Seq}
+			e := convEntry{text: fmt.Sprintf("%s → %s: %s", authorLabel(msg.From), addrStr(msg.To), m.highlightMentions(msg.Body)), seq: rec.Seq}
 			if msg.From != "human" && msg.From != "facilitator" {
 				e.agent, e.reactable = msg.From, true
 				m.noteReactTarget(msg.From, rec.Seq)
@@ -936,7 +958,7 @@ func (m *Model) apply(rec journal.Record) {
 				// Keep the markdown source so convLines can re-wrap it when the width changes (a
 				// backfilled entry is first rendered at the default width, before the real size #23).
 				m.pushEntry(convEntry{
-					text: rec.Actor + ":\n" + m.highlightMentions(m.markdown(ev.Text)), md: ev.Text, mdW: m.width, seq: rec.Seq, agent: rec.Actor, reactable: true})
+					text: authorLabel(rec.Actor) + "\n" + m.highlightMentions(m.markdown(ev.Text)), md: ev.Text, mdW: m.width, seq: rec.Seq, agent: rec.Actor, reactable: true})
 				m.noteReactTarget(rec.Actor, rec.Seq)
 			case agent.EventReasoning:
 				a.status = "working"
@@ -945,7 +967,7 @@ func (m *Model) apply(rec journal.Record) {
 				}
 			case agent.EventToolUse:
 				a.status = "working"
-				e := convEntry{text: fmt.Sprintf("%s ⚙ %s", rec.Actor, agent.ToolSummary(ev.Tool)), seq: rec.Seq, agent: rec.Actor}
+				e := convEntry{text: fmt.Sprintf("%s ⚙ %s", authorLabel(rec.Actor), agent.ToolSummary(ev.Tool)), seq: rec.Seq, agent: rec.Actor}
 				if df := agent.ToolDiff(ev.Tool); df != "" {
 					m.lastEditDiff[rec.Actor], m.lastEditAgent = df, rec.Actor
 					e.diff = df // → a clickable diff link on this row (#7/#37)
@@ -1296,7 +1318,7 @@ func (m *Model) fleetLine() string {
 		dot := idleDot
 		switch a.status {
 		case "working":
-			dot = workingDot
+			dot = m.spin.View() // animated spinner while working (like the web, #37)
 		case "blocked":
 			dot = blockedDot
 		case "offline":
@@ -1362,7 +1384,7 @@ func (m *Model) convLines() []string {
 	// changed, so steady-state rendering does no extra work.
 	for i := range m.conv {
 		if e := &m.conv[i]; e.md != "" && e.mdW != m.width {
-			e.text = e.agent + ":\n" + m.highlightMentions(m.markdown(e.md))
+			e.text = authorLabel(e.agent) + "\n" + m.highlightMentions(m.markdown(e.md))
 			e.mdW = m.width
 		}
 	}
@@ -1380,7 +1402,10 @@ func (m *Model) convLines() []string {
 		}
 	}
 	var lines []string
-	for _, e := range m.conv {
+	for i, e := range m.conv {
+		if i > 0 {
+			lines = append(lines, "") // a blank line between messages, so they read as distinct
+		}
 		lines = append(lines, e.text)
 		if aff := m.affordanceLine(e, recent[e.seq]); aff != "" {
 			lines = append(lines, aff)
