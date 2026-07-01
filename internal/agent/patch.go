@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	udiff "github.com/aymanbagabas/go-udiff"
@@ -11,44 +12,64 @@ import (
 const maxPatchLines = 400
 
 // PatchPreview renders a human-readable diff of a file-editing tool call, for the approval card's
-// "show diff". It handles the families' different shapes: an explicit unified patch (codex
-// apply_patch), an old→new string replacement (Claude Edit, ACP edit), a list of edits (Claude
-// MultiEdit), or a full new body (Write/NotebookEdit). Returns "" when there's nothing diff-like to
-// show (e.g. a shell command), so callers can decide whether to offer the control. Output is capped.
+// "show diff". It handles the families' different shapes:
+//   - an explicit unified patch — patch/diff/unified_diff (codex apply_patch, or any tool);
+//   - an old→new string replacement — old_string/new_string (Claude Edit) or oldText/newText (ACP);
+//   - a list of edits (Claude MultiEdit);
+//   - a per-path changes map (codex apply_patch: path → {unified_diff | old/new | content});
+//   - a full new body — content/file_text (Write/NotebookEdit).
+//
+// Returns "" when there's nothing diff-like to show (e.g. a shell command), so callers can decide
+// whether to offer the control. Output is capped.
 func PatchPreview(toolName string, input map[string]any) string {
 	if input == nil {
 		return ""
 	}
-	file, _ := firstString(input, "file_path", "filePath", "path")
+	file, _ := firstString(input, "file_path", "filePath", "path", "abs_path", "absPath")
 
-	// 1. An explicit unified patch/diff (codex apply_patch, or any tool that hands us one).
+	// 1. An explicit unified patch/diff.
 	if p, ok := firstString(input, "patch", "diff", "unified_diff", "unifiedDiff"); ok {
 		return capLines(p)
 	}
-	// 2. An old→new string replacement (Claude Edit, ACP edit).
-	if old, ok := input["old_string"].(string); ok {
-		if nw, ok := input["new_string"].(string); ok {
-			return capLines(diffOf(file, old, nw))
-		}
+	// 2. An old→new replacement (Claude Edit; ACP and others via *Text; empty side = insert/delete).
+	if d, ok := oldNewDiff(file, input); ok {
+		return capLines(d)
 	}
 	// 3. A list of edits (Claude MultiEdit): [{old_string, new_string}, …].
 	if edits, ok := input["edits"].([]any); ok {
 		var b strings.Builder
 		for _, e := range edits {
-			m, ok := e.(map[string]any)
-			if !ok {
-				continue
+			if m, ok := e.(map[string]any); ok {
+				if d, ok := oldNewDiff(file, m); ok {
+					b.WriteString(d + "\n")
+				}
 			}
-			old, _ := m["old_string"].(string)
-			nw, _ := m["new_string"].(string)
-			b.WriteString(diffOf(file, old, nw))
-			b.WriteByte('\n')
 		}
 		if b.Len() > 0 {
 			return capLines(b.String())
 		}
 	}
-	// 4. A full new body (Write / NotebookEdit / create): show it as an all-added diff.
+	// 4. A per-path changes map (codex apply_patch): { "<path>": {unified_diff | old/new | content} }.
+	if changes, ok := input["changes"].(map[string]any); ok {
+		var b strings.Builder
+		for _, path := range sortedKeys(changes) {
+			m, ok := changes[path].(map[string]any)
+			if !ok {
+				continue
+			}
+			if p, ok := firstString(m, "unified_diff", "diff", "patch"); ok {
+				b.WriteString(p + "\n")
+			} else if d, ok := oldNewDiff(path, m); ok {
+				b.WriteString(d + "\n")
+			} else if body, ok := firstString(m, "content", "new_content", "contents"); ok {
+				b.WriteString(diffOf(path, "", body) + "\n")
+			}
+		}
+		if b.Len() > 0 {
+			return capLines(b.String())
+		}
+	}
+	// 5. A full new body (Write / NotebookEdit / create): show it as an all-added diff.
 	if body, ok := firstString(input, "content", "file_text", "new_str"); ok {
 		return capLines(diffOf(file, "", body))
 	}
@@ -68,6 +89,18 @@ func ToolDiff(tc *ToolCall) string {
 	return PatchPreview(tc.Name, tc.Input)
 }
 
+// oldNewDiff builds a diff from an old→new pair keyed under any of the families' names. It detects
+// the *keys* (not non-empty values), so a pure insertion (empty old) or deletion (empty new) still
+// renders. Returns false when neither side's key is present.
+func oldNewDiff(file string, m map[string]any) (string, bool) {
+	old, oOK := stringByKey(m, "old_string", "oldText", "old_text", "old")
+	nw, nOK := stringByKey(m, "new_string", "newText", "new_text", "new")
+	if !oOK && !nOK {
+		return "", false
+	}
+	return diffOf(file, old, nw), true
+}
+
 func diffOf(file, old, nw string) string {
 	name := file
 	if name == "" {
@@ -76,6 +109,7 @@ func diffOf(file, old, nw string) string {
 	return udiff.Unified(name+" (before)", name+" (after)", old, nw)
 }
 
+// firstString returns the first key whose value is a non-empty string (for identifiers/patches).
 func firstString(in map[string]any, keys ...string) (string, bool) {
 	for _, k := range keys {
 		if v, ok := in[k].(string); ok && v != "" {
@@ -83,6 +117,27 @@ func firstString(in map[string]any, keys ...string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// stringByKey returns the first key that is *present* and a string (empty allowed).
+func stringByKey(in map[string]any, keys ...string) (string, bool) {
+	for _, k := range keys {
+		if v, ok := in[k]; ok {
+			if s, ok := v.(string); ok {
+				return s, true
+			}
+		}
+	}
+	return "", false
+}
+
+func sortedKeys(m map[string]any) []string {
+	ks := make([]string, 0, len(m))
+	for k := range m {
+		ks = append(ks, k)
+	}
+	sort.Strings(ks)
+	return ks
 }
 
 func capLines(s string) string {

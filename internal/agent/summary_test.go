@@ -64,6 +64,15 @@ func TestPatchPreviewAndToolDiff(t *testing.T) {
 	if got := PatchPreview("apply_patch", map[string]any{"patch": "@@ -1 +1 @@\n-x\n+y"}); !strings.Contains(got, "+y") {
 		t.Fatalf("explicit patch should pass through, got %q", got)
 	}
+	// codex apply_patch: a per-path changes map, each with a unified_diff.
+	changes := map[string]any{"changes": map[string]any{"a.go": map[string]any{"unified_diff": "@@ -1 +1 @@\n-p\n+q"}}}
+	if got := PatchPreview("apply_patch", changes); !strings.Contains(got, "+q") {
+		t.Fatalf("changes map should render each file's diff, got %q", got)
+	}
+	// ACP edit: oldText/newText (and an empty old side = pure insertion) render.
+	if got := PatchPreview("edit", map[string]any{"file_path": "f.go", "oldText": "", "newText": "hi"}); !strings.Contains(got, "+hi") {
+		t.Fatalf("oldText/newText should render, got %q", got)
+	}
 	// A shell command has no diff.
 	if got := PatchPreview("Bash", map[string]any{"command": "go test ./..."}); got != "" {
 		t.Fatalf("a command has no diff, got %q", got)

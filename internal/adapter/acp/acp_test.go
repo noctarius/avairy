@@ -2,6 +2,7 @@ package acp
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"avairy/internal/adapter/jsonrpc"
@@ -58,6 +59,21 @@ func TestSessionUpdate_ToolInput(t *testing.T) {
 	ev = <-s.events
 	if ev.Tool.Input["path"] != "src/main.go" {
 		t.Fatalf("locations fallback not mapped: %+v", ev.Tool.Input)
+	}
+}
+
+// An edit's diff rides the tool call's content array as a {type:"diff", oldText, newText} block;
+// it must be folded into the tool Input so agent.ToolDiff can render it (and the array content must
+// not break parsing — it's the ContentBlock/ToolCallContent[] overload).
+func TestSessionUpdate_EditDiffFromContent(t *testing.T) {
+	s := newTestSession()
+	s.OnNotification("session/update", json.RawMessage(`{"update":{"sessionUpdate":"tool_call","toolCallId":"t3","title":"Edit","kind":"edit","content":[{"type":"diff","path":"f.go","oldText":"a := 1","newText":"a := 2"}]}}`))
+	ev := <-s.events
+	if ev.Tool.Input["old_string"] != "a := 1" || ev.Tool.Input["new_string"] != "a := 2" {
+		t.Fatalf("content diff not folded into input: %+v", ev.Tool.Input)
+	}
+	if d := agent.ToolDiff(ev.Tool); !strings.Contains(d, "-a := 1") || !strings.Contains(d, "+a := 2") {
+		t.Fatalf("ToolDiff should render the ACP content diff:\n%s", d)
 	}
 }
 

@@ -16,17 +16,14 @@ func (s *session) OnNotification(method string, params json.RawMessage) {
 	}
 	var p struct {
 		Update struct {
-			SessionUpdate string `json:"sessionUpdate"`
-			Content       struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
-			} `json:"content"`
-			ToolCallID string         `json:"toolCallId"`
-			Title      string         `json:"title"`
-			Kind       string         `json:"kind"`
-			Status     string         `json:"status"`
-			RawInput   map[string]any `json:"rawInput"` // agent-specific args (command, path, …)
-			Locations  []struct {
+			SessionUpdate string          `json:"sessionUpdate"`
+			Content       json.RawMessage `json:"content"` // a ContentBlock (chunks) or ToolCallContent[] (tool calls)
+			ToolCallID    string          `json:"toolCallId"`
+			Title         string          `json:"title"`
+			Kind          string          `json:"kind"`
+			Status        string          `json:"status"`
+			RawInput      map[string]any  `json:"rawInput"` // agent-specific args (command, path, …)
+			Locations     []struct {
 				Path string `json:"path"`
 			} `json:"locations"` // files the call touches
 		} `json:"update"`
@@ -37,10 +34,10 @@ func (s *session) OnNotification(method string, params json.RawMessage) {
 	u := p.Update
 	switch u.SessionUpdate {
 	case "agent_message_chunk":
-		s.appendText(u.Content.Text)
+		s.appendText(acpText(u.Content))
 	case "agent_thought_chunk":
-		if u.Content.Text != "" {
-			s.emit(agent.Event{Type: agent.EventReasoning, Text: u.Content.Text})
+		if t := acpText(u.Content); t != "" {
+			s.emit(agent.Event{Type: agent.EventReasoning, Text: t})
 		}
 	case "tool_call":
 		s.flushText() // close out any assistant text before the tool event
@@ -58,6 +55,16 @@ func (s *session) OnNotification(method string, params json.RawMessage) {
 			}
 			if _, ok := input["path"]; !ok {
 				input["path"] = u.Locations[0].Path
+			}
+		}
+		// An edit's diff rides the tool call's content ({type:"diff", oldText, newText}); fold it in
+		// as edit fields so the transcript's diff control (agent.ToolDiff) can render it.
+		if df := acpDiffInput(u.Content); df != nil {
+			if input == nil {
+				input = map[string]any{}
+			}
+			for k, v := range df {
+				input[k] = v
 			}
 		}
 		s.emit(agent.Event{Type: agent.EventToolUse, Tool: &agent.ToolCall{ID: u.ToolCallID, Name: name, Input: input}, Raw: cloneRaw(params)})
@@ -87,17 +94,29 @@ type permOption struct {
 func (s *session) handlePermission(id json.RawMessage, params json.RawMessage) {
 	var p struct {
 		ToolCall struct {
-			Title    string         `json:"title"`
-			Kind     string         `json:"kind"`
-			RawInput map[string]any `json:"rawInput"`
+			Title    string          `json:"title"`
+			Kind     string          `json:"kind"`
+			RawInput map[string]any  `json:"rawInput"`
+			Content  json.RawMessage `json:"content"` // ToolCallContent[]; an edit carries a diff block
 		} `json:"toolCall"`
 		Options []permOption `json:"options"`
 	}
 	_ = json.Unmarshal(params, &p)
 
+	// Fold an edit's content diff into rawInput so the approval carries a reviewable diff (#7).
+	rawInput := p.ToolCall.RawInput
+	if df := acpDiffInput(p.ToolCall.Content); df != nil {
+		if rawInput == nil {
+			rawInput = map[string]any{}
+		}
+		for k, v := range df {
+			rawInput[k] = v
+		}
+	}
+
 	decision := gating.Allow
 	if s.decide != nil {
-		d, err := s.decide(context.Background(), permToRequest(p.ToolCall.Kind, p.ToolCall.Title, p.ToolCall.RawInput))
+		d, err := s.decide(context.Background(), permToRequest(p.ToolCall.Kind, p.ToolCall.Title, rawInput))
 		if err != nil {
 			d = gating.Deny
 		}
@@ -111,6 +130,41 @@ func (s *session) handlePermission(id json.RawMessage, params json.RawMessage) {
 		outcome = map[string]any{"outcome": "cancelled"}
 	}
 	_ = s.peer.Write(rpcResponse{JSONRPC: "2.0", ID: id, Result: map[string]any{"outcome": outcome}})
+}
+
+// acpText pulls the text out of a single ACP ContentBlock ({type:"text", text}). Returns "" for a
+// non-text/array content (e.g. a tool call's ToolCallContent[]), which is harmless here.
+func acpText(raw json.RawMessage) string {
+	var c struct {
+		Text string `json:"text"`
+	}
+	_ = json.Unmarshal(raw, &c)
+	return c.Text
+}
+
+// acpDiffInput extracts an ACP diff ToolCallContent ({type:"diff", path, oldText, newText}) from a
+// tool call's content array, as edit fields (old_string/new_string/file_path) that PatchPreview and
+// ToolDiff understand. nil when the content carries no diff block.
+func acpDiffInput(raw json.RawMessage) map[string]any {
+	var blocks []struct {
+		Type    string `json:"type"`
+		Path    string `json:"path"`
+		OldText string `json:"oldText"`
+		NewText string `json:"newText"`
+	}
+	if json.Unmarshal(raw, &blocks) != nil {
+		return nil
+	}
+	for _, b := range blocks {
+		if b.Type == "diff" {
+			m := map[string]any{"old_string": b.OldText, "new_string": b.NewText}
+			if b.Path != "" {
+				m["file_path"] = b.Path
+			}
+			return m
+		}
+	}
+	return nil
 }
 
 // permToRequest maps an ACP tool-call kind to a gating Request for the §7 policy.
