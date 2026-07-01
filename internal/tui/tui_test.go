@@ -373,6 +373,22 @@ func TestMouseClick(t *testing.T) {
 	}
 }
 
+// While an agent is mid-turn the conversation shows a transient "is working…" hint; it clears when
+// the agent goes idle (turn_done).
+func TestWorkingHint(t *testing.T) {
+	m, _, _ := newTestModel()
+	m.apply(journal.Record{Seq: 1, Kind: journal.KindAgentEvent, Actor: "linux",
+		Data: agent.Event{Type: agent.EventText, Text: "thinking"}}) // → working
+	if !strings.Contains(strings.Join(m.convLines(), "\n"), "linux is working") {
+		t.Fatal("a working agent should show a hint in the conversation")
+	}
+	m.apply(journal.Record{Seq: 2, Kind: journal.KindAgentEvent, Actor: "linux",
+		Data: agent.Event{Type: agent.EventTurnDone}}) // → idle
+	if strings.Contains(strings.Join(m.convLines(), "\n"), "is working") {
+		t.Fatal("the hint should clear once the agent is idle")
+	}
+}
+
 // Agent markdown is re-wrapped when the width changes — a backfilled entry rendered at the default
 // width must re-flow to a wider terminal instead of staying narrow.
 func TestMarkdownRewrapsOnResize(t *testing.T) {

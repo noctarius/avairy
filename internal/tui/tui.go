@@ -1411,7 +1411,27 @@ func (m *Model) convLines() []string {
 			lines = append(lines, aff)
 		}
 	}
+	// A transient "typing" hint at the tail while agents are mid-answer (recomputed each render, so
+	// it animates via the spinner and clears when they go idle).
+	if working := m.workingAgents(); len(working) > 0 {
+		verb := " is working…"
+		if len(working) > 1 {
+			verb = " are working…"
+		}
+		lines = append(lines, "", m.spin.View()+" "+helpStyle.Render(strings.Join(working, ", ")+verb))
+	}
 	return lines
+}
+
+// workingAgents lists the agents currently mid-turn, in fleet order.
+func (m *Model) workingAgents() []string {
+	var out []string
+	for _, id := range m.agentOrder {
+		if a := m.agents[id]; a != nil && a.status == "working" {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // affordanceLine builds the clickable row under a conversation entry (empty if it has none).
