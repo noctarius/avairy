@@ -149,7 +149,9 @@ type agentState struct {
 // affordances off it (#37): reactions on an agent's own utterances, a diff link on an edit. Meta /
 // system lines carry only text.
 type convEntry struct {
-	text      string // rendered display (may be multi-line)
+	text      string // rendered display (may be multi-line); for markdown, a cache of `md` at width `mdW`
+	md        string // markdown source (non-empty ⇒ text is re-rendered when the width changes)
+	mdW       int    // the width `text` was rendered at, so a resize can re-wrap it
 	seq       uint64 // journal seq — reaction/diff target (0 for meta lines)
 	agent     string // author, for reactable entries
 	reactable bool   // an agent utterance → offer 👍/👎/❌
@@ -931,8 +933,10 @@ func (m *Model) apply(rec journal.Record) {
 			switch ev.Type {
 			case agent.EventText:
 				a.status = "working"
-				m.pushEntry(convEntry{ // agents emit markdown — render it (#23)
-					text: rec.Actor + ":\n" + m.highlightMentions(m.markdown(ev.Text)), seq: rec.Seq, agent: rec.Actor, reactable: true})
+				// Keep the markdown source so convLines can re-wrap it when the width changes (a
+				// backfilled entry is first rendered at the default width, before the real size #23).
+				m.pushEntry(convEntry{
+					text: rec.Actor + ":\n" + m.highlightMentions(m.markdown(ev.Text)), md: ev.Text, mdW: m.width, seq: rec.Seq, agent: rec.Actor, reactable: true})
 				m.noteReactTarget(rec.Actor, rec.Seq)
 			case agent.EventReasoning:
 				a.status = "working"
@@ -1352,6 +1356,15 @@ func (m *Model) bodyLines() []string {
 func (m *Model) convLines() []string {
 	if len(m.conv) == 0 {
 		return []string{helpStyle.Render("(no messages yet — type below to inject)")}
+	}
+	// Re-wrap markdown entries whose stored render was at a different width (e.g. backfilled before
+	// the terminal size was known). Only touches markdown rows, and only when the width actually
+	// changed, so steady-state rendering does no extra work.
+	for i := range m.conv {
+		if e := &m.conv[i]; e.md != "" && e.mdW != m.width {
+			e.text = e.agent + ":\n" + m.highlightMentions(m.markdown(e.md))
+			e.mdW = m.width
+		}
 	}
 	// The last reactWindow utterances per agent get reaction buttons (mirrors the server limit).
 	perAgent := map[string][]uint64{}

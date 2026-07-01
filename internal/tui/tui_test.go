@@ -372,6 +372,29 @@ func TestMouseClick(t *testing.T) {
 	}
 }
 
+// Agent markdown is re-wrapped when the width changes — a backfilled entry rendered at the default
+// width must re-flow to a wider terminal instead of staying narrow.
+func TestMarkdownRewrapsOnResize(t *testing.T) {
+	m, _, _ := newTestModel()
+	m.width = 40
+	long := strings.Repeat("word ", 40)
+	m.apply(journal.Record{Seq: 1, Kind: journal.KindAgentEvent, Actor: "linux",
+		Data: agent.Event{Type: agent.EventText, Text: long}})
+	if m.conv[0].mdW != 40 {
+		t.Fatalf("entry should record its render width, got %d", m.conv[0].mdW)
+	}
+	narrow := m.conv[0].text
+
+	m.width = 120
+	_ = m.convLines() // triggers the re-wrap
+	if m.conv[0].mdW != 120 {
+		t.Fatalf("resize should re-render markdown at the new width, got %d", m.conv[0].mdW)
+	}
+	if m.conv[0].text == narrow {
+		t.Fatal("a wider width should produce a differently-wrapped render")
+	}
+}
+
 // Clicking a message's inline 👍 fires React with its seq; clicking an edit's [diff] opens the modal.
 func TestClickableConversationAffordances(t *testing.T) {
 	j := journal.NewMemory()
