@@ -145,6 +145,21 @@ type agentState struct {
 	overBudget bool    // crossed its budget cap (#26)
 }
 
+// convEntry is one rendered conversation row plus the metadata needed to hang clickable per-message
+// affordances off it (#37): reactions on an agent's own utterances, a diff link on an edit. Meta /
+// system lines carry only text.
+type convEntry struct {
+	text      string // rendered display (may be multi-line)
+	seq       uint64 // journal seq — reaction/diff target (0 for meta lines)
+	agent     string // author, for reactable entries
+	reactable bool   // an agent utterance → offer 👍/👎/❌
+	diff      string // an edit's diff → offer a diff link
+}
+
+// reactWindow is how many of an agent's most recent utterances show reaction buttons — mirrors
+// operator.ReactWindow (can't import it: operator imports tui).
+const reactWindow = 5
+
 // Model is the Bubble Tea model.
 type Model struct {
 	deps Deps
@@ -154,7 +169,7 @@ type Model struct {
 	tab           int
 	input         textarea.Model
 
-	conv       []string
+	conv       []convEntry
 	handovers  []string
 	agents     map[string]*agentState
 	agentOrder []string
@@ -551,6 +566,24 @@ func (m *Model) handleClick(id string) {
 	if id == "" {
 		return
 	}
+	if rest, ok := strings.CutPrefix(id, "react:"); ok { // "react:<kind>:<seq>"
+		if kind, s, found := strings.Cut(rest, ":"); found && m.deps.React != nil {
+			if seq, err := strconv.ParseUint(s, 10, 64); err == nil {
+				m.deps.React(seq, kind)
+			}
+		}
+		return
+	}
+	if s, ok := strings.CutPrefix(id, "cdiff:"); ok { // "cdiff:<seq>" — open that edit's diff
+		if seq, err := strconv.ParseUint(s, 10, 64); err == nil {
+			for _, e := range m.conv {
+				if e.seq == seq && e.diff != "" {
+					m.openDiff(e.agent+" · edit", e.diff)
+				}
+			}
+		}
+		return
+	}
 	if n, ok := strings.CutPrefix(id, "tab:"); ok {
 		if i, err := strconv.Atoi(n); err == nil && i >= 0 && i < numTabs {
 			m.tab = i
@@ -885,10 +918,12 @@ func (m *Model) apply(rec journal.Record) {
 			if msg.Interrupt || msg.NoWake {
 				return // control / context-only reaction delivery — not shown in the transcript
 			}
-			m.addConversation(fmt.Sprintf("%s → %s: %s", msg.From, addrStr(msg.To), m.highlightMentions(msg.Body)))
+			e := convEntry{text: fmt.Sprintf("%s → %s: %s", msg.From, addrStr(msg.To), m.highlightMentions(msg.Body)), seq: rec.Seq}
 			if msg.From != "human" && msg.From != "facilitator" {
+				e.agent, e.reactable = msg.From, true
 				m.noteReactTarget(msg.From, rec.Seq)
 			}
+			m.pushEntry(e)
 		}
 	case journal.KindAgentEvent:
 		if ev, ok := rec.Data.(agent.Event); ok {
@@ -896,7 +931,8 @@ func (m *Model) apply(rec journal.Record) {
 			switch ev.Type {
 			case agent.EventText:
 				a.status = "working"
-				m.addConversation(rec.Actor + ":\n" + m.highlightMentions(m.markdown(ev.Text))) // agents emit markdown — render it (#23)
+				m.pushEntry(convEntry{ // agents emit markdown — render it (#23)
+					text: rec.Actor + ":\n" + m.highlightMentions(m.markdown(ev.Text)), seq: rec.Seq, agent: rec.Actor, reactable: true})
 				m.noteReactTarget(rec.Actor, rec.Seq)
 			case agent.EventReasoning:
 				a.status = "working"
@@ -905,12 +941,12 @@ func (m *Model) apply(rec journal.Record) {
 				}
 			case agent.EventToolUse:
 				a.status = "working"
-				summary := agent.ToolSummary(ev.Tool)
+				e := convEntry{text: fmt.Sprintf("%s ⚙ %s", rec.Actor, agent.ToolSummary(ev.Tool)), seq: rec.Seq, agent: rec.Actor}
 				if df := agent.ToolDiff(ev.Tool); df != "" {
 					m.lastEditDiff[rec.Actor], m.lastEditAgent = df, rec.Actor
-					summary += helpStyle.Render("  (/diff @" + rec.Actor + ")")
+					e.diff = df // → a clickable diff link on this row (#7/#37)
 				}
-				m.addConversation(fmt.Sprintf("%s ⚙ %s", rec.Actor, summary))
+				m.pushEntry(e)
 			case agent.EventTurnDone:
 				a.status = "idle"
 				if ev.Usage != nil {
@@ -1048,8 +1084,11 @@ func (m *Model) highlightMentions(s string) string {
 	})
 }
 
-func (m *Model) addConversation(line string) {
-	m.conv = append(m.conv, line)
+// addConversation appends a plain (meta/system) line — no per-message affordances.
+func (m *Model) addConversation(line string) { m.pushEntry(convEntry{text: line}) }
+
+func (m *Model) pushEntry(e convEntry) {
+	m.conv = append(m.conv, e)
 	if len(m.conv) > 500 {
 		m.conv = m.conv[len(m.conv)-500:]
 	}
@@ -1304,11 +1343,53 @@ func (m *Model) bodyLines() []string {
 	case tabNotes:
 		return m.noteLines()
 	default:
-		if len(m.conv) == 0 {
-			return []string{helpStyle.Render("(no messages yet — type below to inject)")}
-		}
-		return m.conv
+		return m.convLines()
 	}
+}
+
+// convLines renders the conversation entries into rows, appending a clickable affordance row (👍/👎/❌
+// on an agent's recent utterances, a diff link on edits) where applicable (#37).
+func (m *Model) convLines() []string {
+	if len(m.conv) == 0 {
+		return []string{helpStyle.Render("(no messages yet — type below to inject)")}
+	}
+	// The last reactWindow utterances per agent get reaction buttons (mirrors the server limit).
+	perAgent := map[string][]uint64{}
+	for _, e := range m.conv {
+		if e.reactable && e.agent != "" {
+			perAgent[e.agent] = append(perAgent[e.agent], e.seq)
+		}
+	}
+	recent := map[uint64]bool{}
+	for _, seqs := range perAgent {
+		for _, s := range seqs[max(0, len(seqs)-reactWindow):] {
+			recent[s] = true
+		}
+	}
+	var lines []string
+	for _, e := range m.conv {
+		lines = append(lines, e.text)
+		if aff := m.affordanceLine(e, recent[e.seq]); aff != "" {
+			lines = append(lines, aff)
+		}
+	}
+	return lines
+}
+
+// affordanceLine builds the clickable row under a conversation entry (empty if it has none).
+func (m *Model) affordanceLine(e convEntry, inWindow bool) string {
+	var parts []string
+	if e.reactable && inWindow {
+		s := strconv.FormatUint(e.seq, 10)
+		parts = append(parts, mark("react:up:"+s, "👍"), mark("react:down:"+s, "👎"), mark("react:reject:"+s, "❌"))
+	}
+	if e.diff != "" {
+		parts = append(parts, mark("cdiff:"+strconv.FormatUint(e.seq, 10), clickBtn("diff")))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "   " + strings.Join(parts, " ")
 }
 
 func (m *Model) approvalLines() []string {

@@ -13,6 +13,14 @@ import (
 	"avairy/internal/journal"
 )
 
+func convText(m *Model) string {
+	var b []string
+	for _, e := range m.conv {
+		b = append(b, e.text)
+	}
+	return strings.Join(b, "\n")
+}
+
 // /consult spawns via the Consult dep (parsing an optional @target + family); /close tears down.
 func TestConsultCommands(t *testing.T) {
 	j := journal.NewMemory()
@@ -225,7 +233,7 @@ func TestSlashCommit(t *testing.T) {
 	}
 	// Feeding the result back renders a confirmation line.
 	m.Update(commitResultMsg{hash: "abc1234"})
-	if !strings.Contains(strings.Join(m.conv, "\n"), "committed abc1234") {
+	if !strings.Contains(convText(m), "committed abc1234") {
 		t.Fatalf("conversation missing commit confirmation: %v", m.conv)
 	}
 
@@ -248,7 +256,7 @@ func TestApplyDedup(t *testing.T) {
 		Data: agent.Event{Type: agent.EventText, Text: "hi"}}
 	m.apply(rec)
 	m.apply(rec)
-	if got := strings.Count(strings.Join(m.conv, "\n"), "hi"); got != 1 {
+	if got := strings.Count(convText(m), "hi"); got != 1 {
 		t.Fatalf("expected 1 conv line, got %d", got)
 	}
 }
@@ -361,6 +369,38 @@ func TestMouseClick(t *testing.T) {
 	m2.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: ab.x1, Y: ab.row})
 	if resolved != "a1:"+decisionAllow {
 		t.Fatalf("clicking [allow] should resolve the approval, got %q", resolved)
+	}
+}
+
+// Clicking a message's inline 👍 fires React with its seq; clicking an edit's [diff] opens the modal.
+func TestClickableConversationAffordances(t *testing.T) {
+	j := journal.NewMemory()
+	var seq uint64
+	var kind string
+	m := NewModel(Deps{Journal: j, Inject: func(string, string) {}, React: func(s uint64, k string) { seq, kind = s, k }})
+	m.width, m.height = 120, 40
+	m.apply(journal.Record{Seq: 5, Kind: journal.KindAgentEvent, Actor: "linux",
+		Data: agent.Event{Type: agent.EventText, Text: "done"}})
+	m.apply(journal.Record{Seq: 6, Kind: journal.KindAgentEvent, Actor: "linux",
+		Data: agent.Event{Type: agent.EventToolUse, Tool: &agent.ToolCall{Name: "Edit", Input: map[string]any{"file_path": "f.go", "_diff": "@@ -1 +1 @@\n-a\n+b"}}}})
+	_ = m.composed() // record zones
+
+	rz, ok := m.zones.box["react:up:5"]
+	if !ok {
+		t.Fatal("👍 zone not recorded on the agent message")
+	}
+	m.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: rz.x1, Y: rz.row})
+	if seq != 5 || kind != "up" {
+		t.Fatalf("clicking 👍 should React(5,up), got (%d,%q)", seq, kind)
+	}
+
+	dz, ok := m.zones.box["cdiff:6"]
+	if !ok {
+		t.Fatal("[diff] zone not recorded on the edit")
+	}
+	m.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: dz.x1, Y: dz.row})
+	if !m.diffOpen {
+		t.Fatal("clicking [diff] should open the modal")
 	}
 }
 
