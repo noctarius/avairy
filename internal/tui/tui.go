@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 
 	"charm.land/bubbles/v2/textarea"
@@ -183,6 +184,8 @@ type Model struct {
 	md      *glamour.TermRenderer // markdown renderer for agent text (#23); rebuilt on width change
 	mdWidth int
 
+	zones *zones // click regions recorded on each render, for mouse hit-testing (#37)
+
 	seen map[uint64]bool
 }
 
@@ -267,6 +270,7 @@ func NewModel(deps Deps) *Model {
 		lastReactSeq: make(map[string]uint64),
 		lastEditDiff: make(map[string]string),
 		diffVP:       viewport.New(),
+		zones:        newZones(),
 	}
 	if m.control != nil && m.control.CurrentToken != nil {
 		m.token = m.control.CurrentToken()
@@ -311,6 +315,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.diffOpen {
 			m.sizeDiffVP()
 		}
+		return m, nil
+
+	case tea.MouseClickMsg:
+		if m.diffOpen || msg.Button != tea.MouseLeft {
+			return m, nil // the modal captures clicks; only left-click acts
+		}
+		m.handleClick(m.zones.hit(msg.X, msg.Y))
 		return m, nil
 
 	case tea.MouseWheelMsg:
@@ -532,6 +543,47 @@ func colorizeDiff(diff string) string {
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+// handleClick dispatches a mouse click on a recorded zone id: switch tabs, or act on an approval's
+// button row. Ids are "tab:<n>" and "ap:<approvalID>:<allow|sess|deny|diff>".
+func (m *Model) handleClick(id string) {
+	if id == "" {
+		return
+	}
+	if n, ok := strings.CutPrefix(id, "tab:"); ok {
+		if i, err := strconv.Atoi(n); err == nil && i >= 0 && i < numTabs {
+			m.tab = i
+			m.scroll = 0
+		}
+		return
+	}
+	if rest, ok := strings.CutPrefix(id, "ap:"); ok {
+		apID, action, found := strings.Cut(rest, ":")
+		if !found {
+			return
+		}
+		switch action {
+		case "allow":
+			if m.deps.ResolveApproval != nil {
+				m.deps.ResolveApproval(apID, decisionAllow)
+			}
+		case "sess":
+			if m.deps.ResolveApproval != nil {
+				m.deps.ResolveApproval(apID, decisionAllowSession)
+			}
+		case "deny":
+			if m.deps.ResolveApproval != nil {
+				m.deps.ResolveApproval(apID, decisionDeny)
+			}
+		case "diff":
+			for _, ap := range m.pendingApprovals() {
+				if ap.ID == apID && ap.Diff != "" {
+					m.openDiff(ap.AgentID+" · "+ap.Kind, ap.Diff)
+				}
+			}
+		}
+	}
 }
 
 // noteReactTarget remembers an agent's most recent reactable message (its journal seq), so /react
@@ -1055,7 +1107,10 @@ func (m *Model) View() tea.View {
 // composed renders the screen, overlaying the diff modal on top when open via lipgloss compositing
 // (Canvas + Layers) so the background stays visible around the centered box.
 func (m *Model) composed() string {
-	base := m.render()
+	// Record click zones from the marked render and strip the markers before anything else — the
+	// Canvas compositor works cell-by-cell and must never see the NUL sentinels.
+	m.zones.reset()
+	base := m.zones.scan(m.render())
 	if !m.diffOpen {
 		return base
 	}
@@ -1183,6 +1238,7 @@ func (m *Model) tabBar() string {
 		} else {
 			parts[i] = dimTab.Render(name)
 		}
+		parts[i] = mark(fmt.Sprintf("tab:%d", i), parts[i]) // click a tab to switch (#37)
 	}
 	return strings.Join(parts, dimTab.Render("  |  "))
 }
@@ -1273,12 +1329,23 @@ func (m *Model) approvalLines() []string {
 		if ap.Reason != "" {
 			line += helpStyle.Render("  — " + ap.Reason)
 		}
-		if ap.Diff != "" {
-			line += helpStyle.Render("  (d: diff)")
-		}
 		out = append(out, line)
+		// A clickable button row (mouse parity with the keyboard y/a/n/d). Zones resolve to actions
+		// in handleClick; keyboard shortcuts still work.
+		btns := "   " + mark("ap:"+ap.ID+":allow", clickBtn("allow")) +
+			" " + mark("ap:"+ap.ID+":sess", clickBtn("session")) +
+			" " + mark("ap:"+ap.ID+":deny", clickBtn("deny"))
+		if ap.Diff != "" {
+			btns += " " + mark("ap:"+ap.ID+":diff", clickBtn("diff"))
+		}
+		out = append(out, btns)
 	}
 	return out
+}
+
+// clickBtn renders a small bracketed, clickable-looking button.
+func clickBtn(label string) string {
+	return lipgloss.NewStyle().Foreground(lipgloss.Color("4")).Render("[" + label + "]")
 }
 
 func (m *Model) conflictLines() []string {

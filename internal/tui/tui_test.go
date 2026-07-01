@@ -330,6 +330,40 @@ func TestNodeEnrolledWithFamilyShowsOnline(t *testing.T) {
 	}
 }
 
+// A left-click on a recorded zone acts: clicking a tab switches to it; clicking an approval's
+// [allow] button resolves it.
+func TestMouseClick(t *testing.T) {
+	m, _, _ := newTestModel()
+	m.width, m.height = 120, 40
+	_ = m.composed() // records click zones
+	tb, ok := m.zones.box["tab:2"]
+	if !ok {
+		t.Fatal("tab zone not recorded")
+	}
+	m.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: tb.x1, Y: tb.row})
+	if m.tab != tabTasks {
+		t.Fatalf("clicking the Tasks tab should switch to it, tab=%d", m.tab)
+	}
+
+	resolved := ""
+	m2 := NewModel(Deps{
+		Journal:          journal.NewMemory(),
+		PendingApprovals: func() []ApprovalItem { return []ApprovalItem{{ID: "a1", AgentID: "linux", Kind: "file_write", Summary: "f.go"}} },
+		ResolveApproval:  func(id, d string) { resolved = id + ":" + d },
+	})
+	m2.width, m2.height = 120, 40
+	m2.tab = tabApprovals
+	_ = m2.composed()
+	ab, ok := m2.zones.box["ap:a1:allow"]
+	if !ok {
+		t.Fatal("approval [allow] zone not recorded")
+	}
+	m2.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: ab.x1, Y: ab.row})
+	if resolved != "a1:"+decisionAllow {
+		t.Fatalf("clicking [allow] should resolve the approval, got %q", resolved)
+	}
+}
+
 // The mouse wheel scrolls the body: wheel-up scrolls back, wheel-down returns toward the tail.
 func TestMouseWheelScrolls(t *testing.T) {
 	m, _, _ := newTestModel()
