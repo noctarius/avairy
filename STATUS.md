@@ -462,12 +462,17 @@ Ranked roughly by value-to-effort within each group.
 
 ### Backlog (next)
 
-37. **TUI mouse + viewport-backed conversation.** The conversation is still a hand-rolled `[]string`
-    with a manual `scroll int`; migrate it to a `bubbles/v2 viewport` (mouse-wheel scrolling, cleaner
-    windowing), then enable mouse input (`tea.WithMouseCellMotion` + zone hit-testing, e.g.
-    `bubblezone`) for clickable diff links, 👍/👎/❌ reactions, and Allow/Session/Deny — point-and-
-    click parity with the web. Do the viewport migration first; it's what makes inline per-message
-    click affordances clean.
+37. **TUI mouse + clickable affordances.** ⏳ In progress.
+    - ✅ **Mouse + wheel scroll.** `v.MouseMode = MouseModeCellMotion`; the wheel scrolls the body
+      and the diff modal (`TestMouseWheelScrolls`).
+    - **Clickable affordances (next):** point-and-click 👍/👎/❌ reactions, diff links, and
+      Allow/Session/Deny, via v2's `View.OnMouse` content hit-testing. Needs a small zone-tracking
+      layer — `bubblezone` targets classic `github.com/charmbracelet/bubbletea` (v1) and won't take
+      our `charm.land/v2` mouse msgs, so either hand-roll marker-based zones or compute positions in
+      `OnMouse`.
+    - **Viewport migration (now optional).** Originally planned as the foundation, but wheel-scroll
+      works on the existing `scroll int` model and `OnMouse` hit-tests the last render regardless, so
+      the `bubbles/v2 viewport` swap is just a code-cleanliness refactor — deprioritized.
 
 ### Single operator
 
