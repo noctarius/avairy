@@ -462,19 +462,19 @@ Ranked roughly by value-to-effort within each group.
 
 ### Backlog (next)
 
-37. **TUI mouse + clickable affordances.** ⏳ In progress.
-    - ✅ **Mouse + wheel scroll.** `v.MouseMode = MouseModeCellMotion`; the wheel scrolls the body
-      and the diff modal (`TestMouseWheelScrolls`).
-    - ✅ **Click-zone layer + clickable tabs/approvals.** A v2-native marker-based zone layer
-      (`internal/tui/zones.go`, ANSI/wide-rune-aware via `x/ansi`; `bubblezone` is v1-only): click a
-      tab to switch, and each approval renders clickable `[allow] [session] [deny] [diff]`.
-      (`TestZonesScanAndHit`, `TestMouseClick`.)
-    - **Conversational affordances (next):** clickable per-message 👍/👎/❌ reactions and diff links.
-      These aren't rendered inline in the flat-string conversation today, so they want the structured
-      / viewport conversation below first.
-    - **Viewport migration (now optional).** Originally planned as the foundation, but wheel-scroll
-      works on the existing `scroll int` model and `OnMouse` hit-tests the last render regardless, so
-      the `bubbles/v2 viewport` swap is just a code-cleanliness refactor — deprioritized.
+37. ~~**TUI mouse + clickable affordances.**~~ ✅ Done.
+    - **Mouse + wheel scroll.** `v.MouseMode = MouseModeCellMotion`; the wheel scrolls the body and
+      the diff modal (`TestMouseWheelScrolls`).
+    - **Click-zone layer** (`internal/tui/zones.go`): a v2-native marker-based zone layer, ANSI/
+      wide-rune-aware via `x/ansi` (`bubblezone` is v1-only). `mark(id,s)` wraps clickable text;
+      `composed()` scans the render to record bounds + strip markers before compositing; a left-click
+      hit-tests. `TestZonesScanAndHit`.
+    - **Clickable UI.** Tabs (click to switch), approval `[allow] [session] [deny] [diff]`, and — via
+      a **structured conversation** (`[]convEntry`, each carrying seq/author/reactable/diff) —
+      per-message 👍/👎/❌ (last-5 per agent) and `[diff]` links. `TestMouseClick`,
+      `TestClickableConversationAffordances`. Keyboard shortcuts (`/react`, `/diff`, y/a/n/d) unchanged.
+    - Viewport swap intentionally skipped: wheel-scroll and zone hit-testing both work on the existing
+      render/scroll model, so it'd be pure cleanup.
 
 ### Single operator
 
