@@ -420,6 +420,23 @@
           transform: rotate(360deg);
         }
       }
+      /* transient "…is working" typing hint, pinned above the composer */
+      .working {
+        display: none;
+        align-items: center;
+        gap: 8px;
+        padding: 4px 24px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .wspin {
+        width: 10px;
+        height: 10px;
+        border: 2px solid var(--line);
+        border-top-color: var(--accent);
+        border-radius: 50%;
+        animation: avairy-spin 0.7s linear infinite;
+      }
       .err .msg {
         border-color: var(--err);
         color: var(--err);
@@ -679,6 +696,7 @@
             <div class="empty-chat" id="emptyChat">No messages yet — type below to talk to the fleet.</div>
           </div>
         </div>
+        <div id="working" class="working"></div>
         <div class="composer">
           <div class="composer-inner">
             <div class="inputbar">
@@ -912,6 +930,25 @@
         agents.set(id, st);
         if (st !== "working") clearActive(id); // idle/offline/sleeping/blocked → no live command
         renderFleet();
+        renderWorking();
+      }
+      // A transient "…is working" hint pinned above the composer (a spinner + the working agents).
+      function renderWorking() {
+        const el = $("working");
+        const ids = [...agents.entries()].filter(([, st]) => st === "working").map(([id]) => id);
+        if (!ids.length) {
+          el.style.display = "none";
+          el.textContent = "";
+          return;
+        }
+        el.style.display = "flex";
+        el.innerHTML = "";
+        const sp = document.createElement("span");
+        sp.className = "wspin";
+        el.appendChild(sp);
+        const t = document.createElement("span");
+        t.textContent = " " + ids.join(", ") + (ids.length > 1 ? " are working…" : " is working…");
+        el.appendChild(t);
       }
 
       // Quick-feedback reactions on agent messages (#react). Only the last REACT_WINDOW text messages
@@ -1079,6 +1116,7 @@
           case "node_forgotten":
             if (agents.delete(actor)) {
               renderFleet();
+              renderWorking();
               sysline(`⊘ ${actor} left (ephemeral node forgotten)`);
             }
             break;
