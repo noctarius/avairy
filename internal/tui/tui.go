@@ -1172,20 +1172,14 @@ func (m *Model) View() tea.View {
 // composed renders the screen, overlaying the diff modal on top when open via lipgloss compositing
 // (Canvas + Layers) so the background stays visible around the centered box.
 func (m *Model) composed() string {
-	// Record click zones from the marked render and strip the markers before anything else — the
-	// Canvas compositor works cell-by-cell and must never see the NUL sentinels.
 	m.zones.reset()
-	base := m.zones.scan(m.render())
-	if !m.diffOpen {
-		return base
+	if m.diffOpen {
+		// A centered modal dialog. (lipgloss v2's Canvas/Layer draws every layer at the origin —
+		// Layer.X/Y are ignored there — so place the box directly instead.) No click zones while open.
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, m.diffModalBox())
 	}
-	box := m.diffModalBox()
-	cx := clampInt((m.width-lipgloss.Width(box))/2, 0, m.width)
-	cy := clampInt((m.height-lipgloss.Height(box))/2, 0, m.height)
-	return lipgloss.NewCanvas(m.width, m.height).
-		Compose(lipgloss.NewLayer(base)).
-		Compose(lipgloss.NewLayer(box).X(cx).Y(cy)).
-		Render()
+	// Record click zones from the marked render, stripping the markers before display.
+	return m.zones.scan(m.render())
 }
 
 // diffModalBox is the bordered modal: a title, the scrollable diff viewport, and a key hint.
@@ -1196,7 +1190,7 @@ func (m *Model) diffModalBox() string {
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("4")).
-		Background(lipgloss.Color("0")).
+		Background(lipgloss.Color("236")). // subtle raised panel vs. the backdrop
 		Padding(0, 1).
 		Render(body)
 }
