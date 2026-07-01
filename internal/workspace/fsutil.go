@@ -29,7 +29,11 @@ type Ignore struct {
 // dependency dirs, and common binaries.
 func DefaultIgnore() Ignore {
 	dirs := []string{
-		".git", ".svn", ".hg", ".avairy", ".claude", ".idea", ".vscode",
+		".git", ".svn", ".hg", ".avairy",
+		// Agent-CLI per-project config/state: machine- and agent-local, must never sync — a conflict
+		// marker written into one (e.g. .codex/config.toml) breaks the tool on startup.
+		".claude", ".codex", ".grok", ".gemini", ".copilot", ".aider",
+		".idea", ".vscode",
 		"node_modules", "vendor", "target", "dist", "out", "bin", "obj",
 		"__pycache__", ".venv", "venv", ".pytest_cache", ".mypy_cache",
 		".cache", ".zig-cache", "zig-cache", "zig_global_cache",

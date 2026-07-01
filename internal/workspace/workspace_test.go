@@ -52,7 +52,12 @@ func TestLFNormalization(t *testing.T) {
 
 func TestIgnoreMatch(t *testing.T) {
 	ig := DefaultIgnore()
-	for _, p := range []string{".git/config", "node_modules/x/y.js", "a/build/out", "obj.o"} {
+	for _, p := range []string{
+		".git/config", "node_modules/x/y.js", "a/build/out", "obj.o",
+		// agent-CLI per-project config/state must never sync — a conflict marker in one corrupts
+		// the tool (e.g. codex refusing to start on a marker-laden .codex/config.toml).
+		".codex/config.toml", ".claude/settings.json", ".grok/x", ".gemini/y", ".copilot/z",
+	} {
 		if !ig.Match(p) {
 			t.Errorf("%q should be ignored", p)
 		}

@@ -178,9 +178,15 @@ func runNodeJoin(_ context.Context, cmd *cli.Command) error {
 		mux := http.NewServeMux()
 		mux.Handle("/gate", gating.HookHandler(gateDecider(n, *id, *gateEdits)))
 		mux.Handle("/", h) // MCP proxy (serves /mcp)
+		// Bind up front so a port clash aborts join with a clear message instead of leaving a
+		// zombie node whose proxy died in the background (the agent can't reach the bus then).
+		ln, err := net.Listen("tcp", *proxy)
+		if err != nil {
+			return fmt.Errorf("proxy: cannot bind %s: %w (another node running on this host? pass --proxy to pick a free port)", *proxy, err)
+		}
 		go func() {
 			fmt.Printf("MCP proxy for agent %q at http://%s/mcp → %s (gate at /gate)\n", *id, *proxy, *coreMCP)
-			if err := http.ListenAndServe(*proxy, mux); err != nil {
+			if err := http.Serve(ln, mux); err != nil {
 				fmt.Fprintln(os.Stderr, "avairy node: proxy server:", err)
 			}
 		}()
