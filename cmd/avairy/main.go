@@ -747,8 +747,9 @@ func spawnLocalAgent(ctx context.Context, id, role string, mode agent.SessionMod
 	if err != nil {
 		return err
 	}
-	// Each (re)spawn gets a fresh temp workspace; the adapter (and any gate server) is reused.
-	spawn := func(sctx context.Context) (agent.Session, error) {
+	// Each (re)spawn gets a fresh temp workspace; the adapter (and any gate server) is reused. The
+	// supervisor passes the current model/effort so a respawn picks up a reconfigure.
+	spawn := func(sctx context.Context, spModel, spEffort string) (agent.Session, error) {
 		ws, err := os.MkdirTemp("", "avairy-"+id+"-")
 		if err != nil {
 			return nil, err
@@ -758,7 +759,8 @@ func spawnLocalAgent(ctx context.Context, id, role string, mode agent.SessionMod
 			Role:      role,
 			Mode:      mode,
 			Workspace: ws,
-			Model:     model,
+			Model:     spModel,
+			Effort:    spEffort,
 			MCP: []agent.MCPServer{{
 				Name:    "avairy",
 				Type:    "http",
@@ -771,7 +773,7 @@ func spawnLocalAgent(ctx context.Context, id, role string, mode agent.SessionMod
 		}
 		return ad.Start(sctx, cfg)
 	}
-	go supervisor.New(id, []string{"backend"}, spawn, b, jrnl, idle).Run(ctx)
+	go supervisor.New(id, []string{"backend"}, spawn, b, jrnl, idle, model, "").Run(ctx)
 	return nil
 }
 

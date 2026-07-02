@@ -15,28 +15,51 @@ import (
 	"avairy/internal/journal"
 )
 
-// Spawn starts a fresh agent session bound to the given context. The supervisor calls it once at
-// startup and again on each lazy respawn; cancelling the passed context must close the session.
-type Spawn func(ctx context.Context) (agent.Session, error)
+// Spawn starts a fresh agent session bound to the given context, using the given model/effort. The
+// supervisor calls it at startup and on each respawn; cancelling the passed context must close the
+// session. model/effort let a respawn pick up a reconfigure that couldn't be applied live.
+type Spawn func(ctx context.Context, model, effort string) (agent.Session, error)
+
+type reconfigReq struct{ model, effort string } // "" = leave that field unchanged
 
 // Supervisor drives one agent's session against the bus, sleeping/respawning it on idle.
 type Supervisor struct {
-	id    string
-	roles []string
-	spawn Spawn
-	b     *bus.Bus
-	jrnl  journal.Log
-	idle  time.Duration // 0 = never sleep
-	waker *bus.Waker
+	id       string
+	roles    []string
+	spawn    Spawn
+	b        *bus.Bus
+	jrnl     journal.Log
+	idle     time.Duration // 0 = never sleep
+	waker    *bus.Waker
+	reconfig chan reconfigReq
+	turnDone chan struct{} // event goroutine pokes this when a turn ends, so pending respawns fire
 
 	mu         sync.Mutex
 	lastActive time.Time
-	working    bool // mid-turn (last event wasn't turn_done) — never sleep while true
+	working    bool   // mid-turn (last event wasn't turn_done) — never sleep while true
+	model      string // desired model/effort; a respawn uses these
+	effort     string
 }
 
 // New builds a Supervisor for an agent. idle is the quiet period before teardown (0 disables it).
-func New(id string, roles []string, spawn Spawn, b *bus.Bus, jrnl journal.Log, idle time.Duration) *Supervisor {
-	return &Supervisor{id: id, roles: roles, spawn: spawn, b: b, jrnl: jrnl, idle: idle, waker: bus.NewWaker()}
+// model/effort are the initial values (also what respawns use until a reconfigure changes them).
+func New(id string, roles []string, spawn Spawn, b *bus.Bus, jrnl journal.Log, idle time.Duration, model, effort string) *Supervisor {
+	return &Supervisor{
+		id: id, roles: roles, spawn: spawn, b: b, jrnl: jrnl, idle: idle, waker: bus.NewWaker(),
+		model: model, effort: effort,
+		reconfig: make(chan reconfigReq, 8),
+		turnDone: make(chan struct{}, 1),
+	}
+}
+
+// Reconfigure requests a model/effort change on the running agent (from the operator). Applied live
+// where the family supports it, else deferred to the next idle boundary as a respawn. "" leaves a
+// field unchanged. Best-effort: dropped only if a burst overflows the small queue.
+func (s *Supervisor) Reconfigure(model, effort string) {
+	select {
+	case s.reconfig <- reconfigReq{model: model, effort: effort}:
+	default:
+	}
 }
 
 // Run subscribes to the bus and drives the agent until ctx is cancelled or its inbox closes. It
@@ -47,9 +70,10 @@ func (s *Supervisor) Run(ctx context.Context) {
 	defer cancel()
 
 	var (
-		sess       agent.Session
-		sessCancel context.CancelFunc
-		dead       chan struct{} // closed when the current session's event stream ends
+		sess            agent.Session
+		sessCancel      context.CancelFunc
+		dead            chan struct{} // closed when the current session's event stream ends
+		pendingReconfig bool          // a reconfigure awaits the next idle boundary to respawn
 	)
 
 	// wakeUp spawns a session (if asleep) and starts draining its events into the journal. wasAsleep
@@ -59,7 +83,10 @@ func (s *Supervisor) Run(ctx context.Context) {
 			return true
 		}
 		sctx, sc := context.WithCancel(ctx)
-		ns, err := s.spawn(sctx)
+		s.mu.Lock()
+		model, effort := s.model, s.effort
+		s.mu.Unlock()
+		ns, err := s.spawn(sctx, model, effort)
 		if err != nil {
 			sc()
 			s.jrnl.Append(journal.KindSystem, s.id, map[string]any{"event": "agent_error", "error": err.Error()})
@@ -77,8 +104,15 @@ func (s *Supervisor) Run(ctx context.Context) {
 				s.lastActive = time.Now()
 				s.working = ev.Type != agent.EventTurnDone
 				s.mu.Unlock()
+				if ev.Type == agent.EventTurnDone { // idle boundary: let a pending respawn fire
+					select {
+					case s.turnDone <- struct{}{}:
+					default:
+					}
+				}
 			}
 		}(ns.Events())
+		pendingReconfig = false // the fresh session already carries the current model/effort
 		if wasAsleep {
 			s.jrnl.Append(journal.KindSystem, s.id, map[string]any{"event": "agent_awake"})
 		}
@@ -101,6 +135,60 @@ func (s *Supervisor) Run(ctx context.Context) {
 		s.working = false
 		s.mu.Unlock()
 		s.markSleeping()
+	}
+
+	// respawn tears the current session down and starts a fresh one with the current model/effort —
+	// used to apply a reconfigure a family can't do live. Not marked sleeping (it's continuous).
+	respawn := func() {
+		if sessCancel != nil {
+			sessCancel()
+		}
+		if sess != nil {
+			_ = sess.Close()
+		}
+		sess, sessCancel, dead = nil, nil, nil
+		s.mu.Lock()
+		s.working = false
+		s.mu.Unlock()
+		wakeUp(false)
+	}
+	// maybeRespawn applies a pending reconfigure once the agent is idle (never mid-turn). If it's
+	// asleep, nothing to do — the stored model/effort is used on the next wake.
+	maybeRespawn := func() {
+		if !pendingReconfig {
+			return
+		}
+		if sess == nil {
+			pendingReconfig = false
+			return
+		}
+		s.mu.Lock()
+		working := s.working
+		s.mu.Unlock()
+		if !working {
+			respawn()
+		}
+	}
+	// applyReconfig records the desired model/effort and applies it: live via the session's
+	// Reconfigurer where the family supports it, else a respawn deferred to the next idle boundary.
+	applyReconfig := func(req reconfigReq) {
+		s.mu.Lock()
+		if req.model != "" {
+			s.model = req.model
+		}
+		if req.effort != "" {
+			s.effort = req.effort
+		}
+		model, effort := s.model, s.effort
+		s.mu.Unlock()
+		if rc, ok := sess.(agent.Reconfigurer); ok && sess != nil && rc.Reconfigure(ctx, req.model, req.effort) == nil {
+			pendingReconfig = false
+			s.jrnl.Append(journal.KindSystem, s.id, map[string]any{"event": "reconfigured", "model": model, "effort": effort, "applied": "live"})
+			return
+		}
+		pendingReconfig = true
+		s.jrnl.Append(journal.KindSystem, s.id, map[string]any{"event": "reconfigured", "model": model, "effort": effort, "applied": "pending"})
+		maybeRespawn()
 	}
 
 	wakeUp(false) // start awake (a spawn failure is retried on the next message)
@@ -140,6 +228,10 @@ func (s *Supervisor) Run(ctx context.Context) {
 			if sess != nil && s.idleElapsed() {
 				sleep()
 			}
+		case req := <-s.reconfig:
+			applyReconfig(req)
+		case <-s.turnDone:
+			maybeRespawn() // a turn just ended — apply a pending reconfigure now
 		case msg, ok := <-inbox:
 			if !ok {
 				if sessCancel != nil {

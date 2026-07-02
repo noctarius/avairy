@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -15,9 +16,9 @@ import (
 )
 
 func spawnerFor(ad *mock.Adapter, n *int32) Spawn {
-	return func(ctx context.Context) (agent.Session, error) {
+	return func(ctx context.Context, model, effort string) (agent.Session, error) {
 		atomic.AddInt32(n, 1)
-		return ad.Start(ctx, agent.SessionConfig{AgentID: "alice"})
+		return ad.Start(ctx, agent.SessionConfig{AgentID: "alice", Model: model, Effort: effort})
 	}
 }
 
@@ -28,7 +29,7 @@ func TestSupervisor_EmitsTurnStartOnDispatch(t *testing.T) {
 	b := bus.New(jrnl)
 	var spawns int32
 
-	s := New("alice", []string{"backend"}, spawnerFor(mock.New(), &spawns), b, jrnl, 0)
+	s := New("alice", []string{"backend"}, spawnerFor(mock.New(), &spawns), b, jrnl, 0, "", "")
 	go s.Run(t.Context())
 	if !waitFor(t, func() bool { return atomic.LoadInt32(&spawns) == 1 }) {
 		t.Fatal("supervisor did not spawn at startup")
@@ -59,7 +60,7 @@ func TestSupervisor_DeliversAndRecords(t *testing.T) {
 	b := bus.New(jrnl)
 	var spawns int32
 
-	s := New("alice", []string{"backend"}, spawnerFor(mock.New(), &spawns), b, jrnl, 0)
+	s := New("alice", []string{"backend"}, spawnerFor(mock.New(), &spawns), b, jrnl, 0, "", "")
 	go s.Run(t.Context())
 
 	// Give Run a moment to spawn + subscribe, then publish.
@@ -85,7 +86,7 @@ func TestSupervisor_SleepsAndRespawns(t *testing.T) {
 	b := bus.New(jrnl)
 	var spawns int32
 
-	s := New("alice", []string{"backend"}, spawnerFor(mock.New(), &spawns), b, jrnl, 100*time.Millisecond)
+	s := New("alice", []string{"backend"}, spawnerFor(mock.New(), &spawns), b, jrnl, 100*time.Millisecond, "", "")
 	go s.Run(t.Context())
 
 	if !waitFor(t, func() bool { return atomic.LoadInt32(&spawns) == 1 }) {
@@ -115,7 +116,7 @@ func TestSupervisor_InterruptHardStopsNonInterruptible(t *testing.T) {
 
 	ad := mock.New()
 	ad.InterruptErr = errors.New("mock: interrupt not supported") // mimic claude
-	s := New("alice", []string{"backend"}, spawnerFor(ad, &spawns), b, jrnl, 0)
+	s := New("alice", []string{"backend"}, spawnerFor(ad, &spawns), b, jrnl, 0, "", "")
 	go s.Run(t.Context())
 
 	if !waitFor(t, func() bool { return atomic.LoadInt32(&spawns) == 1 }) {
@@ -141,7 +142,7 @@ func TestSupervisor_InterruptKeepsInterruptibleSession(t *testing.T) {
 	b := bus.New(jrnl)
 	var spawns int32
 
-	s := New("alice", []string{"backend"}, spawnerFor(mock.New(), &spawns), b, jrnl, 0)
+	s := New("alice", []string{"backend"}, spawnerFor(mock.New(), &spawns), b, jrnl, 0, "", "")
 	go s.Run(t.Context())
 
 	if !waitFor(t, func() bool { return atomic.LoadInt32(&spawns) == 1 }) {
@@ -165,7 +166,7 @@ func TestSupervisor_TeamWakeCarriesClaimInstruction(t *testing.T) {
 	b := bus.New(jrnl)
 	var spawns int32
 
-	s := New("alice", []string{"backend"}, spawnerFor(mock.New(), &spawns), b, jrnl, 0)
+	s := New("alice", []string{"backend"}, spawnerFor(mock.New(), &spawns), b, jrnl, 0, "", "")
 	go s.Run(t.Context())
 
 	if !waitFor(t, func() bool { return atomic.LoadInt32(&spawns) == 1 }) {
@@ -186,7 +187,7 @@ func TestSupervisor_NoWakeDoesNotTriggerTurn(t *testing.T) {
 	b := bus.New(jrnl)
 	var spawns int32
 
-	s := New("alice", []string{"backend"}, spawnerFor(mock.New(), &spawns), b, jrnl, 0)
+	s := New("alice", []string{"backend"}, spawnerFor(mock.New(), &spawns), b, jrnl, 0, "", "")
 	go s.Run(t.Context())
 	if !waitFor(t, func() bool { return atomic.LoadInt32(&spawns) == 1 }) {
 		t.Fatal("no startup spawn")
@@ -258,6 +259,121 @@ func hasSystem(j journal.Log, event string) bool {
 			continue
 		}
 		if d, ok := r.Data.(map[string]any); ok && d["event"] == event {
+			return true
+		}
+	}
+	return false
+}
+
+// --- reconfigure ---
+
+// A fake session for reconfigure tests. fakeSession implements only agent.Session (so the driver
+// must respawn to reconfigure it); liveFakeSession also implements agent.Reconfigurer (applied live).
+type fakeSession struct {
+	events chan agent.Event
+	closed bool
+}
+
+func (f *fakeSession) ID() string                                         { return "alice" }
+func (f *fakeSession) Send(context.Context, string, agent.Delivery) error { return nil }
+func (f *fakeSession) Events() <-chan agent.Event                         { return f.events }
+func (f *fakeSession) Interrupt(context.Context) error                    { return nil }
+func (f *fakeSession) Close() error {
+	if !f.closed {
+		f.closed = true
+		close(f.events)
+	}
+	return nil
+}
+
+type liveFakeSession struct {
+	*fakeSession
+	mu            sync.Mutex
+	model, effort string
+	calls         int
+}
+
+func (l *liveFakeSession) Reconfigure(_ context.Context, model, effort string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.calls++
+	if model != "" {
+		l.model = model
+	}
+	if effort != "" {
+		l.effort = effort
+	}
+	return nil
+}
+
+// A live-reconfigurable family applies the change in place — no respawn.
+func TestSupervisor_ReconfigureLive(t *testing.T) {
+	jrnl := journal.NewMemory()
+	b := bus.New(jrnl)
+	var spawns int32
+	live := &liveFakeSession{fakeSession: &fakeSession{events: make(chan agent.Event, 4)}}
+	spawn := func(context.Context, string, string) (agent.Session, error) {
+		atomic.AddInt32(&spawns, 1)
+		return live, nil
+	}
+	s := New("alice", []string{"backend"}, spawn, b, jrnl, 0, "m1", "e1")
+	go s.Run(t.Context())
+	if !waitFor(t, func() bool { return atomic.LoadInt32(&spawns) == 1 }) {
+		t.Fatal("no startup spawn")
+	}
+
+	s.Reconfigure("m2", "e2")
+	if !waitFor(t, func() bool {
+		live.mu.Lock()
+		defer live.mu.Unlock()
+		return live.model == "m2" && live.effort == "e2"
+	}) {
+		t.Fatal("live reconfigure was not applied to the session")
+	}
+	if got := atomic.LoadInt32(&spawns); got != 1 {
+		t.Fatalf("live reconfigure must not respawn, spawns=%d", got)
+	}
+	if !waitFor(t, func() bool { return hasSystemField(jrnl, "reconfigured", "applied", "live") }) {
+		t.Fatalf("expected a live reconfigured event; journal %+v", jrnl.Records())
+	}
+}
+
+// A family with no live path respawns — and the fresh session gets the new model.
+func TestSupervisor_ReconfigureRespawnsWhenIdle(t *testing.T) {
+	jrnl := journal.NewMemory()
+	b := bus.New(jrnl)
+	var spawns int32
+	var mu sync.Mutex
+	var lastModel string
+	spawn := func(_ context.Context, model, _ string) (agent.Session, error) {
+		atomic.AddInt32(&spawns, 1)
+		mu.Lock()
+		lastModel = model
+		mu.Unlock()
+		return &fakeSession{events: make(chan agent.Event, 4)}, nil
+	}
+	s := New("alice", []string{"backend"}, spawn, b, jrnl, 0, "m1", "")
+	go s.Run(t.Context())
+	if !waitFor(t, func() bool { return atomic.LoadInt32(&spawns) == 1 }) {
+		t.Fatal("no startup spawn")
+	}
+
+	s.Reconfigure("m2", "") // not live-reconfigurable, agent idle → respawn with m2
+	if !waitFor(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return atomic.LoadInt32(&spawns) == 2 && lastModel == "m2"
+	}) {
+		t.Fatalf("expected a respawn with model m2; spawns=%d journal %+v", atomic.LoadInt32(&spawns), jrnl.Records())
+	}
+}
+
+func hasSystemField(j journal.Log, event, key, val string) bool {
+	for _, r := range j.Records() {
+		if r.Kind != journal.KindSystem {
+			continue
+		}
+		if d, ok := r.Data.(map[string]any); ok && d["event"] == event && d[key] == val {
 			return true
 		}
 	}
