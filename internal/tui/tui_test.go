@@ -332,6 +332,31 @@ func TestBroadcastNotStickyPrefixed(t *testing.T) {
 	}
 }
 
+// "/model @agent <model> [effort]" routes to Deps.Reconfigure with the parsed values.
+func TestReconfigureCommand(t *testing.T) {
+	m, _, _ := newTestModel()
+	var got [3]string
+	m.deps.Reconfigure = func(agent, model, effort string) { got = [3]string{agent, model, effort} }
+	m.deps.Configs = func() []AgentConfig {
+		return []AgentConfig{{Agent: "linux", ModelMode: "respawn", EffortMode: "respawn", Efforts: []string{"low", "high"}}}
+	}
+	m.input.SetValue("/model @linux sonnet high")
+	m.submit()
+	if got != [3]string{"linux", "sonnet", "high"} {
+		t.Fatalf("reconfigure args = %v", got)
+	}
+	// Bare "/model @agent" shows help (available choices), doesn't call Reconfigure.
+	got = [3]string{}
+	m.input.SetValue("/model @linux")
+	m.submit()
+	if got != [3]string{} {
+		t.Fatalf("bare /model should not reconfigure, got %v", got)
+	}
+	if txt := convText(m); !strings.Contains(txt, "models (respawn)") {
+		t.Fatalf("expected the choices help, got %q", txt)
+	}
+}
+
 // A turn_start event marks the agent working immediately (so the fleet shows activity during the
 // think gap before the first token) without adding a transcript line.
 func TestTurnStartShowsWorkingNoBubble(t *testing.T) {

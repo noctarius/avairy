@@ -540,6 +540,10 @@ func (m *Model) submit() tea.Cmd {
 		m.showDiff(strings.TrimSpace(rest))
 		return nil
 	}
+	if rest, ok := strings.CutPrefix(text, "/model"); ok {
+		m.reconfigureCmd(strings.TrimSpace(rest))
+		return nil
+	}
 	if m.deps.Inject == nil {
 		return nil
 	}
@@ -564,6 +568,84 @@ func (m *Model) showDiff(args string) {
 		return
 	}
 	m.openDiff(target+" · latest edit", diff)
+}
+
+// reconfigureCmd handles "/model @agent [model] [effort]": change an agent's model/effort. With just
+// "@agent" (or nothing) it prints the agent's current values, the available choices, and how each
+// change applies (live vs restarts-when-idle).
+func (m *Model) reconfigureCmd(arg string) {
+	if m.deps.Reconfigure == nil {
+		m.addConversation(helpStyle.Render("reconfigure unavailable"))
+		return
+	}
+	mention, rest := splitMention(arg)
+	if mention == "" {
+		m.addConversation(helpStyle.Render("usage: /model @agent [model] [effort]"))
+		return
+	}
+	cfg := m.agentConfig(mention)
+	fields := strings.Fields(rest)
+	if len(fields) == 0 {
+		m.addConversation(helpStyle.Render(reconfigHelp(mention, cfg)))
+		return
+	}
+	model := fields[0]
+	effort := ""
+	if len(fields) > 1 {
+		effort = fields[1]
+	}
+	m.deps.Reconfigure(mention, model, effort)
+	msg := fmt.Sprintf("→ %s: model=%s", mention, model)
+	if effort != "" {
+		msg += " effort=" + effort
+	}
+	if cfg != nil && ((model != "" && cfg.ModelMode == "respawn") || (effort != "" && cfg.EffortMode == "respawn")) {
+		msg += " (restarts when idle)"
+	}
+	m.addConversation(helpStyle.Render(msg))
+}
+
+func (m *Model) agentConfig(id string) *AgentConfig {
+	if m.deps.Configs == nil {
+		return nil
+	}
+	for _, c := range m.deps.Configs() {
+		if c.Agent == id {
+			cc := c
+			return &cc
+		}
+	}
+	return nil
+}
+
+func reconfigHelp(id string, cfg *AgentConfig) string {
+	if cfg == nil {
+		return "no reconfigure options for @" + id
+	}
+	dash := func(s string) string {
+		if s == "" {
+			return "-"
+		}
+		return s
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "@%s — model=%s effort=%s\n", id, dash(cfg.CurrentModel), dash(cfg.CurrentEffort))
+	if cfg.ModelMode != "" {
+		ids := make([]string, 0, len(cfg.Models))
+		for _, mo := range cfg.Models {
+			ids = append(ids, mo.ID)
+		}
+		list := strings.Join(ids, ", ")
+		if list == "" {
+			list = "(free text)"
+		}
+		fmt.Fprintf(&b, "models (%s): %s\n", cfg.ModelMode, list)
+	}
+	if cfg.EffortMode != "" {
+		fmt.Fprintf(&b, "effort (%s): %s\n", cfg.EffortMode, strings.Join(cfg.Efforts, ", "))
+	}
+	b.WriteString("usage: /model @" + id + " <model> [effort]")
+	return b.String()
 }
 
 // openDiff shows a diff in the scrollable overlay modal.
