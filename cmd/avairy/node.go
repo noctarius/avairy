@@ -222,9 +222,12 @@ func runNodeJoin(_ context.Context, cmd *cli.Command) error {
 	}
 
 	// Optionally spawn & drive the agent on this node, wired to the local MCP proxy. coreMCP is
-	// always set by now (the join's Bus or --core), so the proxy below has a target.
+	// always set by now (the join's Bus or --core), so the proxy below has a target. reconfigCh
+	// carries operator model/effort changes from the heartbeat loop into the agent's run loop.
+	var reconfigCh chan control.ReconfigureCommand
 	if *family != "" {
-		if err := spawnAgent(ctx, n, *family, *id, *role, *model, *effort, *ws, *proxy, mirrorDir, agent.SessionPersistent, *gateEdits, *idleSleep); err != nil {
+		reconfigCh = make(chan control.ReconfigureCommand, 8)
+		if err := spawnAgent(ctx, n, *family, *id, *role, *model, *effort, *ws, *proxy, mirrorDir, agent.SessionPersistent, *gateEdits, *idleSleep, reconfigCh); err != nil {
 			return fmt.Errorf("spawn agent: %w", err)
 		}
 	}
@@ -289,6 +292,14 @@ func runNodeJoin(_ context.Context, cmd *cli.Command) error {
 			// Operator-spawned ephemeral consults targeted at this node (#24).
 			for _, c := range n.TakeConsults() {
 				nodeConsults.apply(ctx, c)
+			}
+			// Operator model/effort changes → the agent's run loop (best-effort; dropped only if the
+			// small queue overflows or there's no driven agent on this node).
+			for _, rc := range n.TakeReconfigures() {
+				select {
+				case reconfigCh <- rc:
+				default:
+				}
 			}
 			syncUp()
 			if *ws != "" {
@@ -393,7 +404,7 @@ func (m *nodeConsultMgr) apply(parent context.Context, cmd control.ConsultComman
 			fmt.Fprintln(os.Stderr, "consult workspace:", err)
 			return
 		}
-		if err := spawnAgent(cctx, m.n, fam, cmd.ID, nodeConsultRole, m.model, m.effort, ws, proxyAddr, "", agent.SessionEphemeral, m.gateEdits, 0); err != nil {
+		if err := spawnAgent(cctx, m.n, fam, cmd.ID, nodeConsultRole, m.model, m.effort, ws, proxyAddr, "", agent.SessionEphemeral, m.gateEdits, 0, nil); err != nil {
 			cancel()
 			fmt.Fprintln(os.Stderr, "consult spawn:", err)
 			return
@@ -435,7 +446,7 @@ func startConsultProxy(ctx context.Context, n *control.Node, coreMCP, id string,
 // respawns it on the next wake-worthy directed message (#28) — the node-side mirror of
 // internal/supervisor, over the HTTP pull/post transport instead of the in-process bus. A respawn
 // resumes the agent's session (so context survives sleep for families that support --resume).
-func spawnAgent(ctx context.Context, n *control.Node, family, agentID, role, model, effort, ws, proxy, mirrorDir string, mode agent.SessionMode, gateEdits bool, idle time.Duration) error {
+func spawnAgent(ctx context.Context, n *control.Node, family, agentID, role, model, effort, ws, proxy, mirrorDir string, mode agent.SessionMode, gateEdits bool, idle time.Duration, reconfig <-chan control.ReconfigureCommand) error {
 	if role == "" {
 		role = defaultRole
 	}
@@ -472,6 +483,8 @@ func spawnAgent(ctx context.Context, n *control.Node, family, agentID, role, mod
 		mu         sync.Mutex
 		lastActive = time.Now()
 		working    bool
+		curModel   = model  // mutable: a reconfigure updates these; a respawn picks them up
+		curEffort  = effort
 	)
 	touch := func() {
 		mu.Lock()
@@ -483,13 +496,16 @@ func spawnAgent(ctx context.Context, n *control.Node, family, agentID, role, mod
 	// events to core + persisting its session id. Each respawn gets its own event goroutine, which
 	// ends when the session's stream closes (on sleep / shutdown).
 	spawn := func(sctx context.Context) (agent.Session, error) {
+		mu.Lock()
+		spModel, spEffort := curModel, curEffort
+		mu.Unlock()
 		cfg := agent.SessionConfig{
 			AgentID:   agentID,
 			Role:      role,
 			Mode:      mode,
 			Workspace: ws,
-			Model:     model,
-			Effort:    effort,
+			Model:     spModel,
+			Effort:    spEffort,
 			MCP:       []agent.MCPServer{{Name: "avairy", Type: "http", URL: proxyURL}},
 		}
 		if sessionFile != "" {
@@ -535,8 +551,9 @@ func spawnAgent(ctx context.Context, n *control.Node, family, agentID, role, mod
 	// and (when idle > 0) sleep on quiet / lazily respawn on the next wake-worthy message.
 	go func() {
 		var (
-			sess       agent.Session
-			sessCancel context.CancelFunc
+			sess            agent.Session
+			sessCancel      context.CancelFunc
+			pendingReconfig bool // a reconfigure awaits the next idle boundary to respawn
 		)
 		wakeUp := func(wasAsleep bool) bool {
 			if sess != nil {
@@ -550,6 +567,7 @@ func spawnAgent(ctx context.Context, n *control.Node, family, agentID, role, mod
 				return false
 			}
 			sess, sessCancel = s, sc
+			pendingReconfig = false // the fresh session already carries the current model/effort
 			if wasAsleep {
 				_ = n.PostEvents([]control.AgentEventReport{{AgentID: agentID, Type: control.EventAgentAwake}})
 			}
@@ -567,6 +585,30 @@ func spawnAgent(ctx context.Context, n *control.Node, family, agentID, role, mod
 			mu.Unlock()
 			_ = n.PostEvents([]control.AgentEventReport{{AgentID: agentID, Type: control.EventAgentSleeping}})
 			fmt.Printf("agent %q sleeping — a directed message wakes it\n", agentID)
+		}
+		reportReconfigured := func() {
+			mu.Lock()
+			m, e := curModel, curEffort
+			mu.Unlock()
+			_ = n.PostEvents([]control.AgentEventReport{{AgentID: agentID, Type: control.EventReconfigured, Text: m + "/" + e}})
+		}
+		// applyReconfig records the desired model/effort and applies it live via the session's
+		// Reconfigurer where the family supports it, else flags a respawn for the next idle boundary.
+		applyReconfig := func(cmd control.ReconfigureCommand) {
+			mu.Lock()
+			if cmd.Model != "" {
+				curModel = cmd.Model
+			}
+			if cmd.Effort != "" {
+				curEffort = cmd.Effort
+			}
+			mu.Unlock()
+			if rc, ok := sess.(agent.Reconfigurer); ok && sess != nil && rc.Reconfigure(ctx, cmd.Model, cmd.Effort) == nil {
+				pendingReconfig = false
+				reportReconfigured()
+				return
+			}
+			pendingReconfig = true // not live-applicable: respawn once idle (checked each tick)
 		}
 
 		wakeUp(false) // start awake
@@ -622,6 +664,23 @@ func spawnAgent(ctx context.Context, n *control.Node, family, agentID, role, mod
 						sleep()
 					}
 				}
+				// Apply a pending reconfigure (a family that can't do it live) once the agent is idle —
+				// never mid-turn. Respawn with the new model/effort, resuming context where supported.
+				if pendingReconfig && sess != nil {
+					mu.Lock()
+					w := working
+					mu.Unlock()
+					if !w {
+						sessCancel()
+						_ = sess.Close()
+						sess, sessCancel = nil, nil
+						if wakeUp(false) { // uses curModel/curEffort; clears pendingReconfig
+							reportReconfigured()
+						}
+					}
+				}
+			case cmd := <-reconfig:
+				applyReconfig(cmd)
 			}
 		}
 	}()

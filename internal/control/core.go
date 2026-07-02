@@ -77,6 +77,7 @@ type Core struct {
 	nConflicts map[string][]string         // nodeID -> its currently-conflicted paths (reported on heartbeat, #22)
 	unlocks    map[string][]string         // nodeID -> paths resolved via resolve_conflict to unlock (#22)
 	consults   map[string][]ConsultCommand // nodeID -> queued open/close consult commands (#24)
+	reconfigs  map[string][]ReconfigureCommand // nodeID -> queued model/effort changes
 }
 
 // NewCore returns a Core backed by hub, journaling lifecycle events to jrnl.
@@ -95,7 +96,15 @@ func NewCore(hub *workspace.Hub, jrnl journal.Log) *Core {
 		nConflicts:      make(map[string][]string),
 		unlocks:         make(map[string][]string),
 		consults:        make(map[string][]ConsultCommand),
+		reconfigs:       make(map[string][]ReconfigureCommand),
 	}
+}
+
+// QueueReconfigure queues a model/effort change for a node's agent; delivered on the next heartbeat.
+func (c *Core) QueueReconfigure(nodeID string, cmd ReconfigureCommand) {
+	c.mu.Lock()
+	c.reconfigs[nodeID] = append(c.reconfigs[nodeID], cmd)
+	c.mu.Unlock()
 }
 
 // QueueConsult queues an open/close consult command for a node; it's delivered on the node's next
@@ -355,6 +364,10 @@ func (c *Core) handleEvents(nodeID string, w http.ResponseWriter, r *http.Reques
 			c.jrnl.Append(journal.KindSystem, e.AgentID, map[string]any{"event": event})
 			continue
 		}
+		if e.Type == EventReconfigured {
+			c.jrnl.Append(journal.KindSystem, e.AgentID, map[string]any{"event": "reconfigured", "detail": e.Text})
+			continue
+		}
 		ev := agent.Event{Type: agent.EventType(e.Type), Text: e.Text}
 		if e.Tool != "" {
 			ev.Tool = &agent.ToolCall{Name: e.Tool, Input: e.ToolInput}
@@ -381,8 +394,10 @@ func (c *Core) handleHeartbeat(nodeID string, w http.ResponseWriter, r *http.Req
 	delete(c.unlocks, nodeID)
 	consults := c.consults[nodeID]
 	delete(c.consults, nodeID)
+	reconfigs := c.reconfigs[nodeID]
+	delete(c.reconfigs, nodeID)
 	c.mu.Unlock()
-	writeJSON(w, HeartbeatResponse{Directive: dir, Unlock: unlock, Consults: consults})
+	writeJSON(w, HeartbeatResponse{Directive: dir, Unlock: unlock, Consults: consults, Reconfigures: reconfigs})
 }
 
 func (c *Core) handlePush(nodeID string, w http.ResponseWriter, r *http.Request) {

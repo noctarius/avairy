@@ -47,6 +47,7 @@ type Node struct {
 	directive   string           // latest operator directive from a heartbeat (TakeDirective drains it)
 	unlock      []string         // paths resolved via resolve_conflict to unlock + re-pull (#22)
 	consults    []ConsultCommand // open/close consult commands from core (#24); TakeConsults drains
+	reconfigs   []ReconfigureCommand // model/effort changes from core; TakeReconfigures drains
 
 	reMu sync.Mutex // serializes re-enrollment so concurrent 401s don't stampede
 }
@@ -103,13 +104,14 @@ func (n *Node) Heartbeat() error {
 	if err := n.post(PathHeartbeat, n.sess(), HeartbeatRequest{NodeID: n.ID, Conflicts: n.ConflictPaths()}, &resp); err != nil {
 		return err
 	}
-	if resp.Directive != "" || len(resp.Unlock) > 0 || len(resp.Consults) > 0 {
+	if resp.Directive != "" || len(resp.Unlock) > 0 || len(resp.Consults) > 0 || len(resp.Reconfigures) > 0 {
 		n.mu.Lock()
 		if resp.Directive != "" {
 			n.directive = resp.Directive
 		}
 		n.unlock = append(n.unlock, resp.Unlock...)
 		n.consults = append(n.consults, resp.Consults...)
+		n.reconfigs = append(n.reconfigs, resp.Reconfigures...)
 		n.mu.Unlock()
 	}
 	return nil
@@ -122,6 +124,15 @@ func (n *Node) TakeConsults() []ConsultCommand {
 	c := n.consults
 	n.consults = nil
 	return c
+}
+
+// TakeReconfigures returns and clears the model/effort changes queued by core.
+func (n *Node) TakeReconfigures() []ReconfigureCommand {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	r := n.reconfigs
+	n.reconfigs = nil
+	return r
 }
 
 // TakeUnlocks returns and clears paths the agent resolved via resolve_conflict (#22).

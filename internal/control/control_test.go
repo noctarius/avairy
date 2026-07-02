@@ -81,6 +81,28 @@ func TestConsultCommandDelivery(t *testing.T) {
 	}
 }
 
+// A queued reconfigure is delivered to the node once, over the heartbeat.
+func TestReconfigureCommandDelivery(t *testing.T) {
+	core, srv := newCoreServer(t)
+	n := NewNode(srv.URL, "linux")
+	if err := n.Enroll(core.CurrentToken(), "linux", nil); err != nil {
+		t.Fatal(err)
+	}
+	core.QueueReconfigure("linux", ReconfigureCommand{AgentID: "linux", Model: "opus", Effort: "high"})
+
+	if err := n.Heartbeat(); err != nil {
+		t.Fatal(err)
+	}
+	cmds := n.TakeReconfigures()
+	if len(cmds) != 1 || cmds[0].Model != "opus" || cmds[0].Effort != "high" {
+		t.Fatalf("reconfigure commands = %+v, want one opus/high", cmds)
+	}
+	n.Heartbeat() // delivered once
+	if c := n.TakeReconfigures(); len(c) != 0 {
+		t.Fatalf("commands should deliver once, got %+v", c)
+	}
+}
+
 // Enroll two nodes; a file synced up from one appears when the other syncs down — over HTTP,
 // through the canonical hub.
 func TestEnrollAndSyncAcrossNodes(t *testing.T) {

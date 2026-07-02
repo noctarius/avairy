@@ -76,6 +76,9 @@ type InboxPullResponse struct {
 const (
 	EventAgentSleeping = "sleeping"
 	EventAgentAwake    = "awake"
+	// EventReconfigured: the node applied a model/effort change; Text carries "model/effort". Core
+	// journals it as a "reconfigured" system event. Distinct from any agent.EventType.
+	EventReconfigured = "reconfigured"
 )
 
 // AgentEventReport is a normalized agent stream event shipped to the core journal so a
@@ -120,6 +123,9 @@ type HeartbeatResponse struct {
 	// Consults are spawn/close commands for operator-targeted ephemeral consult agents on this node
 	// (#24): the node opens/closes them and wires each to the bus under its own id.
 	Consults []ConsultCommand `json:"consults,omitempty"`
+	// Reconfigures are operator model/effort changes for this node's agent — applied live where the
+	// family supports it, else on the next idle boundary as a respawn.
+	Reconfigures []ReconfigureCommand `json:"reconfigures,omitempty"`
 }
 
 // ConsultCommand tells a node to open or close an ephemeral consult agent (#24). For "open", Family
@@ -128,6 +134,14 @@ type ConsultCommand struct {
 	ID     string `json:"id"`
 	Action string `json:"action"` // "open" | "close"
 	Family string `json:"family,omitempty"`
+}
+
+// ReconfigureCommand tells a node to change its agent's model and/or reasoning effort (an empty
+// field leaves that one unchanged).
+type ReconfigureCommand struct {
+	AgentID string `json:"agentId"`
+	Model   string `json:"model,omitempty"`
+	Effort  string `json:"effort,omitempty"`
 }
 
 // SyncChange is a node's proposed change to one path (content is base64 via []byte).
