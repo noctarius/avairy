@@ -217,6 +217,7 @@ func runCore(_ context.Context, cmd *cli.Command, headlessMode bool) error {
 			sup.Reconfigure(rcModel, rcEffort)
 		}
 	}
+	svc.AgentConfigs = localConfigs // serveControlAPI extends this with node agents
 	opToken := *operatorToken
 	if opToken == "" {
 		opToken = operator.RandomToken()
@@ -423,6 +424,24 @@ func serveControlAPI(d controlDeps) func() {
 			return
 		}
 		core.QueueReconfigure(agentID, control.ReconfigureCommand{AgentID: agentID, Model: rcModel, Effort: rcEffort})
+	}
+	// Reconfigure options for the dialog: core-local agents from their supervisors, plus each
+	// agent-driving node (its modes come from the family, current model/effort from its enroll caps;
+	// model enumeration for nodes is a follow-up, so their picker is free-text for now).
+	svc.AgentConfigs = func() []tui.AgentConfig {
+		out := localConfigs()
+		for _, n := range core.Nodes() {
+			fam := n.Caps["family"]
+			if fam == "" {
+				continue // proxy-only node drives no agent
+			}
+			ad, err := buildAdapter(fam, "", nil)
+			if err != nil {
+				continue
+			}
+			out = append(out, agentConfig(n.ID, ad.Capabilities(), n.Caps["model"], n.Caps["effort"], nil))
+		}
+		return out
 	}
 	// Conflict reconciliation (DESIGN.md §9): agents resolve divergent edits via resolve_conflict
 	// (merged content → next canonical version). For a node agent, also unlock the path so the node
@@ -771,6 +790,36 @@ func (r *agentRegistry) del(id string) {
 	delete(r.m, id)
 	r.mu.Unlock()
 }
+func (r *agentRegistry) all() map[string]*supervisor.Supervisor {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make(map[string]*supervisor.Supervisor, len(r.m))
+	for k, v := range r.m {
+		out[k] = v
+	}
+	return out
+}
+
+// localConfigs builds the reconfigure options for every core-local agent (from its supervisor).
+func localConfigs() []tui.AgentConfig {
+	var out []tui.AgentConfig
+	for id, sup := range localAgents.all() {
+		m, e := sup.Current()
+		out = append(out, agentConfig(id, sup.Caps(), m, e, sup.Models()))
+	}
+	return out
+}
+
+func agentConfig(id string, caps agent.Capabilities, model, effort string, models []agent.ModelInfo) tui.AgentConfig {
+	return tui.AgentConfig{
+		Agent:        id,
+		ModelMode:    string(caps.ReconfigureModel),
+		EffortMode:   string(caps.ReconfigureEffort),
+		Efforts:      caps.ReasoningEfforts,
+		Models:       models,
+		CurrentModel: model, CurrentEffort: effort,
+	}
+}
 
 func startLiveAlice(ctx context.Context, family, model, busURL string, b *bus.Bus, jrnl journal.Log, approvals *control.Approvals, gateEdits bool, idle time.Duration) {
 	if err := spawnLocalAgent(ctx, "alice", aliceRole, agent.SessionPersistent, family, model, busURL, b, jrnl, approvals, gateEdits, idle); err != nil {
@@ -813,7 +862,7 @@ func spawnLocalAgent(ctx context.Context, id, role string, mode agent.SessionMod
 		}
 		return ad.Start(sctx, cfg)
 	}
-	sup := supervisor.New(id, []string{"backend"}, spawn, b, jrnl, idle, model, "")
+	sup := supervisor.New(id, []string{"backend"}, spawn, b, jrnl, idle, model, "", ad.Capabilities())
 	localAgents.set(id, sup) // so the operator can reconfigure this agent's model/effort
 	go func() {
 		sup.Run(ctx)

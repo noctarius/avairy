@@ -37,6 +37,9 @@ type Services struct {
 	// ReconfigureAgent changes a running agent's model/effort (applied live where the family supports
 	// it, else on the next idle boundary). nil disables the feature.
 	ReconfigureAgent func(agentID, model, effort string)
+	// AgentConfigs returns each agent's reconfigure options (modes, model list, current values) for
+	// the operator dialog. nil → none.
+	AgentConfigs func() []tui.AgentConfig
 }
 
 // Inject publishes a human message: target "" broadcasts, else it's an agent id. A leading "@<id> "
@@ -203,6 +206,14 @@ func (s *Services) state() State {
 	if s.Control != nil {
 		st.Control = s.Control()
 	}
+	if s.AgentConfigs != nil {
+		for _, c := range s.AgentConfigs() {
+			st.Configs = append(st.Configs, AgentConfig{
+				Agent: c.Agent, ModelMode: c.ModelMode, EffortMode: c.EffortMode,
+				Efforts: c.Efforts, Models: c.Models, CurrentModel: c.CurrentModel, CurrentEffort: c.CurrentEffort,
+			})
+		}
+	}
 	return st
 }
 
@@ -221,6 +232,7 @@ func (s *Services) Deps() tui.Deps {
 		Consult:         s.Consult,
 		CloseConsult:    s.CloseConsult,
 		Reconfigure:     s.Reconfigure,
+		Configs:         s.AgentConfigs,
 		Commit:          s.Commit,
 		PendingApprovals: func() []tui.ApprovalItem {
 			ps := s.Approvals.Pending()

@@ -29,7 +29,7 @@ func TestSupervisor_EmitsTurnStartOnDispatch(t *testing.T) {
 	b := bus.New(jrnl)
 	var spawns int32
 
-	s := New("alice", []string{"backend"}, spawnerFor(mock.New(), &spawns), b, jrnl, 0, "", "")
+	s := New("alice", []string{"backend"}, spawnerFor(mock.New(), &spawns), b, jrnl, 0, "", "", agent.Capabilities{})
 	go s.Run(t.Context())
 	if !waitFor(t, func() bool { return atomic.LoadInt32(&spawns) == 1 }) {
 		t.Fatal("supervisor did not spawn at startup")
@@ -60,7 +60,7 @@ func TestSupervisor_DeliversAndRecords(t *testing.T) {
 	b := bus.New(jrnl)
 	var spawns int32
 
-	s := New("alice", []string{"backend"}, spawnerFor(mock.New(), &spawns), b, jrnl, 0, "", "")
+	s := New("alice", []string{"backend"}, spawnerFor(mock.New(), &spawns), b, jrnl, 0, "", "", agent.Capabilities{})
 	go s.Run(t.Context())
 
 	// Give Run a moment to spawn + subscribe, then publish.
@@ -86,7 +86,7 @@ func TestSupervisor_SleepsAndRespawns(t *testing.T) {
 	b := bus.New(jrnl)
 	var spawns int32
 
-	s := New("alice", []string{"backend"}, spawnerFor(mock.New(), &spawns), b, jrnl, 100*time.Millisecond, "", "")
+	s := New("alice", []string{"backend"}, spawnerFor(mock.New(), &spawns), b, jrnl, 100*time.Millisecond, "", "", agent.Capabilities{})
 	go s.Run(t.Context())
 
 	if !waitFor(t, func() bool { return atomic.LoadInt32(&spawns) == 1 }) {
@@ -116,7 +116,7 @@ func TestSupervisor_InterruptHardStopsNonInterruptible(t *testing.T) {
 
 	ad := mock.New()
 	ad.InterruptErr = errors.New("mock: interrupt not supported") // mimic claude
-	s := New("alice", []string{"backend"}, spawnerFor(ad, &spawns), b, jrnl, 0, "", "")
+	s := New("alice", []string{"backend"}, spawnerFor(ad, &spawns), b, jrnl, 0, "", "", agent.Capabilities{})
 	go s.Run(t.Context())
 
 	if !waitFor(t, func() bool { return atomic.LoadInt32(&spawns) == 1 }) {
@@ -142,7 +142,7 @@ func TestSupervisor_InterruptKeepsInterruptibleSession(t *testing.T) {
 	b := bus.New(jrnl)
 	var spawns int32
 
-	s := New("alice", []string{"backend"}, spawnerFor(mock.New(), &spawns), b, jrnl, 0, "", "")
+	s := New("alice", []string{"backend"}, spawnerFor(mock.New(), &spawns), b, jrnl, 0, "", "", agent.Capabilities{})
 	go s.Run(t.Context())
 
 	if !waitFor(t, func() bool { return atomic.LoadInt32(&spawns) == 1 }) {
@@ -166,7 +166,7 @@ func TestSupervisor_TeamWakeCarriesClaimInstruction(t *testing.T) {
 	b := bus.New(jrnl)
 	var spawns int32
 
-	s := New("alice", []string{"backend"}, spawnerFor(mock.New(), &spawns), b, jrnl, 0, "", "")
+	s := New("alice", []string{"backend"}, spawnerFor(mock.New(), &spawns), b, jrnl, 0, "", "", agent.Capabilities{})
 	go s.Run(t.Context())
 
 	if !waitFor(t, func() bool { return atomic.LoadInt32(&spawns) == 1 }) {
@@ -187,7 +187,7 @@ func TestSupervisor_NoWakeDoesNotTriggerTurn(t *testing.T) {
 	b := bus.New(jrnl)
 	var spawns int32
 
-	s := New("alice", []string{"backend"}, spawnerFor(mock.New(), &spawns), b, jrnl, 0, "", "")
+	s := New("alice", []string{"backend"}, spawnerFor(mock.New(), &spawns), b, jrnl, 0, "", "", agent.Capabilities{})
 	go s.Run(t.Context())
 	if !waitFor(t, func() bool { return atomic.LoadInt32(&spawns) == 1 }) {
 		t.Fatal("no startup spawn")
@@ -316,7 +316,7 @@ func TestSupervisor_ReconfigureLive(t *testing.T) {
 		atomic.AddInt32(&spawns, 1)
 		return live, nil
 	}
-	s := New("alice", []string{"backend"}, spawn, b, jrnl, 0, "m1", "e1")
+	s := New("alice", []string{"backend"}, spawn, b, jrnl, 0, "m1", "e1", agent.Capabilities{})
 	go s.Run(t.Context())
 	if !waitFor(t, func() bool { return atomic.LoadInt32(&spawns) == 1 }) {
 		t.Fatal("no startup spawn")
@@ -352,7 +352,7 @@ func TestSupervisor_ReconfigureRespawnsWhenIdle(t *testing.T) {
 		mu.Unlock()
 		return &fakeSession{events: make(chan agent.Event, 4)}, nil
 	}
-	s := New("alice", []string{"backend"}, spawn, b, jrnl, 0, "m1", "")
+	s := New("alice", []string{"backend"}, spawn, b, jrnl, 0, "m1", "", agent.Capabilities{})
 	go s.Run(t.Context())
 	if !waitFor(t, func() bool { return atomic.LoadInt32(&spawns) == 1 }) {
 		t.Fatal("no startup spawn")

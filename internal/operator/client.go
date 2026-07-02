@@ -184,6 +184,7 @@ func (c *Client) Deps() tui.Deps {
 		Consult:          c.consult,
 		CloseConsult:     c.closeConsult,
 		Reconfigure:      c.reconfigure,
+		Configs:          c.configs,
 		Commit:           c.commit,
 	}
 	c.mu.Lock()
@@ -239,6 +240,19 @@ func (c *Client) pendingConflicts() []tui.ConflictItem {
 	out := make([]tui.ConflictItem, 0, len(c.state.Conflicts))
 	for _, cf := range c.state.Conflicts {
 		out = append(out, tui.ConflictItem{ID: cf.ID, Path: cf.Path, HubVersion: cf.HubVersion, Source: cf.Source, Detail: cf.Detail})
+	}
+	return out
+}
+
+func (c *Client) configs() []tui.AgentConfig {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]tui.AgentConfig, 0, len(c.state.Configs))
+	for _, cf := range c.state.Configs {
+		out = append(out, tui.AgentConfig{
+			Agent: cf.Agent, ModelMode: cf.ModelMode, EffortMode: cf.EffortMode,
+			Efforts: cf.Efforts, Models: cf.Models, CurrentModel: cf.CurrentModel, CurrentEffort: cf.CurrentEffort,
+		})
 	}
 	return out
 }

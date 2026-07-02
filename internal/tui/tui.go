@@ -71,6 +71,21 @@ type Deps struct {
 	// Reconfigure changes a running agent's model/effort (live where the family supports it, else a
 	// respawn on the next idle boundary). Nil disables the reconfigure command.
 	Reconfigure func(agentID, model, effort string)
+	// Configs returns each agent's reconfigure options (modes, model list, current values) for the
+	// reconfigure dialog. Nil disables it.
+	Configs func() []AgentConfig
+}
+
+// AgentConfig is one agent's reconfigure surface for the dialog: whether model/effort can change
+// (and how), the choices to offer, and the current values.
+type AgentConfig struct {
+	Agent         string
+	ModelMode     string // "live" | "respawn" | "" (none)
+	EffortMode    string
+	Efforts       []string          // family effort levels (fallback when a model has none)
+	Models        []agent.ModelInfo // available models (empty → free-text)
+	CurrentModel  string
+	CurrentEffort string
 }
 
 // ApprovalItem is one pending gated action awaiting the operator's verdict.

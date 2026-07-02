@@ -67,6 +67,17 @@ type ControlState struct {
 	MTLSOnly     bool   `json:"mtlsOnly,omitempty"`
 }
 
+// AgentConfig mirrors tui.AgentConfig on the wire: one agent's reconfigure options.
+type AgentConfig struct {
+	Agent         string            `json:"agent"`
+	ModelMode     string            `json:"modelMode"`
+	EffortMode    string            `json:"effortMode"`
+	Efforts       []string          `json:"efforts,omitempty"`
+	Models        []agent.ModelInfo `json:"models,omitempty"`
+	CurrentModel  string            `json:"currentModel,omitempty"`
+	CurrentEffort string            `json:"currentEffort,omitempty"`
+}
+
 // State is the snapshot the client polls/refreshes (everything the TUI reads synchronously while
 // rendering — the journal stream carries the rest).
 type State struct {
@@ -76,6 +87,7 @@ type State struct {
 	Conflicts []ConflictItem `json:"conflicts"`
 	Roster    []string       `json:"roster"`
 	Control   *ControlState  `json:"control,omitempty"`
+	Configs   []AgentConfig  `json:"configs,omitempty"` // reconfigure options per agent
 }
 
 // Action request/response bodies.

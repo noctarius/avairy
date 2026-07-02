@@ -34,22 +34,43 @@ type Supervisor struct {
 	reconfig chan reconfigReq
 	turnDone chan struct{} // event goroutine pokes this when a turn ends, so pending respawns fire
 
+	caps agent.Capabilities // reconfigure modes + effort levels for the operator dialog
+
 	mu         sync.Mutex
 	lastActive time.Time
 	working    bool   // mid-turn (last event wasn't turn_done) — never sleep while true
 	model      string // desired model/effort; a respawn uses these
 	effort     string
+	models     []agent.ModelInfo // enumerated once after spawn (nil until then); for the picker
 }
 
 // New builds a Supervisor for an agent. idle is the quiet period before teardown (0 disables it).
 // model/effort are the initial values (also what respawns use until a reconfigure changes them).
-func New(id string, roles []string, spawn Spawn, b *bus.Bus, jrnl journal.Log, idle time.Duration, model, effort string) *Supervisor {
+// caps carries the family's reconfigure modes + effort levels (surfaced to the operator dialog).
+func New(id string, roles []string, spawn Spawn, b *bus.Bus, jrnl journal.Log, idle time.Duration, model, effort string, caps agent.Capabilities) *Supervisor {
 	return &Supervisor{
 		id: id, roles: roles, spawn: spawn, b: b, jrnl: jrnl, idle: idle, waker: bus.NewWaker(),
-		model: model, effort: effort,
+		model: model, effort: effort, caps: caps,
 		reconfig: make(chan reconfigReq, 8),
 		turnDone: make(chan struct{}, 1),
 	}
+}
+
+// Caps returns the agent's capabilities (reconfigure modes + effort levels).
+func (s *Supervisor) Caps() agent.Capabilities { return s.caps }
+
+// Current returns the agent's current model/effort.
+func (s *Supervisor) Current() (model, effort string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.model, s.effort
+}
+
+// Models returns the enumerated model list (nil until the first spawn enumerates it).
+func (s *Supervisor) Models() []agent.ModelInfo {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.models
 }
 
 // Reconfigure requests a model/effort change on the running agent (from the operator). Applied live
@@ -112,6 +133,17 @@ func (s *Supervisor) Run(ctx context.Context) {
 				}
 			}
 		}(ns.Events())
+		// Enumerate the model list once (for the operator's reconfigure picker) if the family supports
+		// it; it doesn't change across respawns, so cache and skip thereafter.
+		if s.Models() == nil {
+			if ml, ok := ns.(agent.ModelLister); ok {
+				if ms, err := ml.ListModels(ctx); err == nil && len(ms) > 0 {
+					s.mu.Lock()
+					s.models = ms
+					s.mu.Unlock()
+				}
+			}
+		}
 		pendingReconfig = false // the fresh session already carries the current model/effort
 		if wasAsleep {
 			s.jrnl.Append(journal.KindSystem, s.id, map[string]any{"event": "agent_awake"})
