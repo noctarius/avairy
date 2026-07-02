@@ -415,7 +415,13 @@
         line-height: 1.45;
       }
       .md a {
-        color: var(--accent);
+        color: #a5b4ff; /* lighter than --accent so links read on the dark bubble */
+        text-decoration: underline;
+      }
+      /* In a "me" bubble the background IS --accent, so an accent-colored link vanishes — use the
+         bubble's ink (white) instead. */
+      .row.me .md a {
+        color: var(--accent-ink);
       }
       .md blockquote {
         margin: 0.4em 0;
