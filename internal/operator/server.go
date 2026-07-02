@@ -52,6 +52,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc(PathInterrupt, s.auth(s.handleInterrupt))
 	mux.HandleFunc(PathApproval, s.auth(s.handleApproval))
 	mux.HandleFunc(PathConflict, s.auth(s.handleConflict))
+	mux.HandleFunc(PathReconfigure, s.auth(s.handleReconfigure))
 	mux.HandleFunc(PathCommit, s.auth(s.handleCommit))
 	mux.HandleFunc(PathToken, s.auth(s.handleToken))
 	mux.HandleFunc(PathConsult, s.auth(s.handleConsult))
@@ -194,6 +195,15 @@ func (s *Server) handleCommit(w http.ResponseWriter, r *http.Request) {
 		resp.Error = err.Error()
 	}
 	writeJSON(w, resp)
+}
+
+func (s *Server) handleReconfigure(w http.ResponseWriter, r *http.Request) {
+	var req reconfigureRequest
+	if !readJSON(w, r, &req) {
+		return
+	}
+	s.svc.Reconfigure(req.Agent, req.Model, req.Effort)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) handleConsult(w http.ResponseWriter, r *http.Request) {

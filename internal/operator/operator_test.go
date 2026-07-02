@@ -153,13 +153,15 @@ func TestOperatorServerClientRoundTrip(t *testing.T) {
 func TestOperatorConsultRoundTrip(t *testing.T) {
 	j := journal.NewMemory()
 	var gotTarget, gotFamily, closed string
+	rc := make(chan [3]string, 1)
 	svc := &operator.Services{
 		Journal: j, Bus: bus.New(j), Approvals: control.NewApprovals(0), Conflicts: control.NewConflicts(),
 		Consult: func(target, family string) (string, error) {
 			gotTarget, gotFamily = target, family
 			return "consult-" + nonEmpty(target, "core"), nil
 		},
-		CloseConsult: func(id string) bool { closed = id; return true },
+		CloseConsult:     func(id string) bool { closed = id; return true },
+		ReconfigureAgent: func(agent, model, effort string) { rc <- [3]string{agent, model, effort} },
 	}
 	ts := httptest.NewServer(operator.NewServer(svc, "sekret", false).Handler())
 	defer ts.Close()
@@ -181,6 +183,16 @@ func TestOperatorConsultRoundTrip(t *testing.T) {
 	}
 	if !deps.CloseConsult("consult-linux") || closed != "consult-linux" {
 		t.Fatalf("close not routed: closed=%q", closed)
+	}
+
+	deps.Reconfigure("linux", "opus", "high")
+	select {
+	case got := <-rc:
+		if got != [3]string{"linux", "opus", "high"} {
+			t.Fatalf("reconfigure args = %v", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("reconfigure did not route to the service")
 	}
 }
 

@@ -183,6 +183,7 @@ func (c *Client) Deps() tui.Deps {
 		ResolveConflict:  c.resolveConflict,
 		Consult:          c.consult,
 		CloseConsult:     c.closeConsult,
+		Reconfigure:      c.reconfigure,
 		Commit:           c.commit,
 	}
 	c.mu.Lock()
@@ -279,6 +280,10 @@ func (c *Client) consult(target, family string) (string, error) {
 
 func (c *Client) closeConsult(id string) bool {
 	return c.post(PathClose, closeRequest{ID: id}, nil) == nil
+}
+
+func (c *Client) reconfigure(agent, model, effort string) {
+	_ = c.post(PathReconfigure, reconfigureRequest{Agent: agent, Model: model, Effort: effort}, nil)
 }
 
 func (c *Client) commit(message string) (string, error) {

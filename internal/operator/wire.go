@@ -16,18 +16,19 @@ import (
 
 // HTTP routes of the operator API (mounted under the control listener, reusing its TLS + addr).
 const (
-	PathStream    = "/operator/stream"    // GET: SSE of journal records (backfill, then live)
-	PathState     = "/operator/state"     // GET: a snapshot of tasks/approvals/conflicts/roster/control
-	PathInject    = "/operator/inject"    // POST: publish a human message
-	PathReact     = "/operator/react"     // POST: 👍/👎/❌ on an agent message (by journal seq)
-	PathInterrupt = "/operator/interrupt" // POST: stop running agents
-	PathApproval  = "/operator/approval"  // POST: resolve a gated action
-	PathConflict  = "/operator/conflict"  // POST: resolve/delegate an owner-less conflict
-	PathCommit    = "/operator/commit"    // POST: signed commit of the canonical repo
-	PathToken     = "/operator/token"     // POST: rotate the node-enrollment token
-	PathUI        = "/operator/ui"        // GET: the browser operator console (#17)
-	PathConsult   = "/operator/consult"   // POST: spawn an ephemeral consult agent (#24)
-	PathClose     = "/operator/close"     // POST: close an ephemeral consult agent (#24)
+	PathStream      = "/operator/stream"      // GET: SSE of journal records (backfill, then live)
+	PathState       = "/operator/state"       // GET: a snapshot of tasks/approvals/conflicts/roster/control
+	PathInject      = "/operator/inject"      // POST: publish a human message
+	PathReact       = "/operator/react"       // POST: 👍/👎/❌ on an agent message (by journal seq)
+	PathInterrupt   = "/operator/interrupt"   // POST: stop running agents
+	PathApproval    = "/operator/approval"    // POST: resolve a gated action
+	PathConflict    = "/operator/conflict"    // POST: resolve/delegate an owner-less conflict
+	PathCommit      = "/operator/commit"      // POST: signed commit of the canonical repo
+	PathToken       = "/operator/token"       // POST: rotate the node-enrollment token
+	PathUI          = "/operator/ui"          // GET: the browser operator console (#17)
+	PathConsult     = "/operator/consult"     // POST: spawn an ephemeral consult agent (#24)
+	PathClose       = "/operator/close"       // POST: close an ephemeral consult agent (#24)
+	PathReconfigure = "/operator/reconfigure" // POST: change an agent's model/effort
 )
 
 // readyEvent is the SSE event name core sends once the journal backfill is fully streamed, so the
@@ -79,8 +80,8 @@ type State struct {
 
 // Action request/response bodies.
 type (
-	injectRequest    struct{ Target, Body string }
-	reactRequest     struct {
+	injectRequest struct{ Target, Body string }
+	reactRequest  struct {
 		Seq  uint64 `json:"seq"`
 		Kind string `json:"kind"`
 	}
@@ -93,6 +94,11 @@ type (
 	}
 	tokenResponse struct {
 		Token string `json:"token"`
+	}
+	reconfigureRequest struct {
+		Agent  string `json:"agent"`
+		Model  string `json:"model,omitempty"`
+		Effort string `json:"effort,omitempty"`
 	}
 	consultRequest  struct{ Target, Family string }
 	consultResponse struct {

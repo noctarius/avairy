@@ -34,6 +34,9 @@ type Services struct {
 	// disables the feature.
 	Consult      func(target, family string) (string, error)
 	CloseConsult func(id string) bool
+	// ReconfigureAgent changes a running agent's model/effort (applied live where the family supports
+	// it, else on the next idle boundary). nil disables the feature.
+	ReconfigureAgent func(agentID, model, effort string)
 }
 
 // Inject publishes a human message: target "" broadcasts, else it's an agent id. A leading "@<id> "
@@ -175,6 +178,13 @@ func (s *Services) ResolveConflict(id, decision, target string) {
 	s.Bus.Publish("human", addrOf(target), delegateBody(oc), agent.DeliverySteer)
 }
 
+// Reconfigure changes a running agent's model/effort, if the feature is wired.
+func (s *Services) Reconfigure(agentID, model, effort string) {
+	if s.ReconfigureAgent != nil {
+		s.ReconfigureAgent(agentID, model, effort)
+	}
+}
+
 // state assembles the snapshot the client reads while rendering.
 func (s *Services) state() State {
 	st := State{Roster: callOrNil(s.Roster)}
@@ -210,6 +220,7 @@ func (s *Services) Deps() tui.Deps {
 		ResolveConflict: s.ResolveConflict,
 		Consult:         s.Consult,
 		CloseConsult:    s.CloseConsult,
+		Reconfigure:     s.Reconfigure,
 		Commit:          s.Commit,
 		PendingApprovals: func() []tui.ApprovalItem {
 			ps := s.Approvals.Pending()

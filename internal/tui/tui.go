@@ -67,6 +67,10 @@ type Deps struct {
 	// node id — returning its bus id. CloseConsult tears one down. Nil disables the /consult command.
 	Consult      func(target, family string) (string, error)
 	CloseConsult func(id string) bool
+
+	// Reconfigure changes a running agent's model/effort (live where the family supports it, else a
+	// respawn on the next idle boundary). Nil disables the reconfigure command.
+	Reconfigure func(agentID, model, effort string)
 }
 
 // ApprovalItem is one pending gated action awaiting the operator's verdict.

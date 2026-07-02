@@ -211,6 +211,12 @@ func runCore(_ context.Context, cmd *cli.Command, headlessMode bool) error {
 		Notes:     func() []board.Note { return mcpSrv.Blackboard().Read("") }, // blackboard view (#27)
 		Approvals: approvals, Conflicts: conflictBroker, Bus: b,
 	}
+	// Reconfigure a core-local agent directly; serveControlAPI overrides this to also route to nodes.
+	svc.ReconfigureAgent = func(agentID, rcModel, rcEffort string) {
+		if sup := localAgents.get(agentID); sup != nil {
+			sup.Reconfigure(rcModel, rcEffort)
+		}
+	}
 	opToken := *operatorToken
 	if opToken == "" {
 		opToken = operator.RandomToken()
@@ -409,6 +415,15 @@ func serveControlAPI(d controlDeps) func() {
 		conflictBroker.Raise(control.OperatorConflict{Path: nodeID, Source: "node-startup", Detail: summary})
 	}
 	svc.NodeDirective = core.SetNodeDirective
+	// Reconfigure routing: a core-local agent's supervisor directly, else queue it for the node whose
+	// id matches the agent (delivered on its next heartbeat).
+	svc.ReconfigureAgent = func(agentID, rcModel, rcEffort string) {
+		if sup := localAgents.get(agentID); sup != nil {
+			sup.Reconfigure(rcModel, rcEffort)
+			return
+		}
+		core.QueueReconfigure(agentID, control.ReconfigureCommand{AgentID: agentID, Model: rcModel, Effort: rcEffort})
+	}
 	// Conflict reconciliation (DESIGN.md §9): agents resolve divergent edits via resolve_conflict
 	// (merged content → next canonical version). For a node agent, also unlock the path so the node
 	// drops its stale markers and pulls the merged content (#22).
@@ -732,6 +747,31 @@ const aliceRole = "You are 'alice', a backend engineer agent in the avairy multi
 	"send_message, read_inbox, list_agents, claim_response, report_status, git_history, request_commit, scratch_worktree, list_conflicts, resolve_conflict, fresh_look, note, read_notes. Be terse and do exactly what you are asked, then stop. " +
 	"When an inbox message has \"to\":\"team\", it's a request for ONE agent to take: call claim_response with its id before replying — answer only if \"granted\"; if \"denied\", stand down."
 
+// localAgents tracks core-local agent supervisors by id, so the operator's reconfigure action can
+// reach a core-local agent directly (node agents are reached via core.QueueReconfigure instead).
+var localAgents = &agentRegistry{m: map[string]*supervisor.Supervisor{}}
+
+type agentRegistry struct {
+	mu sync.Mutex
+	m  map[string]*supervisor.Supervisor
+}
+
+func (r *agentRegistry) set(id string, s *supervisor.Supervisor) {
+	r.mu.Lock()
+	r.m[id] = s
+	r.mu.Unlock()
+}
+func (r *agentRegistry) get(id string) *supervisor.Supervisor {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.m[id]
+}
+func (r *agentRegistry) del(id string) {
+	r.mu.Lock()
+	delete(r.m, id)
+	r.mu.Unlock()
+}
+
 func startLiveAlice(ctx context.Context, family, model, busURL string, b *bus.Bus, jrnl journal.Log, approvals *control.Approvals, gateEdits bool, idle time.Duration) {
 	if err := spawnLocalAgent(ctx, "alice", aliceRole, agent.SessionPersistent, family, model, busURL, b, jrnl, approvals, gateEdits, idle); err != nil {
 		fail("start alice", err)
@@ -773,7 +813,12 @@ func spawnLocalAgent(ctx context.Context, id, role string, mode agent.SessionMod
 		}
 		return ad.Start(sctx, cfg)
 	}
-	go supervisor.New(id, []string{"backend"}, spawn, b, jrnl, idle, model, "").Run(ctx)
+	sup := supervisor.New(id, []string{"backend"}, spawn, b, jrnl, idle, model, "")
+	localAgents.set(id, sup) // so the operator can reconfigure this agent's model/effort
+	go func() {
+		sup.Run(ctx)
+		localAgents.del(id)
+	}()
 	return nil
 }
 
