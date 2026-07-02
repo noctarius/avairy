@@ -45,6 +45,7 @@ func nodeCommand() *cli.Command {
 				&cli.DurationFlag{Name: "interval", Value: 2 * time.Second, Usage: "sync/heartbeat interval"},
 				&cli.StringFlag{Name: "family", Usage: "spawn & drive the agent here: claude | codex | copilot | grok (empty = proxy only)"},
 				&cli.StringFlag{Name: "model", Usage: "model for the spawned agent (family default if empty)"},
+			&cli.StringFlag{Name: "effort", Usage: "reasoning effort for the spawned agent (family-specific, e.g. claude low|medium|high|xhigh|max; empty = family default)"},
 				&cli.StringFlag{Name: "role", Usage: "system prompt / role for the spawned agent"},
 				&cli.BoolFlag{Name: "gate-edits", Usage: "also require operator approval for file edits"},
 				&cli.StringFlag{Name: "ca", Usage: "PEM cert/CA to trust for an https core (self-signed/internal CA)"},
@@ -62,13 +63,16 @@ func nodeCommand() *cli.Command {
 // drives an agent — the agent family and (if pinned) the model. Empty values are omitted, so a
 // proxy-only node reports just its OS and an unpinned agent reports no model. These land in the
 // core's NodeInfo.Caps, the bus roster (list_agents), and the node_enrolled journal record.
-func nodeCaps(os, family, model string) map[string]string {
+func nodeCaps(os, family, model, effort string) map[string]string {
 	caps := map[string]string{"os": os}
 	if family != "" {
 		caps["family"] = family
 	}
 	if model != "" {
 		caps["model"] = model
+	}
+	if effort != "" {
+		caps["effort"] = effort
 	}
 	return caps
 }
@@ -86,6 +90,7 @@ func runNodeJoin(_ context.Context, cmd *cli.Command) error {
 	interval := ref(cmd.Duration("interval"))
 	family := ref(cmd.String("family"))
 	model := ref(cmd.String("model"))
+	effort := ref(cmd.String("effort"))
 	role := ref(cmd.String("role"))
 	gateEdits := ref(cmd.Bool("gate-edits"))
 	caFile := ref(cmd.String("ca"))
@@ -154,7 +159,7 @@ func runNodeJoin(_ context.Context, cmd *cli.Command) error {
 		}
 		n.HTTP = client
 	}
-	if err := n.Enroll(*token, *osName, nodeCaps(*osName, *family, *model)); err != nil {
+	if err := n.Enroll(*token, *osName, nodeCaps(*osName, *family, *model, *effort)); err != nil {
 		return fmt.Errorf("enroll: %w", err)
 	}
 	fmt.Printf("enrolled node %q (os=%s) with core %s\n", *id, *osName, *core)
@@ -219,7 +224,7 @@ func runNodeJoin(_ context.Context, cmd *cli.Command) error {
 	// Optionally spawn & drive the agent on this node, wired to the local MCP proxy. coreMCP is
 	// always set by now (the join's Bus or --core), so the proxy below has a target.
 	if *family != "" {
-		if err := spawnAgent(ctx, n, *family, *id, *role, *model, *ws, *proxy, mirrorDir, agent.SessionPersistent, *gateEdits, *idleSleep); err != nil {
+		if err := spawnAgent(ctx, n, *family, *id, *role, *model, *effort, *ws, *proxy, mirrorDir, agent.SessionPersistent, *gateEdits, *idleSleep); err != nil {
 			return fmt.Errorf("spawn agent: %w", err)
 		}
 	}
@@ -250,7 +255,7 @@ func runNodeJoin(_ context.Context, cmd *cli.Command) error {
 	}
 
 	nodeConsults := &nodeConsultMgr{
-		n: n, coreMCP: *coreMCP, family: *family, model: *model, gateEdits: *gateEdits,
+		n: n, coreMCP: *coreMCP, family: *family, model: *model, effort: *effort, gateEdits: *gateEdits,
 		cancel: map[string]context.CancelFunc{},
 	}
 
@@ -359,6 +364,7 @@ type nodeConsultMgr struct {
 	coreMCP   string
 	family    string
 	model     string
+	effort    string
 	gateEdits bool
 	cancel    map[string]context.CancelFunc // id -> cancel (loop-goroutine only; no mutex needed)
 }
@@ -387,7 +393,7 @@ func (m *nodeConsultMgr) apply(parent context.Context, cmd control.ConsultComman
 			fmt.Fprintln(os.Stderr, "consult workspace:", err)
 			return
 		}
-		if err := spawnAgent(cctx, m.n, fam, cmd.ID, nodeConsultRole, m.model, ws, proxyAddr, "", agent.SessionEphemeral, m.gateEdits, 0); err != nil {
+		if err := spawnAgent(cctx, m.n, fam, cmd.ID, nodeConsultRole, m.model, m.effort, ws, proxyAddr, "", agent.SessionEphemeral, m.gateEdits, 0); err != nil {
 			cancel()
 			fmt.Fprintln(os.Stderr, "consult spawn:", err)
 			return
@@ -429,7 +435,7 @@ func startConsultProxy(ctx context.Context, n *control.Node, coreMCP, id string,
 // respawns it on the next wake-worthy directed message (#28) — the node-side mirror of
 // internal/supervisor, over the HTTP pull/post transport instead of the in-process bus. A respawn
 // resumes the agent's session (so context survives sleep for families that support --resume).
-func spawnAgent(ctx context.Context, n *control.Node, family, agentID, role, model, ws, proxy, mirrorDir string, mode agent.SessionMode, gateEdits bool, idle time.Duration) error {
+func spawnAgent(ctx context.Context, n *control.Node, family, agentID, role, model, effort, ws, proxy, mirrorDir string, mode agent.SessionMode, gateEdits bool, idle time.Duration) error {
 	if role == "" {
 		role = defaultRole
 	}
@@ -478,6 +484,7 @@ func spawnAgent(ctx context.Context, n *control.Node, family, agentID, role, mod
 			Mode:      mode,
 			Workspace: ws,
 			Model:     model,
+			Effort:    effort,
 			MCP:       []agent.MCPServer{{Name: "avairy", Type: "http", URL: proxyURL}},
 		}
 		if sessionFile != "" {

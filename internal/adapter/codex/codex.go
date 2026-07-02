@@ -63,6 +63,7 @@ func (a *Adapter) bin() string {
 func (a *Adapter) Start(ctx context.Context, cfg agent.SessionConfig) (agent.Session, error) {
 	args := []string{"app-server", "--stdio"}
 	args = append(args, mcpConfigArgs(cfg)...)
+	args = append(args, reasoningArgs(cfg.Effort)...)
 	args = append(args, a.ExtraArgs...)
 
 	cmd := exec.CommandContext(ctx, a.bin(), args...)
@@ -299,6 +300,15 @@ func orDefault(s, def string) string {
 		return def
 	}
 	return s
+}
+
+// reasoningArgs pins codex's reasoning effort via a `-c model_reasoning_effort` override when an
+// effort level is set (empty = leave the model/profile default).
+func reasoningArgs(effort string) []string {
+	if effort == "" {
+		return nil
+	}
+	return []string{"-c", fmt.Sprintf("model_reasoning_effort=%q", effort)}
 }
 
 // mcpConfigArgs renders cfg.MCP into `-c` config overrides the app-server accepts. Codex

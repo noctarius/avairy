@@ -456,6 +456,7 @@ plus a join for `tui connect`. (Both take `--advertise-port` to override the def
 | `--interval <dur>`                    | `2s`             | Sync/heartbeat cadence.                                                               |
 | `--family <fam>`                      | —                | Spawn & drive the agent here (`claude`/`codex`/`copilot`/`grok`); empty = proxy-only. |
 | `--model` / `--role`                  | —                | Tune the spawned agent.                                                               |
+| `--effort <level>`                    | —                | Reasoning effort for the spawned agent (family-specific, e.g. claude `low`…`max`).    |
 | `--gate-edits`                        | off              | Gate the spawned agent's file edits.                                                  |
 | `--idle-sleep <dur>`                  | 0 (off)          | Park the idle agent; the next directed message respawns it (resuming its session).    |
 | `--ca <file>` / `--insecure`          | —                | Trust a PEM CA for an https core / skip verification (dev only).                      |

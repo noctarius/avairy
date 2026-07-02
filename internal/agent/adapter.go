@@ -85,6 +85,7 @@ type SessionConfig struct {
 	ResumeID  string      // non-empty to resume a prior persistent session
 	MCP       []MCPServer // the bus, plus any extra servers
 	Model     string      // optional family-specific model id
+	Effort    string      // optional reasoning-effort level (family-specific: e.g. claude low|medium|high|xhigh|max, codex model_reasoning_effort)
 }
 
 // Adapter is the per-family driver (DESIGN.md §3). One Adapter instance can start many

@@ -15,18 +15,21 @@ import (
 // nodeCaps reports the agent family and model only when set, so a proxy-only node (no --family) or
 // an unpinned agent (no --model) doesn't advertise empty capabilities.
 func TestNodeCaps(t *testing.T) {
-	full := nodeCaps("linux", "claude", "opus")
-	if full["os"] != "linux" || full["family"] != "claude" || full["model"] != "opus" {
+	full := nodeCaps("linux", "claude", "opus", "high")
+	if full["os"] != "linux" || full["family"] != "claude" || full["model"] != "opus" || full["effort"] != "high" {
 		t.Fatalf("full caps = %v", full)
 	}
-	driven := nodeCaps("darwin", "codex", "") // agent, no pinned model
+	driven := nodeCaps("darwin", "codex", "", "") // agent, no pinned model or effort
 	if driven["family"] != "codex" {
 		t.Fatalf("want family codex, got %v", driven)
 	}
 	if _, ok := driven["model"]; ok {
 		t.Fatalf("unpinned model should be omitted, got %v", driven)
 	}
-	proxyOnly := nodeCaps("windows", "", "") // no agent
+	if _, ok := driven["effort"]; ok {
+		t.Fatalf("unset effort should be omitted, got %v", driven)
+	}
+	proxyOnly := nodeCaps("windows", "", "", "") // no agent
 	if len(proxyOnly) != 1 || proxyOnly["os"] != "windows" {
 		t.Fatalf("proxy-only node should report just os, got %v", proxyOnly)
 	}

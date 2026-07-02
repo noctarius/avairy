@@ -49,9 +49,8 @@ func (a *Adapter) bin() string {
 	return a.Bin
 }
 
-// Start launches a streaming Claude Code session. Worker agents are launched lean (explicit
-// role via --append-system-prompt) — see the cost note in ADAPTERS.md.
-func (a *Adapter) Start(ctx context.Context, cfg agent.SessionConfig) (agent.Session, error) {
+// buildArgs assembles the `claude` CLI flags for a session config.
+func (a *Adapter) buildArgs(cfg agent.SessionConfig) []string {
 	args := []string{
 		"-p",
 		"--input-format", "stream-json",
@@ -67,12 +66,19 @@ func (a *Adapter) Start(ctx context.Context, cfg agent.SessionConfig) (agent.Ses
 	if cfg.Model != "" {
 		args = append(args, "--model", cfg.Model)
 	}
+	if cfg.Effort != "" {
+		args = append(args, "--effort", cfg.Effort) // reasoning effort: low|medium|high|xhigh|max
+	}
 	if mcp := mcpConfigJSON(cfg.MCP); mcp != "" {
 		args = append(args, "--mcp-config", mcp, "--strict-mcp-config")
 	}
-	args = append(args, a.ExtraArgs...)
+	return append(args, a.ExtraArgs...)
+}
 
-	cmd := exec.CommandContext(ctx, a.bin(), args...)
+// Start launches a streaming Claude Code session. Worker agents are launched lean (explicit
+// role via --append-system-prompt) — see the cost note in ADAPTERS.md.
+func (a *Adapter) Start(ctx context.Context, cfg agent.SessionConfig) (agent.Session, error) {
+	cmd := exec.CommandContext(ctx, a.bin(), a.buildArgs(cfg)...)
 	cmd.Dir = cfg.Workspace
 
 	stdin, err := cmd.StdinPipe()

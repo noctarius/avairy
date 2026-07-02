@@ -94,3 +94,14 @@ func TestDefaultApprove(t *testing.T) {
 		t.Fatalf("v1 decision = %q", got)
 	}
 }
+
+// reasoningArgs pins codex's model_reasoning_effort via a -c override, and is empty when unset.
+func TestReasoningArgs(t *testing.T) {
+	if got := reasoningArgs(""); got != nil {
+		t.Fatalf("no effort should yield no args, got %v", got)
+	}
+	got := reasoningArgs("high")
+	if len(got) != 2 || got[0] != "-c" || got[1] != `model_reasoning_effort="high"` {
+		t.Fatalf("reasoningArgs(high) = %v", got)
+	}
+}
