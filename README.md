@@ -16,10 +16,10 @@ around, no plaintext on the wire.
 > `copilot`, `grok`); avairy just drives them and routes their messages.
 
 <p align="center">
-  <img src="assets/webui.png" width="900"
-       alt="The avairy operator console in a browser: a fleet of agents with live spend, a task board and shared blackboard, the conversation, and approvals + conflicts queues.">
+  <img src="assets/webui-overview.png" width="900"
+       alt="The avairy browser operator console: fleet status, tasks, durable notes, the live conversation, approvals, and conflicts in one screen.">
 </p>
-<p align="center"><sub>The operator console — fleet, tasks, blackboard, conversation, and the approvals/conflicts queues, all in one view.</sub></p>
+<p align="center"><sub>The browser operator console as it exists now: fleet, tasks, durable notes, live conversation, approvals, and conflicts in one view.</sub></p>
 
 ---
 
@@ -53,6 +53,9 @@ workspace, and a shared memory, and keeps you in command of all of it from one c
   certificates. Bearer tokens are the simpler *fallback*, not the default.
 - **Cost-aware.** Per-agent and fleet spend in view, budget caps that interrupt runaways, and idle
   agents that sleep and respawn on demand.
+- **Operator surfaces that matter.** Terminal UI, remote TUI, and browser console all stream the
+  same journal, render markdown, show tool activity, surface conflicts/approvals, and let you
+  react, interrupt, or inject guidance without losing the thread.
 - **Durable and auditable.** Every message, tool call, decision, and handoff is appended to an
   event-sourced journal you can replay.
 
@@ -85,7 +88,8 @@ each agent family is driven.
 ## Install
 
 **Linux, macOS, or FreeBSD** — one line picks the right build for your OS/arch, verifies its
-checksum, and installs the single `avairy` binary (core, node, tui, auth are subcommands):
+checksum, and installs the single `avairy` binary (`core`, `node`, `tui`, and `version` are the
+main entry points):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/noctarius/avairy/main/install.sh | sh
@@ -327,15 +331,30 @@ Agents have the same vocabulary over MCP (`send_message`, `claim_response`, …)
 message that matches no one is **rejected** so the sender knows — no silent drops.
 
 <p align="center">
-  <img src="assets/agent-handover.png" width="760"
-       alt="One agent validating a fix on Linux, recording progress, and handing the cross-OS check off to the macOS agent.">
+  <img src="assets/team-coordination-with-claim-mechanism.png" width="760"
+       alt="A team request being claimed by one agent while the other agents stand down instead of duplicate-working the same thread.">
 </p>
-<p align="center"><sub>Agents coordinating: the Linux agent validates its fix, records progress, and hands the macOS-specific check to its peer.</sub></p>
+<p align="center"><sub>`@team` in action: one agent claims the request, everyone else sees the ownership decision and stands down.</sub></p>
+
+<p align="center">
+  <img src="assets/direct-agent-communication.png" width="760"
+       alt="One agent sending a direct message to another agent to request a final cross-host confirmation and receiving the follow-up result in the shared conversation.">
+</p>
+<p align="center"><sub>Direct agent-to-agent handoff: one peer asks another for the final cross-host confirmation and the conversation stays visible to the operator.</sub></p>
 
 **Approvals.** Gated actions appear on the **Approvals** tab: allow once, allow that kind from that
 agent for the session, or deny. **Budgets.** `-budget` / `-agent-budget` (USD) warn you and interrupt
 an agent (or the whole fleet) when spend crosses a cap. **Idle sleep.** `-idle-sleep` parks an idle
 agent (freeing its subprocess) and respawns it on the next directed message.
+
+When an agent starts looping, the facilitator can intervene with a nudge or trigger a clean-context
+`fresh_look` consult rather than letting the same edit/test cycle burn tokens indefinitely.
+
+<p align="center">
+  <img src="assets/facilitator-interception.png" width="760"
+       alt="The facilitator detecting a loop, interrupting the pattern, and sending back a fresh-look analysis with a different next step.">
+</p>
+<p align="center"><sub>The facilitator catching a loop and feeding back a clean-context `fresh_look` instead of letting blind retries continue.</sub></p>
 
 ## Use cases
 
@@ -359,15 +378,28 @@ agent (freeing its subprocess) and respawns it on the next directed message.
 
 One console, three ways to run it — all over the same operator API, all streaming the live journal:
 
-- **Local TUI** — opens with core (unless `-headless`). Tabs for Conversation, Handovers, Tasks,
+- **Local TUI** — opens with `avairy core run`. Tabs for Conversation, Handovers, Tasks,
   Notes, Approvals, and Conflicts; a fleet line with per-agent status and spend; a command line with
-  `@`-addressing, `/commit`, and `/consult … /end` for disposable consult agents.
+  `@`-addressing, `/commit`, and `/consult … /end` for disposable consult agents. The conversation
+  renders markdown, tool activity, inline diffs, and quick operator reactions (👍 / 👎 / ❌).
 
   <p align="center">
     <img src="assets/tui.png" width="820"
          alt="The avairy terminal console: header with control URL and enroll token, a fleet line, the conversation with rendered markdown, and the tab bar.">
   </p>
   <p align="center"><sub>The same console in the terminal — control/enroll details up top, fleet line, conversation, and tabs.</sub></p>
+
+  <p align="center">
+    <img src="assets/tui-notes.png" width="820"
+         alt="The TUI Notes tab showing long-lived shared notes and findings that survive restarts and can be read by every agent.">
+  </p>
+  <p align="center"><sub>The TUI Notes tab: durable shared memory for findings, decisions, and follow-ups.</sub></p>
+
+  <p align="center">
+    <img src="assets/tui-reactions.png" width="820"
+         alt="The TUI conversation with quick operator reactions on agent messages and rendered markdown in the transcript.">
+  </p>
+  <p align="center"><sub>The TUI conversation view: rendered markdown, tool traces, and operator reactions on recent agent messages.</sub></p>
 
 - **Remote TUI** (`avairy tui connect`) — the same interface attached over the network:
 
@@ -379,13 +411,26 @@ One console, three ways to run it — all over the same operator API, all stream
 - **Browser** — a chat-first console mirroring the TUI, served at `/operator/ui` when core is started
   with **`--web`** (off by default). Core prints the ready-to-open URL; you get the conversation,
   fleet, tasks, notes, approvals, and conflicts, all over the same operator API and live journal
-  stream as the TUI.
+  stream as the TUI. The browser adds a richer diff modal for edits and strong markdown rendering
+  for long technical updates.
 
   <p align="center">
-    <img src="assets/webui2.png" width="820"
-         alt="The browser console mid-conversation: agents exchanging messages with @-mentions, alongside the fleet, tasks, and blackboard rails.">
+    <img src="assets/webui-cross-agent-cooperation.png" width="820"
+         alt="The browser console mid-conversation while two agents coordinate across hosts and report results in the shared transcript.">
   </p>
-  <p align="center"><sub>The browser console mid-conversation — agent messages with highlighted <code>@</code>-mentions.</sub></p>
+  <p align="center"><sub>The browser console during cross-agent coordination — the operator sees the whole handoff, not just the final answer.</sub></p>
+
+  <p align="center">
+    <img src="assets/webui-diff-viewer.png" width="820"
+         alt="The browser console's inline diff viewer showing a file edit with syntax-highlighted additions and removals.">
+  </p>
+  <p align="center"><sub>The browser diff viewer for file edits and approvals.</sub></p>
+
+  <p align="center">
+    <img src="assets/webui-markdown-rendering.png" width="820"
+         alt="The browser console rendering a long technical agent update with lists, inline code, and emphasized conclusions.">
+  </p>
+  <p align="center"><sub>Long-form technical updates stay readable: markdown, inline code, and structured summaries render directly in the transcript.</sub></p>
 
 **Operator auth** is the operator token by default, or — preferred — an **mTLS operator
 certificate**: `avairy core add-operator` mints one identity and writes both a password-protected
@@ -403,6 +448,8 @@ authenticates the browser and the remote TUI.
   decisions, and findings that survive restarts and feed `fresh_look`.
 - **File-sync hub** — the canonical workspace on core. Nodes sync diffs both ways; conflicts route to
   the responsible agent, or to the operator's **Conflicts** tab when there's no clear owner.
+- **Consults** — disposable clean-slate agents you can open from the console (`/consult …`) for a
+  second opinion without disturbing an in-flight worker's persistent session.
 - **Facilitator** — watches for stuck or looping agents and *nudges*; on `@facilitator`, triages and
   assigns. It reminds and routes — it never commands.
 - **Gating** — the human-in-the-loop policy: safe actions run free, risky ones block for approval
