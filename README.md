@@ -53,6 +53,10 @@ workspace, and a shared memory, and keeps you in command of all of it from one c
   certificates. Bearer tokens are the simpler *fallback*, not the default.
 - **Cost-aware.** Per-agent and fleet spend in view, budget caps that interrupt runaways, and idle
   agents that sleep and respawn on demand.
+- **Tune agents at runtime.** Change any agent's model or reasoning effort from the console —
+  applied instantly where the family allows (Codex, and Claude's model), or on the next idle
+  boundary as a resume-in-place respawn (Claude's effort, Copilot/Grok). A bad `--effort` is caught
+  at spawn.
 - **Operator surfaces that matter.** Terminal UI, remote TUI, and browser console all stream the
   same journal, render markdown, show tool activity, surface conflicts/approvals, and let you
   react, interrupt, or inject guidance without losing the thread.
@@ -374,14 +378,27 @@ When an agent starts looping, the facilitator can intervene with a nudge or trig
 - **Supervised parallel fan-out.** Several agents claim tasks from a capability-gated board and work
   in parallel while you watch spend, approve risky steps, and keep an auditable trail of every move.
 
+<p align="center">
+  <img src="assets/agent-handover.png" width="760"
+       alt="A Linux agent delegating a macOS-specific reproduction to the macOS agent — a detailed handoff request with the exact repro command, followed by the Linux agent recording the ask and continuing its own work.">
+</p>
+<p align="center"><sub>Agent-to-agent handover: the Linux agent hands a macOS-specific reproduction to the macOS agent with the exact command, and keeps working — the whole delegation stays in the operator's view.</sub></p>
+
+<p align="center">
+  <img src="assets/cross-os-reconfirm.png" width="760"
+       alt="Cross-OS reconfirmation: one agent asks the agent on the other OS to re-run a platform-specific check and report the ok/silent/fault result back into the shared conversation.">
+</p>
+<p align="center"><sub>Reproducing an OS-specific bug across hosts: the agent on the affected OS re-runs the check locally and reports back, so the platform-specific finding is confirmed where it actually happens.</sub></p>
+
 ## The operator console
 
 One console, three ways to run it — all over the same operator API, all streaming the live journal:
 
 - **Local TUI** — opens with `avairy core run`. Tabs for Conversation, Handovers, Tasks,
   Notes, Approvals, and Conflicts; a fleet line with per-agent status and spend; a command line with
-  `@`-addressing, `/commit`, and `/consult … /end` for disposable consult agents. The conversation
-  renders markdown, tool activity, inline diffs, and quick operator reactions (👍 / 👎 / ❌).
+  `@`-addressing, `/commit`, `/consult … /end` for disposable consult agents, and `/model @agent …`
+  to change an agent's model or reasoning effort. The conversation renders markdown, tool activity,
+  inline diffs, a live "…is working" indicator, and quick operator reactions (👍 / 👎 / ❌).
 
   <p align="center">
     <img src="assets/tui.png" width="820"
@@ -411,8 +428,9 @@ One console, three ways to run it — all over the same operator API, all stream
 - **Browser** — a chat-first console mirroring the TUI, served at `/operator/ui` when core is started
   with **`--web`** (off by default). Core prints the ready-to-open URL; you get the conversation,
   fleet, tasks, notes, approvals, and conflicts, all over the same operator API and live journal
-  stream as the TUI. The browser adds a richer diff modal for edits and strong markdown rendering
-  for long technical updates.
+  stream as the TUI. The browser adds a richer diff modal for edits, strong markdown rendering
+  for long technical updates, and a per-agent **⚙** control to change model / reasoning effort on
+  the fly (with a model picker populated from what that family exposes).
 
   <p align="center">
     <img src="assets/webui-cross-agent-cooperation.png" width="820"
@@ -450,6 +468,9 @@ authenticates the browser and the remote TUI.
   the responsible agent, or to the operator's **Conflicts** tab when there's no clear owner.
 - **Consults** — disposable clean-slate agents you can open from the console (`/consult …`) for a
   second opinion without disturbing an in-flight worker's persistent session.
+- **Reconfigure** — change a running agent's model or reasoning effort from the console. It's applied
+  live where the family's protocol allows (Codex per-turn overrides, Claude's `set_model`), otherwise
+  deferred to the next idle boundary as a respawn that resumes context — never mid-turn.
 - **Facilitator** — watches for stuck or looping agents and *nudges*; on `@facilitator`, triages and
   assigns. It reminds and routes — it never commands.
 - **Gating** — the human-in-the-loop policy: safe actions run free, risky ones block for approval
@@ -525,7 +546,8 @@ fsnotify-driven cross-OS file sync, agent- and operator-reconciled conflicts, th
 `fresh_look`, the facilitator with loop detection, human-in-the-loop gating across all families, git
 (history, gated signed commits, on-node read-only mirror + scratch worktrees), TLS + self-managed CA
 + mTLS on both the control channel and the MCP bus, journal state-resume, team/facilitator
-coordination, and a remote operator console (standalone TUI and browser).
+coordination, runtime model/effort reconfigure (live or idle-respawn per family), and a remote
+operator console (standalone TUI and browser).
 
 See **[STATUS.md](STATUS.md)** for the detailed picture and remaining work.
 
