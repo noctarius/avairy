@@ -767,6 +767,112 @@
         const l = $("log");
         l.scrollTop = l.scrollHeight;
       }
+
+      // ---- virtualized transcript ----
+      // Every record is kept in `recs` (the source of truth, like the TUI's ring), but only a bounded
+      // window of rows is mounted in the DOM. Derived state (fleet status, cost, reaction badges, the
+      // reactable window, the live tool spinner) is computed from the whole stream in reduce(); rows are
+      // built on demand by renderRow(). This bounds the DOM on long sessions and gives infinite scroll-up
+      // for free. loadOlder()/appendLive() are the backward/forward gates — Option B (paged history)
+      // swaps the in-memory reads in loadOlder() for a /history fetch when nothing older is in memory.
+      const recs = []; // every journal record, in order
+      const badges = new Map(); // seq -> reaction kind ("up"|"down"|"reject")
+      const reactableSeqs = new Set(); // seqs currently entitled to reaction buttons
+      const reactWin = new Map(); // agent -> [seq,…] oldest-first (per-agent react window)
+      const activeSeq = new Map(); // agent -> seq of its live (spinning) tool card
+      let booted = false; // true once the backfill has rendered (first "ready")
+      let maxSeq = 0; // highest seq ingested — dedups the backfill/live overlap and reconnect replays
+      const MAX_ROWS = 200; // rendered-row cap
+      const PAGE = 100; // rows materialized per scroll-up
+
+      const msgBySeq = (seq) => (seq != null ? logwrap.querySelector(`[data-seq="${seq}"]`) : null);
+      // paint refreshes the derived side panels, but only after boot so a long backfill doesn't thrash
+      // them once per record; the "ready" handler paints once, then live records paint as they arrive.
+      function paint() {
+        if (booted) {
+          renderFleet();
+          renderWorking();
+        }
+      }
+      function trimTop() {
+        while (logwrap.childElementCount > MAX_ROWS) logwrap.removeChild(logwrap.firstElementChild);
+      }
+      // ingest is the single entry point for a record off the wire: dedup, retain, reduce state, and (once
+      // booted) append a live row if we're following the tail.
+      function ingest(rec) {
+        if (rec.seq != null) {
+          if (rec.seq <= maxSeq) return; // already seen (backfill overlap / reconnect replay)
+          maxSeq = rec.seq;
+        }
+        const ri = recs.length;
+        recs.push(rec);
+        reduce(rec);
+        if (booted) appendLive(rec, ri);
+      }
+      function appendLive(rec, ri) {
+        const stick = atBottom();
+        const row = renderRow(rec, ri);
+        if (!row) return;
+        clearEmpty();
+        logwrap.appendChild(row);
+        if (stick) {
+          trimTop(); // only trim while following, so scrolled-up reading isn't yanked
+          toBottom();
+        }
+      }
+      // renderTail rebuilds the DOM from the last MAX_ROWS rows in `recs` (used on boot and reconnect).
+      function renderTail() {
+        logwrap.innerHTML = "";
+        const frag = document.createDocumentFragment();
+        let count = 0;
+        for (let i = recs.length - 1; i >= 0 && count < MAX_ROWS; i--) {
+          const row = renderRow(recs[i], i);
+          if (row) {
+            frag.insertBefore(row, frag.firstChild);
+            count++;
+          }
+        }
+        if (count) logwrap.appendChild(frag);
+        else showEmpty();
+      }
+      // loadOlder materializes the previous PAGE of rows above the current window, preserving the scroll
+      // position. The `from <= 0` branch is the backward gate: Option B fetches /history there instead.
+      function loadOlder() {
+        let el = logwrap.firstElementChild;
+        while (el && el.dataset.ri === undefined) el = el.nextElementSibling; // skip ri-less flash lines
+        const from = el ? +el.dataset.ri : recs.length;
+        if (from <= 0) return;
+        const l = $("log"),
+          prevH = l.scrollHeight,
+          prevTop = l.scrollTop;
+        const lo = Math.max(0, from - PAGE);
+        const frag = document.createDocumentFragment();
+        for (let i = lo; i < from; i++) {
+          const row = renderRow(recs[i], i);
+          if (row) frag.appendChild(row);
+        }
+        logwrap.insertBefore(frag, logwrap.firstChild);
+        l.scrollTop = prevTop + (l.scrollHeight - prevH);
+      }
+      // flash shows a transient, non-journaled sys line (e.g. "commit requested"); it carries no ri so
+      // loadOlder skips over it.
+      function flash(text) {
+        const stick = atBottom();
+        clearEmpty();
+        logwrap.appendChild(buildSys(text));
+        if (stick) {
+          trimTop();
+          toBottom();
+        }
+      }
+      function showEmpty() {
+        if (recs.length || $("emptyChat")) return;
+        const e = document.createElement("div");
+        e.className = "empty-chat";
+        e.id = "emptyChat";
+        e.textContent = "No messages yet — type below to talk to the fleet.";
+        logwrap.appendChild(e);
+      }
       function colorFor(name) {
         let h = 0;
         for (const c of name) h = (h * 31 + c.charCodeAt(0)) % 360;
@@ -836,9 +942,10 @@
           el.textContent = text;
         }
       }
-      function bubble(author, to, text, cls, md) {
-        clearEmpty();
-        const stick = atBottom();
+      // buildBubble/buildSys construct a transcript row and return it (with the inner .msg element for
+      // bubbles) WITHOUT touching the DOM or the scroll — mounting is the caller's job (appendLive /
+      // renderTail / loadOlder), so rows can be built off-screen and materialized on demand.
+      function buildBubble(author, to, text, cls, md) {
         const row = document.createElement("div");
         row.className = "row " + (cls || "");
         const me = author === "human";
@@ -865,21 +972,16 @@
         highlightMentions(b, me);
         m.appendChild(b);
         row.appendChild(m);
-        logwrap.appendChild(row);
-        if (stick) toBottom();
-        return m;
+        return { row, msg: m };
       }
-      function sysline(text) {
-        clearEmpty();
-        const stick = atBottom();
+      function buildSys(text) {
         const row = document.createElement("div");
         row.className = "row sys";
         const p = document.createElement("span");
         p.className = "syspill";
         p.textContent = text;
         row.appendChild(p);
-        logwrap.appendChild(row);
-        if (stick) toBottom();
+        return row;
       }
       function addrStr(to) {
         if (!to) return "";
@@ -905,32 +1007,34 @@
         }
         return t.Name || "tool";
       }
-      // The tool card each agent is currently running (agent id -> .msg element), so we can show a
-      // spinner on it and clear it the moment that agent does anything else or stops.
-      const activeTool = new Map();
-      function markActive(id, el) {
-        if (!id || !el) return;
-        clearActive(id);
-        el.classList.add("running");
-        activeTool.set(id, el);
+      // The tool card each agent is currently running, tracked by journal seq (not a DOM element, which
+      // may be evicted from the window): renderRow adds the spinner when a row's seq is its agent's
+      // activeSeq, and setActive/clearActive toggle it on whatever row is currently on screen.
+      function setActive(agent, seq) {
+        clearActive(agent);
+        activeSeq.set(agent, seq);
+        const el = msgBySeq(seq);
+        if (el) el.classList.add("running");
       }
-      function clearActive(id) {
-        const el = activeTool.get(id);
-        if (el) {
-          el.classList.remove("running");
-          activeTool.delete(id);
-        }
+      function clearActive(agent) {
+        const seq = activeSeq.get(agent);
+        if (seq == null) return;
+        const el = msgBySeq(seq);
+        if (el) el.classList.remove("running");
+        activeSeq.delete(agent);
       }
       function clearAllActive() {
-        activeTool.forEach((el) => el.classList.remove("running"));
-        activeTool.clear();
+        activeSeq.forEach((seq) => {
+          const el = msgBySeq(seq);
+          if (el) el.classList.remove("running");
+        });
+        activeSeq.clear();
       }
       function setStatus(id, st) {
         if (!id || id === "human") return;
         agents.set(id, st);
         if (st !== "working") clearActive(id); // idle/offline/sleeping/blocked → no live command
-        renderFleet();
-        renderWorking();
+        paint();
       }
       // A transient "…is working" hint pinned above the composer (a spinner + the working agents).
       function renderWorking() {
@@ -955,14 +1059,29 @@
       // per agent stay reactable (mirrors operator.ReactWindow) — older ones keep any badge but lose
       // the buttons. 👍/👎 reach the agent without interrupting; ❌ stops it and asks it to reconsider.
       const REACT_WINDOW = 5;
-      const reactable = new Map(); // agent -> [msg elements, oldest first]
       const reactEmoji = { up: "👍", down: "👎", reject: "❌" };
       function react(seq, kind) {
         post("/operator/react", { seq, kind });
       }
-      function addReactions(el, seq, agent) {
-        if (!el || !seq || !agent) return;
-        el.dataset.seq = seq;
+      // noteReactable (reduce-time) records that an agent message at `seq` is reactable, keeping only the
+      // last REACT_WINDOW per agent (mirrors operator.ReactWindow). When a seq falls out of the window it
+      // loses its buttons — dropped from the set, and stripped from its row if that row is on screen.
+      function noteReactable(agent, seq) {
+        if (!agent || seq == null) return;
+        reactableSeqs.add(seq);
+        const list = reactWin.get(agent) || [];
+        list.push(seq);
+        reactWin.set(agent, list);
+        while (list.length > REACT_WINDOW) {
+          const old = list.shift();
+          reactableSeqs.delete(old);
+          const el = msgBySeq(old);
+          const b = el && el.querySelector(".react");
+          if (b) b.remove();
+        }
+      }
+      // addReactionBar (render-time) attaches the 👍/👎/❌ bar to a rendered message element.
+      function addReactionBar(el, seq) {
         const bar = document.createElement("div");
         bar.className = "react";
         const titles = {
@@ -982,14 +1101,6 @@
           bar.appendChild(btn);
         }
         el.appendChild(bar);
-        const list = reactable.get(agent) || [];
-        list.push(el);
-        reactable.set(agent, list);
-        while (list.length > REACT_WINDOW) {
-          const old = list.shift();
-          const b = old.querySelector(".react");
-          if (b) b.remove();
-        }
       }
       // Diff viewing (#7): a scrollable modal shared by edit approvals ("Show Diff") and any edit in
       // the transcript (a "diff" link on the bubble).
@@ -1025,7 +1136,8 @@
         el.appendChild(a);
       }
       function setReactionBadge(seq, kind) {
-        const el = logwrap.querySelector(`[data-seq="${seq}"]`);
+        badges.set(seq, kind); // remembered so a row re-materialized on scroll keeps its badge
+        const el = msgBySeq(seq);
         if (!el) return;
         let badge = el.querySelector(".rbadge");
         if (!badge) {
@@ -1036,34 +1148,89 @@
         badge.textContent = reactEmoji[kind] || "";
       }
 
-      function applyRecord(rec) {
+      // renderRow builds the transcript row for a record (or null for records with no row, e.g.
+      // tool_result / turn_done / a non-sysline system event). It is pure w.r.t. derived state — it only
+      // reads reactableSeqs/activeSeq/badges — so it can run at any time (boot, live append, scroll-up).
+      function renderRow(rec, ri) {
+        const d = rec.data || {};
+        let built = null,
+          agent = null,
+          reactable = false;
+        switch (rec.kind) {
+          case "message":
+            if (d.Interrupt || d.NoWake) return null; // NoWake = context-only delivery, not a bubble
+            built = buildBubble(d.From, addrStr(d.To), d.Body, "", true);
+            if (d.From && d.From !== "human" && d.From !== "facilitator") {
+              agent = d.From;
+              reactable = true;
+            }
+            break;
+          case "agent_event":
+            if (d.Type === "text") {
+              built = buildBubble(rec.actor, null, d.Text, "", true);
+              agent = rec.actor;
+              reactable = true;
+            } else if (d.Type === "reasoning") {
+              const t = (d.Text || "").trim();
+              if (!t) return null;
+              built = buildBubble(rec.actor, null, "💭 " + t, "think");
+            } else if (d.Type === "tool_use") {
+              built = buildBubble(rec.actor, null, "⚙ " + toolSummary(d.Tool), "tool");
+              addDiffLink(built.msg, toolDiff(d.Tool), toolSummary(d.Tool)); // edits get a "diff" link
+              if (activeSeq.get(rec.actor) === rec.seq) built.msg.classList.add("running"); // still live
+            } else if (d.Type === "error") {
+              built = buildBubble(rec.actor, null, "⚠ " + d.Text, "err");
+            } else return null; // tool_result / turn_done have no row
+            break;
+          case "handover":
+            built = { row: buildSys(`${d.Claimant} claimed ${d.ID} — “${d.Title}”`), msg: null };
+            break;
+          case "system":
+            if (!rec._sys) return null; // only sysline-bearing system events render
+            built = { row: buildSys(rec._sys), msg: null };
+            break;
+          default:
+            return null;
+        }
+        if (!built || !built.row) return null;
+        built.row.dataset.ri = ri;
+        const m = built.msg;
+        if (m && rec.seq != null) {
+          m.dataset.seq = rec.seq;
+          if (reactable && reactableSeqs.has(rec.seq)) addReactionBar(m, rec.seq);
+          const bk = badges.get(rec.seq);
+          if (bk) {
+            const badge = document.createElement("span");
+            badge.className = "rbadge";
+            badge.textContent = reactEmoji[bk] || "";
+            m.appendChild(badge);
+          }
+        }
+        return built.row;
+      }
+      // reduce updates derived state from a record (fleet status, cost, the reactable window, reaction
+      // badges, the live tool spinner) and stamps rec._sys for system events that render a sys line. It
+      // runs for every record — backfilled or live — so state is correct regardless of what's on screen.
+      function reduce(rec) {
         const d = rec.data || {};
         switch (rec.kind) {
-          case "message": {
-            if (d.Interrupt || d.NoWake) return; // NoWake = context-only reaction delivery, not a bubble
-            const el = bubble(d.From, addrStr(d.To), d.Body, "", true);
-            if (d.From && d.From !== "human" && d.From !== "facilitator") addReactions(el, rec.seq, d.From);
+          case "message":
+            if (d.Interrupt || d.NoWake) break;
+            if (d.From && d.From !== "human" && d.From !== "facilitator") noteReactable(d.From, rec.seq);
             break;
-          }
           case "agent_event":
             if (d.Type === "text") {
               setStatus(rec.actor, "working");
               clearActive(rec.actor); // the agent moved on from its last command
-              addReactions(bubble(rec.actor, null, d.Text, "", true), rec.seq, rec.actor);
+              noteReactable(rec.actor, rec.seq);
             } else if (d.Type === "reasoning") {
-              const t = (d.Text || "").trim();
-              if (t) {
+              if ((d.Text || "").trim()) {
                 setStatus(rec.actor, "working");
                 clearActive(rec.actor);
-                bubble(rec.actor, null, "💭 " + t, "think");
               }
             } else if (d.Type === "tool_use") {
               setStatus(rec.actor, "working");
-              // The new command is now this agent's live action: spin it (and stop spinning the
-              // previous one). markActive clears the agent's prior active card first.
-              const tEl = bubble(rec.actor, null, "⚙ " + toolSummary(d.Tool), "tool");
-              markActive(rec.actor, tEl);
-              addDiffLink(tEl, toolDiff(d.Tool), toolSummary(d.Tool)); // edits get a "diff" link
+              setActive(rec.actor, rec.seq); // this command is now the agent's live (spinning) action
             } else if (d.Type === "tool_result") {
               clearActive(rec.actor); // command finished
             } else if (d.Type === "turn_done") {
@@ -1072,22 +1239,19 @@
                 cost += d.Usage.CostUSD || 0;
                 $("cost").textContent = "$" + cost.toFixed(2);
                 agentCost[rec.actor] = (agentCost[rec.actor] || 0) + (d.Usage.CostUSD || 0);
-                renderFleet();
+                paint();
               }
             } else if (d.Type === "error") {
               clearActive(rec.actor);
-              bubble(rec.actor, null, "⚠ " + d.Text, "err");
             }
             break;
-          case "handover":
-            sysline(`${d.Claimant} claimed ${d.ID} — “${d.Title}”`);
-            break;
           case "system":
-            applySystem(rec.actor, d);
+            reduceSystem(rec, d);
             break;
         }
       }
-      function applySystem(actor, d) {
+      function reduceSystem(rec, d) {
+        const actor = rec.actor;
         switch (d.event) {
           case "report_status":
             if (actor) {
@@ -1115,34 +1279,31 @@
             break;
           case "node_forgotten":
             if (agents.delete(actor)) {
-              renderFleet();
-              renderWorking();
-              sysline(`⊘ ${actor} left (ephemeral node forgotten)`);
+              paint();
+              rec._sys = `⊘ ${actor} left (ephemeral node forgotten)`;
             }
             break;
           case "conflict_raised":
-            sysline(`conflict on ${d.path} needs resolution`);
+            rec._sys = `conflict on ${d.path} needs resolution`;
             break;
           case "consult_opened":
-            if (d.id) sysline(`opened ${d.id} (ephemeral) — @${d.id} to talk · /end ${d.id}`);
+            if (d.id) rec._sys = `opened ${d.id} (ephemeral) — @${d.id} to talk · /end ${d.id}`;
             break;
           case "consult_closed":
-            if (d.id) sysline(`closed ${d.id} — gone`);
+            if (d.id) rec._sys = `closed ${d.id} — gone`;
             break;
           case "response_claimed":
-            if (d.thread) sysline(`✋ ${actor} claimed the team request ${d.thread} — others stand down`);
+            if (d.thread) rec._sys = `✋ ${actor} claimed the team request ${d.thread} — others stand down`;
             break;
           case "facilitator_dispatch":
-            sysline(
-              d.to
-                ? `⇢ facilitator routed to ${d.to} (${d.rule})`
-                : `⇢ facilitator: no agents available to take it`,
-            );
+            rec._sys = d.to
+              ? `⇢ facilitator routed to ${d.to} (${d.rule})`
+              : `⇢ facilitator: no agents available to take it`;
             break;
           case "agent_sleeping":
             if (agents.has(actor)) {
               setStatus(actor, "sleeping");
-              sysline(`${actor} went to sleep (idle) — a message wakes it`);
+              rec._sys = `${actor} went to sleep (idle) — a message wakes it`;
             }
             break;
           case "agent_awake":
@@ -1152,9 +1313,9 @@
             const spent = (d.spent || 0).toFixed(2);
             if (d.scope === "agent" && d.agent) {
               agentOver.add(d.agent);
-              renderFleet();
-              sysline(`⚠ ${d.agent} exceeded its budget ($${spent}) — interrupted`);
-            } else sysline(`⚠ fleet exceeded its budget ($${spent}) — all agents interrupted`);
+              paint();
+              rec._sys = `⚠ ${d.agent} exceeded its budget ($${spent}) — interrupted`;
+            } else rec._sys = `⚠ fleet exceeded its budget ($${spent}) — all agents interrupted`;
             break;
           }
         }
@@ -1390,7 +1551,7 @@
         if (!text) return;
         if (text.startsWith("/commit")) {
           const m = text.slice(7).trim();
-          if (m) post("/operator/commit", { Message: m }).then(() => sysline("commit requested: " + m));
+          if (m) post("/operator/commit", { Message: m }).then(() => flash("commit requested: " + m));
           ta.value = "";
           grow();
           return;
@@ -1432,6 +1593,12 @@
           send();
         }
       });
+      // Infinite scroll: materialize older rows when the operator nears the top (backward gate), and
+      // re-bound the DOM once they're back at the tail (rows that grew past the cap while scrolled up).
+      $("log").addEventListener("scroll", () => {
+        if ($("log").scrollTop < 120) loadOlder();
+        else if (atBottom()) trimTop();
+      });
 
       // ---- live stream ----
       function connect() {
@@ -1442,15 +1609,22 @@
         };
         es.onmessage = (e) => {
           try {
-            applyRecord(JSON.parse(e.data));
+            ingest(JSON.parse(e.data));
           } catch (err) {}
         };
-        // "ready" = the full backfill has replayed. Jump to the newest message: the per-message
-        // stick-to-bottom can drop out mid-replay (a tall message) and markdown/highlight relayout
-        // shifts the position, so force it once layout settles (rAF = after the appended content lays out).
+        // "ready" = the full backfill has replayed. On the first ready we render the tail window and jump
+        // to the newest message (stick-to-bottom can drift mid-replay and markdown relayout shifts the
+        // position, so force it once layout settles). Reconnect replays the journal again, but ingest()
+        // dedups on seq, so a later ready just resumes live — no re-render, no scroll yank.
         es.addEventListener("ready", () => {
           live();
-          requestAnimationFrame(toBottom);
+          if (!booted) {
+            booted = true;
+            renderTail();
+            renderFleet();
+            renderWorking();
+            requestAnimationFrame(toBottom);
+          }
         });
         es.onopen = live;
         es.onerror = () => {
