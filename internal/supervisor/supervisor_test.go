@@ -21,6 +21,37 @@ func spawnerFor(ad *mock.Adapter, n *int32) Spawn {
 	}
 }
 
+// The supervisor emits a turn_start event the moment it dispatches a message, so the consoles show
+// "working" during the think gap before the first token — not only once the first event lands.
+func TestSupervisor_EmitsTurnStartOnDispatch(t *testing.T) {
+	jrnl := journal.NewMemory()
+	b := bus.New(jrnl)
+	var spawns int32
+
+	s := New("alice", []string{"backend"}, spawnerFor(mock.New(), &spawns), b, jrnl, 0)
+	go s.Run(t.Context())
+	if !waitFor(t, func() bool { return atomic.LoadInt32(&spawns) == 1 }) {
+		t.Fatal("supervisor did not spawn at startup")
+	}
+	b.Publish("human", bus.Agent("alice"), "hello alice", agent.DeliverySteer)
+
+	if !waitFor(t, func() bool { return hasEvent(jrnl, "alice", agent.EventTurnStart) }) {
+		t.Fatalf("expected a turn_start agent event on dispatch; got %+v", jrnl.Records())
+	}
+}
+
+func hasEvent(j journal.Log, id string, typ agent.EventType) bool {
+	for _, r := range j.Records() {
+		if r.Kind != journal.KindAgentEvent || r.Actor != id {
+			continue
+		}
+		if ev, ok := r.Data.(agent.Event); ok && ev.Type == typ {
+			return true
+		}
+	}
+	return false
+}
+
 // With idle == 0 the supervisor never sleeps and behaves like a runner: a human message is
 // delivered to the session and the echoed events land in the journal.
 func TestSupervisor_DeliversAndRecords(t *testing.T) {

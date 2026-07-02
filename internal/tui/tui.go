@@ -960,6 +960,8 @@ func (m *Model) apply(rec journal.Record) {
 		if ev, ok := rec.Data.(agent.Event); ok {
 			a := m.touchAgent(rec.Actor)
 			switch ev.Type {
+			case agent.EventTurnStart:
+				a.status = "working" // the agent is on it — show activity before the first token
 			case agent.EventText:
 				a.status = "working"
 				// Keep the markdown source so convLines can re-wrap it when the width changes (a

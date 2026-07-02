@@ -592,6 +592,12 @@ func spawnAgent(ctx context.Context, n *control.Node, family, agentID, role, mod
 						if sess == nil && !wakeUp(true) {
 							continue
 						}
+						// Report the turn as starting the moment we dispatch, so the core journal (and both
+						// consoles) show "working" during the think gap before the agent's first event.
+						mu.Lock()
+						working = true
+						mu.Unlock()
+						_ = n.PostEvents([]control.AgentEventReport{{AgentID: agentID, Type: string(agent.EventTurnStart)}})
 						_ = sess.Send(ctx, bus.AnnotateDelivery(m.ID, bus.ToKind(m.ToKind), m.Body), agent.DeliverySteer)
 						touch()
 					}

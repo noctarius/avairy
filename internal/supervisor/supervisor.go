@@ -170,6 +170,12 @@ func (s *Supervisor) Run(ctx context.Context) {
 				}
 			}
 			s.touch()
+			// Signal the turn is starting the instant we dispatch, so the consoles show "working"
+			// during the think gap before the first token — not only once the first event lands.
+			s.mu.Lock()
+			s.working = true
+			s.mu.Unlock()
+			s.jrnl.Append(journal.KindAgentEvent, s.id, agent.Event{Type: agent.EventTurnStart})
 			text := bus.AnnotateDelivery(msg.ID, msg.To.Kind, msg.Body)
 			if err := sess.Send(ctx, text, msg.Delivery); err != nil && msg.Delivery == agent.DeliveryInterrupt {
 				_ = sess.Send(ctx, text, agent.DeliverySteer)

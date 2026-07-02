@@ -1219,7 +1219,9 @@
             if (d.From && d.From !== "human" && d.From !== "facilitator") noteReactable(d.From, rec.seq);
             break;
           case "agent_event":
-            if (d.Type === "text") {
+            if (d.Type === "turn_start") {
+              setStatus(rec.actor, "working"); // on it before the first token — show activity now
+            } else if (d.Type === "text") {
               setStatus(rec.actor, "working");
               clearActive(rec.actor); // the agent moved on from its last command
               noteReactable(rec.actor, rec.seq);

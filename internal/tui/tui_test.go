@@ -332,6 +332,20 @@ func TestBroadcastNotStickyPrefixed(t *testing.T) {
 	}
 }
 
+// A turn_start event marks the agent working immediately (so the fleet shows activity during the
+// think gap before the first token) without adding a transcript line.
+func TestTurnStartShowsWorkingNoBubble(t *testing.T) {
+	m, _, _ := newTestModel()
+	m.apply(journal.Record{Seq: 1, Kind: journal.KindAgentEvent, Actor: "linux", Data: agent.Event{Type: agent.EventTurnStart}})
+	a := m.agents["linux"]
+	if a == nil || a.status != "working" {
+		t.Fatalf("turn_start should mark the agent working, got %+v", a)
+	}
+	if txt := strings.TrimSpace(convText(m)); txt != "" {
+		t.Fatalf("turn_start must not add a conversation line, got %q", txt)
+	}
+}
+
 // Node-lifecycle system records must not appear as agents in the fleet; only agent
 // report_status does.
 func TestSystemRecordsFleet(t *testing.T) {
