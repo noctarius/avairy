@@ -43,6 +43,9 @@ func (a *Adapter) Family() agent.Family { return agent.FamilyCodex }
 
 func (a *Adapter) Capabilities() agent.Capabilities {
 	return agent.Capabilities{
+		// turn/start takes model + effort overrides ("for this turn and subsequent turns") — both live.
+		ReconfigureModel:  agent.ReconfigureLive,
+		ReconfigureEffort: agent.ReconfigureLive,
 		SupportsInterrupt: true, // turn/steer injects mid-turn; turn/interrupt cancels
 		SupportsSteer:     true,
 		SupportsResume:    true, // thread/resume by threadId (verified against the app-server schema)

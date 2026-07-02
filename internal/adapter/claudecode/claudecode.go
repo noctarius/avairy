@@ -40,6 +40,11 @@ func (a *Adapter) Capabilities() agent.Capabilities {
 		MCPClient:         true,
 		Enforcement:       agent.EnforcementHooked, // PreToolUse hook (wired by gating backend)
 		ReasoningEfforts:  []string{"low", "medium", "high", "xhigh", "max"},
+		// Verified via live probe: a stream-json control_request {subtype:"set_model"} returns success
+		// and the model flips on the next turn — no respawn. But set_effort/set_reasoning_effort are
+		// "Unsupported control request subtype", so an effort change needs a respawn (--effort + --resume).
+		ReconfigureModel:  agent.ReconfigureLive,
+		ReconfigureEffort: agent.ReconfigureRespawn,
 	}
 }
 

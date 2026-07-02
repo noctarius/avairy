@@ -72,7 +72,30 @@ type Capabilities struct {
 	// UI picker). Empty = not statically known (e.g. codex validates per-model itself), so any value
 	// is passed through and left for the agent to accept or reject.
 	ReasoningEfforts []string
+	// ReconfigureModel / ReconfigureEffort report whether a running agent's model (resp. reasoning
+	// effort) can be changed, and how — so the core and consoles know whether to offer each control
+	// and whether to warn that it restarts the agent. They differ per family and from each other:
+	// claude's model is live (set_model control) but its effort is not (needs a respawn); codex does
+	// both live (turn/start overrides); ACP does neither live. See ReconfigureMode.
+	ReconfigureModel  ReconfigureMode
+	ReconfigureEffort ReconfigureMode
 }
+
+// ReconfigureMode describes how (if at all) a family applies a runtime model/effort change.
+type ReconfigureMode string
+
+const (
+	// ReconfigureNone: model/effort are fixed for the life of the session.
+	ReconfigureNone ReconfigureMode = ""
+	// ReconfigureLive: applied on the next turn with no respawn or context loss — codex passes
+	// model/effort as turn/start overrides ("for this turn and subsequent turns").
+	ReconfigureLive ReconfigureMode = "live"
+	// ReconfigureRespawn: requires tearing the session down and respawning with the new config
+	// (resuming prior context where the family supports it: claude --resume, ACP session/load). The
+	// change is deferred until the agent is idle — never interrupting a running turn — so the driver
+	// queues it and applies it on the next idle boundary; the UI should indicate it's pending.
+	ReconfigureRespawn ReconfigureMode = "respawn"
+)
 
 // ValidateConfig checks a session config against a family's capabilities before spawn, so an
 // obviously-wrong flag fails fast with a helpful message instead of a cryptic downstream error.

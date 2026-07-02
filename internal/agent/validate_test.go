@@ -28,3 +28,14 @@ func TestValidateConfig_Effort(t *testing.T) {
 		t.Fatalf("no known efforts should skip validation, got %v", err)
 	}
 }
+
+// ReconfigureMode values are the three the UI branches on. (Per-family assignments are asserted in
+// each adapter package; this just guards the shared contract.)
+func TestReconfigureModes(t *testing.T) {
+	if ReconfigureNone != "" {
+		t.Fatalf("ReconfigureNone must be the zero value, got %q", ReconfigureNone)
+	}
+	if ReconfigureLive == ReconfigureRespawn {
+		t.Fatal("live and respawn modes must differ")
+	}
+}

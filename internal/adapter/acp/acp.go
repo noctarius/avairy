@@ -57,6 +57,9 @@ func (a *Adapter) Capabilities() agent.Capabilities {
 		MCPClient:         true,  // mcpServers in session/new (http verified)
 		Enforcement:       agent.EnforcementHooked,
 		ReasoningEfforts:  a.Profile.Efforts,
+		// ACP v1 has no model/effort setter; either change means respawn + session/load (resume).
+		ReconfigureModel:  agent.ReconfigureRespawn,
+		ReconfigureEffort: agent.ReconfigureRespawn,
 	}
 }
 
