@@ -22,6 +22,7 @@ func New(decide gating.Decider) agent.Adapter {
 		Family:  agent.FamilyGrok,
 		Command: "grok",
 		Args:    args,
+		Efforts: []string{"low", "medium", "high", "xhigh", "max"},
 	})
 	a.Decide = decide
 	return a

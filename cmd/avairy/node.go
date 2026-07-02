@@ -453,6 +453,11 @@ func spawnAgent(ctx context.Context, n *control.Node, family, agentID, role, mod
 	if err != nil {
 		return err
 	}
+	// Fail fast on a bad --effort (e.g. a typo) with a message listing the valid levels, instead of
+	// letting the agent spawn and error cryptically later.
+	if err := agent.ValidateConfig(ad.Capabilities(), agent.SessionConfig{Model: model, Effort: effort}); err != nil {
+		return fmt.Errorf("%s agent %q: %w", family, agentID, err)
+	}
 	// Persist/resume the session id (DESIGN.md §8) only for a persistent session — never an
 	// ephemeral one. Across both node restarts and idle respawns, ResumeID restores the agent's
 	// prior conversation for families that honor it (claude --resume, codex thread/resume).

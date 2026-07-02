@@ -8,7 +8,12 @@
 // interface; the gating package (internal/gating) normalizes their enforcement.
 package agent
 
-import "context"
+import (
+	"context"
+	"fmt"
+	"slices"
+	"strings"
+)
 
 // Family identifies an agent family.
 type Family string
@@ -63,6 +68,21 @@ type Capabilities struct {
 	SupportsResume    bool // session resume
 	MCPClient         bool // can connect to avairy's MCP server (the bus)
 	Enforcement       EnforcementLevel
+	// ReasoningEfforts is the family's accepted --effort levels (for spawn-time validation and the
+	// UI picker). Empty = not statically known (e.g. codex validates per-model itself), so any value
+	// is passed through and left for the agent to accept or reject.
+	ReasoningEfforts []string
+}
+
+// ValidateConfig checks a session config against a family's capabilities before spawn, so an
+// obviously-wrong flag fails fast with a helpful message instead of a cryptic downstream error.
+// Model isn't validated here — availability is account/network-specific and (for claude) not
+// enumerable; an unknown model surfaces as the family's own spawn error.
+func ValidateConfig(caps Capabilities, cfg SessionConfig) error {
+	if cfg.Effort != "" && len(caps.ReasoningEfforts) > 0 && !slices.Contains(caps.ReasoningEfforts, cfg.Effort) {
+		return fmt.Errorf("reasoning effort %q not supported; valid: %s", cfg.Effort, strings.Join(caps.ReasoningEfforts, ", "))
+	}
+	return nil
 }
 
 // MCPServer points an agent at an MCP endpoint. For the avairy bus (DESIGN.md §4) every

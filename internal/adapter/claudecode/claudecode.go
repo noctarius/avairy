@@ -39,6 +39,7 @@ func (a *Adapter) Capabilities() agent.Capabilities {
 		SupportsResume:    true,
 		MCPClient:         true,
 		Enforcement:       agent.EnforcementHooked, // PreToolUse hook (wired by gating backend)
+		ReasoningEfforts:  []string{"low", "medium", "high", "xhigh", "max"},
 	}
 }
 

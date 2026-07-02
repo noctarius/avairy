@@ -34,6 +34,7 @@ type Profile struct {
 	Command string
 	Args    func(cfg agent.SessionConfig) []string
 	Env     []string
+	Efforts []string // accepted reasoning-effort levels (family-specific; copilot adds "none")
 }
 
 // Adapter drives an ACP agent described by Profile.
@@ -55,6 +56,7 @@ func (a *Adapter) Capabilities() agent.Capabilities {
 		SupportsResume:    true,  // session/load by id (Copilot & Grok both advertise loadSession)
 		MCPClient:         true,  // mcpServers in session/new (http verified)
 		Enforcement:       agent.EnforcementHooked,
+		ReasoningEfforts:  a.Profile.Efforts,
 	}
 }
 

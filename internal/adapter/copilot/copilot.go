@@ -22,6 +22,7 @@ func New(decide gating.Decider) agent.Adapter {
 		Family:  agent.FamilyCopilot,
 		Command: "copilot",
 		Args:    args,
+		Efforts: []string{"none", "low", "medium", "high", "xhigh", "max"},
 	})
 	a.Decide = decide
 	return a
