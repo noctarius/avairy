@@ -105,3 +105,22 @@ func TestReasoningArgs(t *testing.T) {
 		t.Fatalf("reasoningArgs(high) = %v", got)
 	}
 }
+
+// Reconfigure updates the model/effort that ride the next turn/start (codex applies both live). An
+// empty field leaves the current value unchanged.
+func TestReconfigureLive(t *testing.T) {
+	var _ agent.Reconfigurer = (*session)(nil) // codex sessions are live-reconfigurable
+	s := &session{model: "gpt-5", effort: "low"}
+	if err := s.Reconfigure(t.Context(), "gpt-5.4", "high"); err != nil {
+		t.Fatal(err)
+	}
+	if s.model != "gpt-5.4" || s.effort != "high" {
+		t.Fatalf("model=%q effort=%q, want gpt-5.4/high", s.model, s.effort)
+	}
+	if err := s.Reconfigure(t.Context(), "", ""); err != nil { // no-op keeps values
+		t.Fatal(err)
+	}
+	if s.model != "gpt-5.4" || s.effort != "high" {
+		t.Fatalf("empty args should leave values, got %q/%q", s.model, s.effort)
+	}
+}

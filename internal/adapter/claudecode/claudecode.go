@@ -117,8 +117,9 @@ type session struct {
 
 	events chan agent.Event
 
-	mu sync.RWMutex
-	id string
+	mu   sync.RWMutex
+	id   string
+	reqN int // control_request id counter
 }
 
 func (s *session) ID() string {
@@ -156,6 +157,39 @@ func (s *session) Send(ctx context.Context, text string, d agent.Delivery) error
 	return s.enc.Encode(inputMessage{
 		Type:    "user",
 		Message: inputMessageBody{Role: "user", Content: text},
+	})
+}
+
+// controlRequest is the stream-json control channel (verified: set_model switches the model live;
+// the model flips on the next turn). request_id is echoed back on a control_response.
+type controlRequest struct {
+	Type      string      `json:"type"`
+	RequestID string      `json:"request_id"`
+	Request   controlBody `json:"request"`
+}
+
+type controlBody struct {
+	Subtype string `json:"subtype"`
+	Model   string `json:"model,omitempty"`
+}
+
+// Reconfigure changes the model live via a set_model control request (takes effect next turn).
+// Effort has no live control (set_effort is unsupported), so an effort change is rejected — the
+// driver respawns for that.
+func (s *session) Reconfigure(ctx context.Context, model, effort string) error {
+	if effort != "" {
+		return errors.New("claudecode: live effort change unsupported (respawn required)")
+	}
+	if model == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.reqN++
+	return s.enc.Encode(controlRequest{
+		Type:      "control_request",
+		RequestID: fmt.Sprintf("avairy-set-model-%d", s.reqN),
+		Request:   controlBody{Subtype: "set_model", Model: model},
 	})
 }
 

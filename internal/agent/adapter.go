@@ -153,6 +153,14 @@ type Session interface {
 	Close() error
 }
 
+// Reconfigurer is an optional Session capability: change the model and/or reasoning effort of a
+// running session in place (no respawn). Either argument may be "" to leave that field unchanged.
+// A session should implement it only for fields its family reports as ReconfigureLive; a change to
+// a field it can't apply live must return an error so the driver falls back to a respawn.
+type Reconfigurer interface {
+	Reconfigure(ctx context.Context, model, effort string) error
+}
+
 // EventType enumerates normalized cross-family stream events. Claude Code emits
 // stream_event/message_stop; Codex emits item.*/turn.completed — both map here.
 type EventType string

@@ -92,6 +92,8 @@ func (a *Adapter) Start(ctx context.Context, cfg agent.SessionConfig) (agent.Ses
 		peer:    jsonrpc.NewPeer("codex", stdin),
 		approve: approve,
 		events:  make(chan agent.Event, 64),
+		model:   cfg.Model,
+		effort:  cfg.Effort,
 	}
 	go func() { s.peer.Run(stdout, s); close(s.events) }()
 
@@ -154,10 +156,12 @@ type session struct {
 	approve ApprovalDecider
 	events  chan agent.Event
 
-	mu         sync.Mutex // guards threadID / activeTurn / closed
+	mu         sync.Mutex // guards threadID / activeTurn / closed / model / effort
 	threadID   string
 	activeTurn string
 	closed     bool
+	model      string // current model/effort, sent as turn/start overrides; Reconfigure updates them
+	effort     string
 }
 
 // OnServerRequest answers the app-server's approval request. It MUST always reply or the turn hangs.
@@ -190,7 +194,12 @@ func (s *session) Send(ctx context.Context, text string, d agent.Delivery) error
 		_, err := s.peer.Call(ctx, "turn/steer", steerParams{ThreadID: tid, ExpectedTurnID: turn, Input: input})
 		return err
 	}
-	res, err := s.peer.Call(ctx, "turn/start", turnStartParams{ThreadID: tid, Input: input})
+	s.mu.Lock()
+	model, effort := s.model, s.effort
+	s.mu.Unlock()
+	// model/effort are turn/start overrides "for this turn and subsequent turns" — carrying the
+	// current values here is what makes Reconfigure take effect on the next turn (no respawn).
+	res, err := s.peer.Call(ctx, "turn/start", turnStartParams{ThreadID: tid, Input: input, Model: model, Effort: effort})
 	if err != nil {
 		return err
 	}
@@ -214,6 +223,20 @@ func (s *session) Interrupt(ctx context.Context) error {
 	}
 	_, err := s.peer.Call(ctx, "turn/interrupt", interruptParams{ThreadID: tid, TurnID: turn})
 	return err
+}
+
+// Reconfigure changes the model and/or effort in place; the new values ride the next turn/start as
+// overrides ("for this turn and subsequent turns"), so no respawn is needed.
+func (s *session) Reconfigure(ctx context.Context, model, effort string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if model != "" {
+		s.model = model
+	}
+	if effort != "" {
+		s.effort = effort
+	}
+	return nil
 }
 
 func (s *session) Events() <-chan agent.Event { return s.events }
@@ -273,6 +296,7 @@ type turnStartParams struct {
 	ThreadID string      `json:"threadId"`
 	Input    []userInput `json:"input"`
 	Model    string      `json:"model,omitempty"`
+	Effort   string      `json:"effort,omitempty"`
 }
 
 type steerParams struct {
