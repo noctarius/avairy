@@ -182,6 +182,51 @@
         color: var(--muted);
         font-variant-numeric: tabular-nums;
       }
+      .agent .gear {
+        background: none;
+        border: none;
+        color: var(--muted);
+        cursor: pointer;
+        font-size: 12px;
+        opacity: 0;
+        padding: 0 2px;
+      }
+      .agent:hover .gear {
+        opacity: 1;
+      }
+      .rc-row {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        margin-bottom: 12px;
+      }
+      .rc-row label {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .rc-row select,
+      .rc-row input {
+        background: var(--panel2);
+        color: var(--fg);
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        padding: 6px 8px;
+        font: inherit;
+      }
+      .rc-warn {
+        font-size: 12px;
+        color: #e5c07b;
+        margin-bottom: 10px;
+      }
+      .rc-apply {
+        background: var(--accent);
+        color: #fff;
+        border: none;
+        border-radius: 8px;
+        padding: 8px 14px;
+        cursor: pointer;
+        font: inherit;
+      }
       .task {
         padding: 8px 10px;
         border: 1px solid var(--line);
@@ -731,6 +776,16 @@
       </div>
     </div>
 
+    <div id="reconfModal" class="modal" onclick="if (event.target === this) closeReconf();">
+      <div class="modal-box">
+        <div class="modal-head">
+          <span id="reconfTitle">reconfigure</span>
+          <button type="button" onclick="closeReconf()">✕</button>
+        </div>
+        <div class="modal-body" id="reconfBody"></div>
+      </div>
+    </div>
+
     <script>
       const token = new URLSearchParams(location.search).get("token") || "";
       const authq = token ? "?token=" + encodeURIComponent(token) : "";
@@ -739,6 +794,7 @@
       const agents = new Map(); // id -> status
       const agentCost = {}; // id -> spend USD (#26)
       const agentOver = new Set(); // ids over budget (#26)
+      const configs = new Map(); // id -> reconfigure options (modes, models, current)
       let cost = 0;
       const $ = (id) => document.getElementById(id);
 
@@ -1116,6 +1172,97 @@
       function closeDiff() {
         $("diffModal").style.display = "none";
       }
+
+      // Reconfigure dialog (#): pick a model/effort for an agent, gated on what its family can change.
+      let reconfAgent = "";
+      function closeReconf() {
+        $("reconfModal").style.display = "none";
+      }
+      function openReconf(id) {
+        const cfg = configs.get(id);
+        if (!cfg) return;
+        reconfAgent = id;
+        $("reconfTitle").textContent = "reconfigure " + id;
+        const body = $("reconfBody");
+        body.innerHTML = "";
+
+        // Model: a dropdown when the family enumerates models, else a free-text field. Hidden when the
+        // family can't change the model at all.
+        let modelEl = null;
+        if (cfg.modelMode) {
+          const row = rcRow("model" + modeHint(cfg.modelMode));
+          if (cfg.models && cfg.models.length) {
+            modelEl = document.createElement("select");
+            modelEl.appendChild(opt("", "(unchanged)"));
+            cfg.models.forEach((m) => modelEl.appendChild(opt(m.id, m.name || m.id)));
+          } else {
+            modelEl = document.createElement("input");
+            modelEl.placeholder = cfg.currentModel || "model id / alias";
+          }
+          if (cfg.currentModel) modelEl.value = cfg.currentModel;
+          row.appendChild(modelEl);
+          body.appendChild(row);
+        }
+
+        // Effort: a dropdown from the family's levels (or the selected model's, for codex). Hidden when
+        // the family can't change effort.
+        let effortEl = null;
+        if (cfg.effortMode) {
+          const row = rcRow("reasoning effort" + modeHint(cfg.effortMode));
+          effortEl = document.createElement("select");
+          const fill = () => {
+            effortEl.innerHTML = "";
+            effortEl.appendChild(opt("", "(unchanged)"));
+            const perModel = modelEl && cfg.models ? (cfg.models.find((m) => m.id === modelEl.value) || {}).efforts : null;
+            (perModel && perModel.length ? perModel : cfg.efforts || []).forEach((e) => effortEl.appendChild(opt(e, e)));
+            if (cfg.currentEffort) effortEl.value = cfg.currentEffort;
+          };
+          fill();
+          if (modelEl) modelEl.addEventListener("change", fill); // codex efforts vary by model
+          row.appendChild(effortEl);
+          body.appendChild(row);
+        }
+
+        if ((cfg.modelMode === "respawn" && cfg.modelMode) || cfg.effortMode === "respawn") {
+          const w = document.createElement("div");
+          w.className = "rc-warn";
+          w.textContent = "⚠ applying this restarts the agent when it's idle (context resumes where the family supports it).";
+          body.appendChild(w);
+        }
+
+        const apply = document.createElement("button");
+        apply.className = "rc-apply";
+        apply.textContent = "Apply";
+        apply.onclick = () => {
+          const model = modelEl ? modelEl.value : "";
+          const effort = effortEl ? effortEl.value : "";
+          if (!model && !effort) {
+            closeReconf();
+            return;
+          }
+          post("/operator/reconfigure", { agent: reconfAgent, model, effort });
+          closeReconf();
+        };
+        body.appendChild(apply);
+        $("reconfModal").style.display = "flex";
+      }
+      function rcRow(labelText) {
+        const row = document.createElement("div");
+        row.className = "rc-row";
+        const l = document.createElement("label");
+        l.textContent = labelText;
+        row.appendChild(l);
+        return row;
+      }
+      function opt(value, text) {
+        const o = document.createElement("option");
+        o.value = value;
+        o.textContent = text;
+        return o;
+      }
+      function modeHint(mode) {
+        return mode === "live" ? " — applies instantly" : mode === "respawn" ? " — restarts agent" : "";
+      }
       // toolDiff returns the diff for a tool call: the precomputed _diff (shipped node events), else a
       // simple before/after from raw old/new (core-local agents journal untrimmed). "" if not an edit.
       function toolDiff(tool) {
@@ -1354,6 +1501,16 @@
           const n = d.querySelector(".name");
           n.textContent = id;
           n.style.color = colorFor(id);
+          // ⚙ opens the reconfigure dialog for agents whose family can change model or effort.
+          const cfg = configs.get(id);
+          if (cfg && (cfg.modelMode || cfg.effortMode)) {
+            const g = document.createElement("button");
+            g.className = "gear";
+            g.textContent = "⚙";
+            g.title = "change model / effort";
+            g.onclick = () => openReconf(id);
+            d.querySelector(".st").after(g);
+          }
           el.appendChild(d);
         });
       }
@@ -1513,6 +1670,8 @@
         (st.roster || []).forEach((id) => {
           if (!agents.has(id)) agents.set(id, "idle");
         });
+        configs.clear();
+        (st.configs || []).forEach((c) => configs.set(c.agent, c));
         renderFleet();
         renderTasks(st.tasks);
         renderNotes(st.notes);
@@ -1582,6 +1741,7 @@
       }
       document.addEventListener("keydown", (e) => {
         if (e.key === "Escape" && $("diffModal").style.display === "flex") closeDiff();
+        if (e.key === "Escape" && $("reconfModal").style.display === "flex") closeReconf();
       });
       $("send").onclick = send;
       $("stop").onclick = () => {
