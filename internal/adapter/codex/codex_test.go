@@ -124,3 +124,21 @@ func TestReconfigureLive(t *testing.T) {
 		t.Fatalf("empty args should leave values, got %q/%q", s.model, s.effort)
 	}
 }
+
+// parseModelList maps the model/list response into picker entries (id from `model`, per-model efforts).
+func TestParseModelList(t *testing.T) {
+	raw := []byte(`{"data":[
+		{"id":"gpt-5-codex","model":"gpt-5-codex","displayName":"GPT-5 Codex","supportedReasoningEfforts":["low","medium","high"]},
+		{"id":"o3","model":"o3","displayName":"o3","supportedReasoningEfforts":["medium","high"]}
+	]}`)
+	got := parseModelList(raw)
+	if len(got) != 2 || got[0].ID != "gpt-5-codex" || got[0].Name != "GPT-5 Codex" {
+		t.Fatalf("parsed = %+v", got)
+	}
+	if len(got[0].Efforts) != 3 || got[0].Efforts[2] != "high" {
+		t.Fatalf("per-model efforts = %v", got[0].Efforts)
+	}
+	if parseModelList([]byte("nonsense")) != nil {
+		t.Fatal("bad json should parse to nil")
+	}
+}

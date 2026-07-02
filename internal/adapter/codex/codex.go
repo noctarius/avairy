@@ -239,6 +239,39 @@ func (s *session) Reconfigure(ctx context.Context, model, effort string) error {
 	return nil
 }
 
+// ListModels enumerates the app-server's models (and each one's valid reasoning efforts) via the
+// model/list RPC — the source for the operator's reconfigure picker.
+func (s *session) ListModels(ctx context.Context) ([]agent.ModelInfo, error) {
+	res, err := s.peer.Call(ctx, "model/list", map[string]any{})
+	if err != nil {
+		return nil, err
+	}
+	return parseModelList(res), nil
+}
+
+func parseModelList(raw json.RawMessage) []agent.ModelInfo {
+	var r struct {
+		Data []struct {
+			ID                        string   `json:"id"`
+			Model                     string   `json:"model"`
+			DisplayName               string   `json:"displayName"`
+			SupportedReasoningEfforts []string `json:"supportedReasoningEfforts"`
+		} `json:"data"`
+	}
+	if json.Unmarshal(raw, &r) != nil {
+		return nil
+	}
+	out := make([]agent.ModelInfo, 0, len(r.Data))
+	for _, m := range r.Data {
+		id := m.Model // the value turn/start's model override expects
+		if id == "" {
+			id = m.ID
+		}
+		out = append(out, agent.ModelInfo{ID: id, Name: m.DisplayName, Efforts: m.SupportedReasoningEfforts})
+	}
+	return out
+}
+
 func (s *session) Events() <-chan agent.Event { return s.events }
 
 func (s *session) Close() error {

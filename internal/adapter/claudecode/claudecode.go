@@ -193,6 +193,19 @@ func (s *session) Reconfigure(ctx context.Context, model, effort string) error {
 	})
 }
 
+// ListModels returns claude's selectable model aliases (the CLI has no enumeration command, and the
+// stream-json control channel has no list_models — see the live probe). Effort levels are the fixed
+// family set, valid for every model.
+func (s *session) ListModels(context.Context) ([]agent.ModelInfo, error) {
+	efforts := []string{"low", "medium", "high", "xhigh", "max"}
+	return []agent.ModelInfo{
+		{ID: "opus", Name: "Opus", Efforts: efforts},
+		{ID: "sonnet", Name: "Sonnet", Efforts: efforts},
+		{ID: "haiku", Name: "Haiku", Efforts: efforts},
+		{ID: "fable", Name: "Fable", Efforts: efforts},
+	}, nil
+}
+
 func (s *session) Events() <-chan agent.Event { return s.events }
 
 func (s *session) Interrupt(ctx context.Context) error {

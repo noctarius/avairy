@@ -2,6 +2,7 @@ package claudecode
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"slices"
 	"strings"
@@ -41,5 +42,17 @@ func TestReconfigure(t *testing.T) {
 	}
 	if err := s.Reconfigure(t.Context(), "", "high"); err == nil {
 		t.Fatal("a live effort change should be rejected (respawn required)")
+	}
+}
+
+// ListModels returns claude's static aliases with the fixed effort set.
+func TestListModels(t *testing.T) {
+	var _ agent.ModelLister = (*session)(nil)
+	got, err := (&session{}).ListModels(context.Background())
+	if err != nil || len(got) < 3 {
+		t.Fatalf("models=%v err=%v", got, err)
+	}
+	if got[0].ID != "opus" || len(got[0].Efforts) != 5 {
+		t.Fatalf("first model = %+v", got[0])
 	}
 }

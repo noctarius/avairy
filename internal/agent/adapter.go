@@ -153,6 +153,21 @@ type Session interface {
 	Close() error
 }
 
+// ModelInfo is one selectable model for the reconfigure picker. Efforts is the reasoning-effort
+// levels valid for THIS model (codex reports them per-model); empty means use the family default.
+type ModelInfo struct {
+	ID      string   `json:"id"`
+	Name    string   `json:"name,omitempty"`
+	Efforts []string `json:"efforts,omitempty"`
+}
+
+// ModelLister is an optional Session capability: enumerate the models available to this agent, to
+// populate the operator's reconfigure picker. Families that can't enumerate simply don't implement
+// it (the picker falls back to free-text).
+type ModelLister interface {
+	ListModels(ctx context.Context) ([]ModelInfo, error)
+}
+
 // Reconfigurer is an optional Session capability: change the model and/or reasoning effort of a
 // running session in place (no respawn). Either argument may be "" to leave that field unchanged.
 // A session should implement it only for fields its family reports as ReconfigureLive; a change to
