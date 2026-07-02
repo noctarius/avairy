@@ -21,8 +21,22 @@ func New(decide gating.Decider) agent.Adapter {
 	a := acp.New(acp.Profile{
 		Family:  agent.FamilyGrok,
 		Command: "grok",
-		Args:    []string{"agent", "stdio"},
+		Args:    args,
 	})
 	a.Decide = decide
 	return a
+}
+
+// args builds grok's launch args. model and reasoning effort are options of the `agent` subcommand
+// (`grok agent [OPTIONS] [COMMAND]`), so they must sit between `agent` and the `stdio` command —
+// `stdio` itself doesn't accept them.
+func args(cfg agent.SessionConfig) []string {
+	a := []string{"agent"}
+	if cfg.Model != "" {
+		a = append(a, "--model", cfg.Model)
+	}
+	if cfg.Effort != "" {
+		a = append(a, "--reasoning-effort", cfg.Effort)
+	}
+	return append(a, "stdio")
 }

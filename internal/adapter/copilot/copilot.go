@@ -21,8 +21,21 @@ func New(decide gating.Decider) agent.Adapter {
 	a := acp.New(acp.Profile{
 		Family:  agent.FamilyCopilot,
 		Command: "copilot",
-		Args:    []string{"--acp", "--stdio"},
+		Args:    args,
 	})
 	a.Decide = decide
+	return a
+}
+
+// args builds copilot's launch flags: --acp --stdio is the ACP transport; model and reasoning
+// effort are global copilot flags (--model / --effort), appended when pinned.
+func args(cfg agent.SessionConfig) []string {
+	a := []string{"--acp", "--stdio"}
+	if cfg.Model != "" {
+		a = append(a, "--model", cfg.Model)
+	}
+	if cfg.Effort != "" {
+		a = append(a, "--effort", cfg.Effort)
+	}
 	return a
 }

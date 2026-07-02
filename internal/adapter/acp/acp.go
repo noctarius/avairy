@@ -25,10 +25,14 @@ import (
 )
 
 // Profile is the per-agent seam: how to launch an ACP agent. Everything else is generic.
+// Args is a builder (not a static slice) because per-session flags — model, reasoning effort —
+// map to family-specific flag names AND positions (e.g. grok wants them on the `agent` subcommand,
+// before `stdio`), which a generic append couldn't place. ACP's session/new carries no such fields,
+// so the CLI flags are the only lever.
 type Profile struct {
 	Family  agent.Family
 	Command string
-	Args    []string
+	Args    func(cfg agent.SessionConfig) []string
 	Env     []string
 }
 
@@ -57,7 +61,7 @@ func (a *Adapter) Capabilities() agent.Capabilities {
 // Start spawns the agent, performs the initialize + session/new handshake (wiring cfg.MCP as
 // ACP mcpServers), and returns a ready session.
 func (a *Adapter) Start(ctx context.Context, cfg agent.SessionConfig) (agent.Session, error) {
-	cmd := exec.CommandContext(ctx, a.Profile.Command, a.Profile.Args...)
+	cmd := exec.CommandContext(ctx, a.Profile.Command, a.Profile.Args(cfg)...)
 	cmd.Dir = cfg.Workspace
 	cmd.Env = append(cmd.Environ(), a.Profile.Env...)
 
